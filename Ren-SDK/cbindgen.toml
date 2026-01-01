@@ -1,0 +1,27 @@
+# Configuration for cbindgen to generate C headers
+
+language = "C"
+style = "both"
+cpp_compat = true
+
+[parse]
+parse_deps = true
+include = ["ren-sdk"]
+
+[export]
+prefix = "REN_"
+include = ["Ren"]
+
+[fn]
+rename_args = "GeckoCase"
+
+[struct]
+derive_eq = true
+derive_neq = true
+
+[defines]
+"target_os = windows" = "WINDOWS"
+"target_os = linux" = "LINUX"
+"target_os = macos" = "MACOS"
+"target_os = ios" = "IOS"
+"target_os = android" = "ANDROID"

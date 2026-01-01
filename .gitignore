@@ -1,0 +1,91 @@
+# ===============================
+# Общие для всех проектов
+# ===============================
+.DS_Store
+*.log
+*.tmp
+*.swp
+*.swo
+*.bak
+*.old
+*.orig
+
+# Конфигурации IDE
+.vscode/
+.idea/
+*.iml
+
+# Системные файлы
+Thumbs.db
+desktop.ini
+
+# ===============================
+# Node / JS (если фронтенд есть)
+# ===============================
+node_modules/
+npm-debug.log
+yarn-error.log
+dist/
+build/
+
+# ===============================
+# Flutter / Dart
+# ===============================
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+generated_plugin_registrant.dart
+
+# iOS (Xcode)
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+ios/Flutter/Generated.xcconfig
+ios/Flutter/ephemeral/
+ios/Runner.xcworkspace/
+ios/Flutter/App.framework
+ios/Flutter/Flutter.podspec
+ios/Flutter/Flutter.xcframework
+ios/Flutter/FlutterPluginRegistrant.*
+
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.cxx/
+android/captures/
+*.keystore
+
+# ===============================
+# Rust
+# ===============================
+target/
+**/target/
+Cargo.lock
+
+# ===============================
+# Secrets / environment
+# ===============================
+.env
+.env.*
+secrets.json
+*.key
+*.pem
+
+# ===============================
+# Monorepo extras
+# ===============================
+**/.DS_Store
+**/.vscode/
+**/build/
+**/dist/
+**/target/
+
+
+Ren-SDK/android-libs/
+Ren-SDK/pkg/

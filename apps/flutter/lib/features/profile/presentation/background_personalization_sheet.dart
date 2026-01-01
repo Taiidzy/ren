@@ -1,0 +1,403 @@
+import 'dart:ui';
+import 'dart:io';
+
+import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:provider/provider.dart';
+import 'package:ren/core/providers/background_settings.dart';
+import 'package:ren/shared/widgets/animated_gradient.dart';
+import 'package:ren/theme/themes.dart';
+
+class BackgroundPersonalizationSheet {
+  static Future<void> show(BuildContext context) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      barrierColor: Colors.black.withOpacity(0.35),
+      builder: (context) {
+        return const _SheetBody();
+      },
+    );
+  }
+}
+
+class _SheetBody extends StatelessWidget {
+  const _SheetBody();
+
+  @override
+  Widget build(BuildContext context) {
+    final settings = context.watch<BackgroundSettings>();
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final baseInk = isDark ? Colors.white : Colors.black;
+
+    return DraggableScrollableSheet(
+      initialChildSize: 0.74,
+      minChildSize: 0.45,
+      maxChildSize: 0.92,
+      builder: (context, scrollController) {
+        return ClipRRect(
+          borderRadius: const BorderRadius.only(
+            topLeft: Radius.circular(26),
+            topRight: Radius.circular(26),
+          ),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+            child: Container(
+              decoration: BoxDecoration(
+                color: AppColors.matteGlass,
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(26),
+                  topRight: Radius.circular(26),
+                ),
+                border: Border.all(
+                  color: baseInk.withOpacity(isDark ? 0.22 : 0.12),
+                ),
+              ),
+              child: ListView(
+                controller: scrollController,
+                padding: const EdgeInsets.fromLTRB(16, 10, 16, 22),
+                children: [
+                  Center(
+                    child: Container(
+                      width: 44,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.onSurface.withOpacity(0.25),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Персонализация',
+                          style: theme.textTheme.titleLarge?.copyWith(
+                            fontWeight: FontWeight.w700,
+                            color: theme.colorScheme.onSurface,
+                          ),
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: () {
+                          settings.setBackgroundImage(null);
+                          settings.setImageBlurSigma(0);
+                          settings.setImageOpacity(1);
+                          settings.setShowGradient(true);
+                          settings.setGradientOpacity(1);
+                        },
+                        child: Text(
+                          'Сбросить',
+                          style: TextStyle(
+                            color: theme.colorScheme.onSurface.withOpacity(0.8),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  _SectionTitle(title: 'Фон'),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    height: 92,
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      itemCount: BackgroundPresets.wallpaperUrls.length +
+                          settings.galleryHistoryPaths.length +
+                          2,
+                      separatorBuilder: (_, __) => const SizedBox(width: 12),
+                      itemBuilder: (context, index) {
+                        if (index == 0) {
+                          final isSelected = settings.backgroundImage == null;
+                          return _WallpaperTile(
+                            label: 'Градиент',
+                            isSelected: isSelected,
+                            onTap: () => settings.setBackgroundImage(null),
+                            child: Container(
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(18),
+                                gradient: AnimatedGradientUtils.buildStaticGradient(
+                                  isDark,
+                                ),
+                              ),
+                            ),
+                          );
+                        }
+
+                        if (index == 1) {
+                          final isSelected = settings.backgroundImage is FileImage;
+                          return _WallpaperTile(
+                            label: 'Галерея',
+                            isSelected: isSelected,
+                            onTap: () async {
+                              final picker = ImagePicker();
+                              final file = await picker.pickImage(
+                                source: ImageSource.gallery,
+                                imageQuality: 90,
+                              );
+                              if (file == null) return;
+                              if (!context.mounted) return;
+                              await settings.setBackgroundFromPickedFilePath(
+                                file.path,
+                              );
+                            },
+                            child: isSelected
+                                ? Image(
+                                    image: settings.backgroundImage!,
+                                    fit: BoxFit.cover,
+                                  )
+                                : Container(
+                                    decoration: BoxDecoration(
+                                      borderRadius: BorderRadius.circular(18),
+                                      color: theme.colorScheme.onSurface
+                                          .withOpacity(isDark ? 0.10 : 0.08),
+                                    ),
+                                    child: Center(
+                                      child: Icon(
+                                        Icons.photo_library_outlined,
+                                        color: theme.colorScheme.onSurface
+                                            .withOpacity(0.85),
+                                      ),
+                                    ),
+                                  ),
+                          );
+                        }
+
+                        final historyIndex = index - 2;
+                        if (historyIndex < settings.galleryHistoryPaths.length) {
+                          final path = settings.galleryHistoryPaths[historyIndex];
+                          final isSelected = settings.currentFilePath == path;
+                          return _WallpaperTile(
+                            label: ' ',
+                            isSelected: isSelected,
+                            onTap: () => settings.setBackgroundFromFilePath(path),
+                            child: Image.file(File(path), fit: BoxFit.cover),
+                          );
+                        }
+
+                        final urlIndex =
+                            index - 2 - settings.galleryHistoryPaths.length;
+                        final url = BackgroundPresets.wallpaperUrls[urlIndex];
+                        final isSelected =
+                            (settings.backgroundImage is NetworkImage) &&
+                                (settings.backgroundImage as NetworkImage).url ==
+                                    url;
+                        return _WallpaperTile(
+                          label: ' ',
+                          isSelected: isSelected,
+                          onTap: () => settings.setBackgroundFromUrl(url),
+                          child: Image.network(url, fit: BoxFit.cover),
+                        );
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  _SectionTitle(title: 'Блюр картинки'),
+                  const SizedBox(height: 8),
+                  _SliderRow(
+                    value: settings.imageBlurSigma,
+                    min: 0,
+                    max: 20,
+                    onChanged: settings.setImageBlurSigma,
+                    labelFormatter: (v) => v.toStringAsFixed(0),
+                  ),
+                  const SizedBox(height: 14),
+                  _SectionTitle(title: 'Градиент поверх'),
+                  const SizedBox(height: 8),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        settings.showGradient ? 'Включен' : 'Выключен',
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: theme.colorScheme.onSurface.withOpacity(0.85),
+                        ),
+                      ),
+                      Switch.adaptive(
+                        value: settings.showGradient,
+                        onChanged: settings.setShowGradient,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  _SectionTitle(title: 'Прозрачность градиента'),
+                  const SizedBox(height: 8),
+                  _SliderRow(
+                    value: settings.gradientOpacity,
+                    min: 0,
+                    max: 1,
+                    onChanged: settings.setGradientOpacity,
+                    labelFormatter: (v) => v.toStringAsFixed(2),
+                  ),
+                  const SizedBox(height: 18),
+                  SizedBox(
+                    height: 52,
+                    child: ElevatedButton(
+                      onPressed: () => Navigator.of(context).maybePop(),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: theme.colorScheme.onSurface
+                            .withOpacity(isDark ? 0.15 : 0.12),
+                        foregroundColor: theme.colorScheme.onSurface,
+                        elevation: 0,
+                      ),
+                      child: const Text('Готово'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _SectionTitle extends StatelessWidget {
+  final String title;
+
+  const _SectionTitle({required this.title});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Text(
+      title,
+      style: theme.textTheme.titleMedium?.copyWith(
+        fontWeight: FontWeight.w700,
+        color: theme.colorScheme.onSurface,
+      ),
+    );
+  }
+}
+
+class _WallpaperTile extends StatelessWidget {
+  final Widget child;
+  final String label;
+  final VoidCallback onTap;
+  final bool isSelected;
+
+  const _WallpaperTile({
+    required this.child,
+    required this.label,
+    required this.onTap,
+    required this.isSelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final baseInk = isDark ? Colors.white : Colors.black;
+
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 92,
+        height: 92,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: isSelected
+                ? theme.colorScheme.primary
+                : baseInk.withOpacity(isDark ? 0.22 : 0.12),
+            width: isSelected ? 2 : 1,
+          ),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(16),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              child,
+              if (isSelected)
+                Align(
+                  alignment: Alignment.topRight,
+                  child: Padding(
+                    padding: const EdgeInsets.all(6),
+                    child: Container(
+                      width: 18,
+                      height: 18,
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.primary,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.check,
+                        size: 12,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                ),
+              if (label.trim().isNotEmpty)
+                Align(
+                  alignment: Alignment.bottomCenter,
+                  child: Padding(
+                    padding: const EdgeInsets.all(6),
+                    child: Text(
+                      label,
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: Colors.white.withOpacity(0.9),
+                        fontWeight: FontWeight.w600,
+                        shadows: const [
+                          Shadow(blurRadius: 10, color: Colors.black54),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SliderRow extends StatelessWidget {
+  final double value;
+  final double min;
+  final double max;
+  final ValueChanged<double> onChanged;
+  final String Function(double) labelFormatter;
+
+  const _SliderRow({
+    required this.value,
+    required this.min,
+    required this.max,
+    required this.onChanged,
+    required this.labelFormatter,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Row(
+      children: [
+        Expanded(
+          child: Slider(
+            value: value,
+            min: min,
+            max: max,
+            onChanged: onChanged,
+          ),
+        ),
+        SizedBox(
+          width: 48,
+          child: Text(
+            labelFormatter(value),
+            textAlign: TextAlign.right,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurface.withOpacity(0.75),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}

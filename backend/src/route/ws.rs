@@ -1,0 +1,297 @@
+use axum::{
+    extract::{State},
+    extract::ws::{WebSocketUpgrade, WebSocket, Message as WsMessage},
+    routing::get,
+    response::IntoResponse,
+    Router,
+};
+use futures_util::{StreamExt, SinkExt};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::{HashMap, HashSet};
+use tokio::{sync::{broadcast, mpsc}, task::JoinHandle};
+use sqlx::Row;
+
+use crate::AppState;
+use crate::middleware::{CurrentUser, ensure_member};
+use crate::models::chats::{FileMetadata, Message};
+
+pub fn router() -> Router<AppState> {
+    Router::new().route("/ws", get(ws_handler))
+}
+
+async fn ws_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+    CurrentUser { id: user_id }: CurrentUser,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_socket(socket, state, user_id))
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ClientEvent {
+    init { contacts: Vec<i32> },
+    join_chat { chat_id: i32 },
+    leave_chat { chat_id: i32 },
+    send_message { 
+        chat_id: i32, 
+        message: String,              // зашифрованное сообщение
+        message_type: Option<String>, // 'text' | 'file' | 'image' и т.д.
+        envelopes: Option<Value>,      // JSON объект с конвертами для каждого участника
+        metadata: Option<Vec<FileMetadata>>, // метаданные файлов
+    },
+    typing { chat_id: i32, is_typing: bool },
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ServerEvent<'a> {
+    ok,
+    error { error: &'a str },
+    message_new { chat_id: i32, message: OutMessage },
+    typing { chat_id: i32, user_id: i32, is_typing: bool },
+    presence { user_id: i32, status: &'a str }, // online/offline (глобальная)
+}
+
+// OutMessage теперь использует структуру Message из models
+type OutMessage = Message;
+
+struct Subscriptions {
+    joined: HashSet<i32>,
+    forwarders: HashMap<i32, JoinHandle<()>>, // chat_id -> task handle
+    // Глобальная подписка на личный канал пользователя
+    user_forwarder: Option<JoinHandle<()>>,
+    contacts: HashSet<i32>,
+}
+
+async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
+    // Канал для записи в websocket из разных задач
+    let (out_tx, mut out_rx) = mpsc::unbounded_channel::<WsMessage>();
+
+    // Разделяем ws на writer/reader
+    let (mut ws_sender, mut ws_receiver) = socket.split();
+
+    // Задача writer: отправляет всё, что приходит в out_rx, в сокет
+    let writer = tokio::spawn(async move {
+        while let Some(msg) = out_rx.recv().await {
+            if ws_sender.send(msg).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    let mut subs = Subscriptions { joined: HashSet::new(), forwarders: HashMap::new(), user_forwarder: None, contacts: HashSet::new() };
+
+    // Хелпер: публикация события в конкретный чат
+    let publish = |state: &AppState, chat_id: i32, payload: String| {
+        if let Some(entry) = state.ws_hub.get(&chat_id) {
+            let _ = entry.send(payload);
+        }
+    };
+
+    // Хелпер: публикация события в личный канал пользователя
+    let publish_user = |state: &AppState, target_user_id: i32, payload: String| {
+        if let Some(entry) = state.user_hub.get(&target_user_id) {
+            let _ = entry.send(payload);
+        }
+    };
+
+    // Обработка входящих сообщений клиента
+    while let Some(Ok(msg)) = ws_receiver.next().await {
+        match msg {
+            WsMessage::Text(text) => {
+                let parsed: Result<ClientEvent, _> = serde_json::from_str(&text);
+                match parsed {
+                    Ok(ClientEvent::init { contacts }) => {
+                        // Подписываемся на собственный личный канал, чтобы получать presence от других
+                        let tx = match state.user_hub.get(&user_id) {
+                            Some(existing) => existing.clone(),
+                            None => {
+                                let (tx, _rx) = broadcast::channel::<String>(200);
+                                state.user_hub.insert(user_id, tx);
+                                state.user_hub.get(&user_id).unwrap().clone()
+                            }
+                        };
+                        // Если уже был форвардер, перезапустим
+                        if let Some(h) = subs.user_forwarder.take() { h.abort(); }
+                        let mut rx = tx.subscribe();
+                        let out_tx_clone = out_tx.clone();
+                        subs.user_forwarder = Some(tokio::spawn(async move {
+                            while let Ok(msg) = rx.recv().await {
+                                let _ = out_tx_clone.send(WsMessage::Text(msg));
+                            }
+                        }));
+
+                        // Сохраняем список контактов и рассылаем им, что мы онлайн
+                        subs.contacts = contacts.into_iter().collect();
+                        let presence_evt = match serde_json::to_string(&ServerEvent::presence { user_id, status: "online" }) {
+                            Ok(s) => s,
+                            Err(_) => {
+                                let _ = out_tx.send(WsMessage::Text(
+                                    serde_json::to_string(&ServerEvent::error { error: "Ошибка сериализации" })
+                                        .unwrap_or_else(|_| "{\"type\":\"error\",\"error\":\"Ошибка сериализации\"}".to_string()),
+                                ));
+                                continue;
+                            }
+                        };
+                        for cid in &subs.contacts {
+                            // создаём входящий канал для контакта при необходимости
+                            if state.user_hub.get(cid).is_none() {
+                                let (txc, _rx) = broadcast::channel::<String>(200);
+                                state.user_hub.insert(*cid, txc);
+                            }
+                            publish_user(&state, *cid, presence_evt.clone());
+                        }
+                        let ok_msg = serde_json::to_string(&ServerEvent::ok)
+                            .unwrap_or_else(|_| "{\"type\":\"ok\"}".to_string());
+                        let _ = out_tx.send(WsMessage::Text(ok_msg));
+                    }
+                    Ok(ClientEvent::join_chat { chat_id }) => {
+                        if let Err(e) = ensure_member(&state, chat_id, user_id).await {
+                            let err_msg = serde_json::to_string(&ServerEvent::error { error: &e.1 })
+                                .unwrap_or_else(|_| format!("{{\"type\":\"error\",\"error\":{}}}", serde_json::to_string(&e.1).unwrap_or_else(|_| "\"Ошибка\"".to_string())));
+                            let _ = out_tx.send(WsMessage::Text(err_msg));
+                            continue;
+                        }
+                        // Получаем или создаём broadcaster для чата
+                        let tx = match state.ws_hub.get(&chat_id) {
+                            Some(existing) => existing.clone(),
+                            None => {
+                                let (tx, _rx) = broadcast::channel::<String>(200);
+                                state.ws_hub.insert(chat_id, tx);
+                                state.ws_hub.get(&chat_id).unwrap().clone()
+                            }
+                        };
+                        // Подписываемся и создаём форвардер в out_tx
+                        let mut rx = tx.subscribe();
+                        let out_tx_clone = out_tx.clone();
+                        let handle = tokio::spawn(async move {
+                            while let Ok(msg) = rx.recv().await {
+                                let _ = out_tx_clone.send(WsMessage::Text(msg));
+                            }
+                        });
+                        subs.joined.insert(chat_id);
+                        subs.forwarders.insert(chat_id, handle);
+                        let ok_msg = serde_json::to_string(&ServerEvent::ok)
+                            .unwrap_or_else(|_| "{\"type\":\"ok\"}".to_string());
+                        let _ = out_tx.send(WsMessage::Text(ok_msg));
+                    }
+                    Ok(ClientEvent::leave_chat { chat_id }) => {
+                        if subs.joined.remove(&chat_id) {
+                            if let Some(h) = subs.forwarders.remove(&chat_id) { h.abort(); }
+                        }
+                        let ok_msg = serde_json::to_string(&ServerEvent::ok)
+                            .unwrap_or_else(|_| "{\"type\":\"ok\"}".to_string());
+                        let _ = out_tx.send(WsMessage::Text(ok_msg));
+                    }
+                    Ok(ClientEvent::typing { chat_id, is_typing }) => {
+                        if subs.joined.contains(&chat_id) {
+                            if let Ok(evt) = serde_json::to_string(&ServerEvent::typing { chat_id, user_id, is_typing }) {
+                                publish(&state, chat_id, evt);
+                            }
+                        }
+                    }
+                    Ok(ClientEvent::send_message { chat_id, message, message_type, envelopes, metadata }) => {
+                        if !subs.joined.contains(&chat_id) {
+                            // safety: проверка членства
+                            if let Err(e) = ensure_member(&state, chat_id, user_id).await {
+                                let err_msg = serde_json::to_string(&ServerEvent::error { error: &e.1 })
+                                    .unwrap_or_else(|_| format!("{{\"type\":\"error\",\"error\":{}}}", serde_json::to_string(&e.1).unwrap_or_else(|_| "\"Ошибка\"".to_string())));
+                                let _ = out_tx.send(WsMessage::Text(err_msg));
+                                continue;
+                            }
+                        }
+                        
+                        let msg_type = message_type.unwrap_or_else(|| "text".to_string());
+                        let has_files = metadata.as_ref().map(|m| !m.is_empty());
+                        
+                        // Сериализуем envelopes и metadata в JSON
+                        let envelopes_json = envelopes.map(|v| serde_json::to_value(v).ok()).flatten();
+                        let metadata_json = metadata.as_ref().map(|m| serde_json::to_value(m).ok()).flatten();
+                        
+                        // Сохраняем сообщение в БД
+                        let row = match sqlx::query(
+                            r#"
+                            INSERT INTO messages (chat_id, sender_id, message, message_type, envelopes, metadata)
+                            VALUES ($1, $2, $3, $4, $5, $6)
+                            RETURNING id, chat_id, sender_id, message, message_type, created_at, edited_at, is_read, envelopes, metadata
+                            "#,
+                        )
+                        .bind(chat_id)
+                        .bind(user_id)
+                        .bind(&message)
+                        .bind(&msg_type)
+                        .bind(&envelopes_json)
+                        .bind(&metadata_json)
+                        .fetch_one(&state.pool)
+                        .await {
+                            Ok(r) => r,
+                            Err(e) => {
+                                let err_txt = format!("Ошибка БД: {}", e);
+                                let err_msg = serde_json::to_string(&ServerEvent::error { error: &err_txt })
+                                    .unwrap_or_else(|_| format!("{{\"type\":\"error\",\"error\":{}}}", serde_json::to_string(&err_txt).unwrap_or_else(|_| "\"Ошибка\"".to_string())));
+                                let _ = out_tx.send(WsMessage::Text(err_msg));
+                                continue;
+                            }
+                        };
+                        
+                        // Десериализуем envelopes и metadata обратно
+                        let envelopes_value: Option<Value> = row.try_get("envelopes").ok().flatten();
+                        let metadata_value: Option<Value> = row.try_get("metadata").ok().flatten();
+                        let metadata_vec: Option<Vec<FileMetadata>> = metadata_value
+                            .and_then(|v| serde_json::from_value(v).ok());
+                        
+                        let msg = OutMessage {
+                            id: row.try_get("id").unwrap_or_default(),
+                            chat_id: row.try_get("chat_id").unwrap_or_default(),
+                            sender_id: row.try_get("sender_id").unwrap_or_default(),
+                            message: row.try_get("message").unwrap_or_default(),
+                            message_type: row.try_get("message_type").unwrap_or_else(|_| "text".to_string()),
+                            created_at: row
+                                .try_get::<chrono::DateTime<chrono::Utc>, _>("created_at")
+                                .map(|t| t.to_rfc3339())
+                                .unwrap_or_default(),
+                            edited_at: row.try_get::<chrono::DateTime<chrono::Utc>, _>("edited_at")
+                                .ok()
+                                .map(|t| t.to_rfc3339()),
+                            is_read: row.try_get("is_read").unwrap_or(false),
+                            has_files,
+                            metadata: metadata_vec,
+                            envelopes: envelopes_value,
+                            status: Some("sent".to_string()),
+                        };
+                        if let Ok(evt) = serde_json::to_string(&ServerEvent::message_new { chat_id, message: msg }) {
+                            publish(&state, chat_id, evt);
+                        }
+                    }
+                    Err(_) => {
+                        let err_msg = serde_json::to_string(&ServerEvent::error { error: "Некорректный формат сообщения" })
+                            .unwrap_or_else(|_| "{\"type\":\"error\",\"error\":\"Некорректный формат сообщения\"}".to_string());
+                        let _ = out_tx.send(WsMessage::Text(err_msg));
+                    }
+                }
+            }
+            WsMessage::Close(_) => { break; }
+            WsMessage::Ping(p) => { let _ = out_tx.send(WsMessage::Pong(p)); }
+            _ => {}
+        }
+    }
+
+    // Закрытие: отписываемся от всех каналов и шлём offline глобально
+    for (_chat_id, handle) in subs.forwarders.drain() { handle.abort(); }
+    for chat_id in subs.joined.drain() { let _ = chat_id; }
+    if let Some(h) = subs.user_forwarder.take() { h.abort(); }
+    let presence_evt = match serde_json::to_string(&ServerEvent::presence { user_id, status: "offline" }) {
+        Ok(s) => s,
+        Err(_) => "{\"type\":\"presence\",\"user_id\":0,\"status\":\"offline\"}".to_string(),
+    };
+    for cid in subs.contacts.drain() {
+        if state.user_hub.get(&cid).is_none() {
+            let (txc, _rx) = broadcast::channel::<String>(200);
+            state.user_hub.insert(cid, txc);
+        }
+        if let Some(entry) = state.user_hub.get(&cid) { let _ = entry.send(presence_evt.clone()); }
+    }
+    let _ = writer.abort();
+}

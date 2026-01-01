@@ -1,0 +1,22 @@
+[package]
+name = "backend"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+axum = { version = "0.7", features = ["ws", "multipart"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.7", features = ["runtime-tokio", "postgres", "macros", "migrate", "chrono"] }
+dotenvy = "0.15"
+argon2 = "0.5"
+password-hash = { version = "0.5", features = ["rand_core"] }
+rand_core = "0.6"
+jsonwebtoken = "9"
+time = "0.3"
+chrono = { version = "0.4", features = ["clock", "serde"] }
+futures-util = "0.3"
+dashmap = "5"
+tower-http = { version = "0.5", features = ["cors"] }
+uuid = { version = "1.0", features = ["v4"] }
