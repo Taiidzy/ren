@@ -215,7 +215,17 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                             r#"
                             INSERT INTO messages (chat_id, sender_id, message, message_type, envelopes, metadata)
                             VALUES ($1, $2, $3, $4, $5, $6)
-                            RETURNING id, chat_id, sender_id, message, message_type, created_at, edited_at, is_read, envelopes, metadata
+                            RETURNING
+                                id::INT8 AS id,
+                                chat_id::INT8 AS chat_id,
+                                sender_id::INT8 AS sender_id,
+                                message,
+                                message_type,
+                                created_at,
+                                edited_at,
+                                is_read,
+                                envelopes,
+                                metadata
                             "#,
                         )
                         .bind(chat_id)

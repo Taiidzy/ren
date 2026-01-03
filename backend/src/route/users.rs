@@ -1,10 +1,13 @@
 use axum::{
-    extract::{State, Multipart, Path as PathExtractor},
-    http::{StatusCode, header},
+    body::Body,
+    extract::{State, Path as PathExtractor},
+    http::{StatusCode, header, HeaderMap},
     response::Response,
     routing::{get, patch},
     Json, Router,
 };
+use futures_util::StreamExt;
+use multer::Multipart;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 
@@ -15,6 +18,7 @@ use std::path::Path;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use std::path::Component;
+use axum::extract::Multipart as MultipartExtractor;
 
 // Конструктор роутера для users: подключаем маршруты профиля
 // - GET /users/me       — вернуть текущего пользователя
@@ -27,7 +31,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/users/me", get(me).delete(delete_me))
         .route("/users/username", patch(update_username))
-        .route("/users/avatar", patch(update_avatar))
+        .route("/users/avatar", patch(update_avatar).post(update_avatar))
         .route("/users/:id/public-key", get(get_public_key))
         .route("/avatars/*path", get(get_avatar))
 }
@@ -121,7 +125,7 @@ async fn update_username(
 async fn update_avatar(
     State(state): State<AppState>,
     CurrentUser { id }: CurrentUser,
-    mut multipart: Multipart,
+    mut multipart: MultipartExtractor,
 ) -> Result<Json<UserResponse>, (StatusCode, String)> {
     // Получаем текущий путь к аватару для возможного удаления
     let current_avatar_row = sqlx::query("SELECT avatar FROM users WHERE id = $1")
@@ -134,20 +138,28 @@ async fn update_avatar(
         .and_then(|row| row.try_get::<Option<String>, _>("avatar").ok())
         .flatten();
 
+    // Извлекаем boundary из Content-Type.
+    // Важно: Dio на iOS может присылать boundary с ведущими "--" (например "--dio-boundary-...").
+    // Тело multipart в таком случае использует разделители вида "----dio-boundary-...".
+    // Поэтому boundary НЕЛЬЗЯ триммить — иначе multer не найдёт финальный разделитель и вернёт
+    // "incomplete multipart stream".
+
+
     // Извлекаем файл из multipart
-    let mut avatar_data = None;
-    let mut avatar_filename = None;
+    let mut avatar_data: Option<Vec<u8>> = None;
+    let mut avatar_filename: Option<String> = None;
     let mut remove_avatar = false;
 
-    while let Some(field) = multipart.next_field().await
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Ошибка чтения multipart: {}", e)))? {
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Ошибка чтения multipart: {}", e)))?
+    {
         let name = field.name().unwrap_or("").to_string();
-        
+
         match name.as_str() {
             "avatar" => {
-                if let Some(file_name) = field.file_name() {
-                    avatar_filename = Some(file_name.to_string());
-                }
+                avatar_filename = field.file_name().map(|s| s.to_string());
                 let data = field.bytes().await
                     .map_err(|e| (StatusCode::BAD_REQUEST, format!("Ошибка чтения файла avatar: {}", e)))?;
                 if !data.is_empty() {
@@ -155,13 +167,13 @@ async fn update_avatar(
                 }
             }
             "remove" => {
-                let text = field.text().await
-                    .map_err(|e| (StatusCode::BAD_REQUEST, format!("Ошибка чтения поля remove: {}", e)))?;
+                let text = field.text().await.unwrap_or_default();
                 remove_avatar = text == "true" || text == "1";
             }
             _ => {}
         }
     }
+
 
     // Сохраняем копию текущего пути для последующего удаления
     let old_avatar_path = current_avatar_path.clone();
@@ -297,7 +309,7 @@ async fn get_public_key(
 
     let row = sqlx::query(
         r#"
-        SELECT id, pk
+        SELECT id, pubk
         FROM users
         WHERE id = $1
         "#,
@@ -311,12 +323,12 @@ async fn get_public_key(
         return Err((StatusCode::NOT_FOUND, "Пользователь не найден".into()));
     };
 
-    let pk: Option<String> = row.try_get("pk").ok().flatten();
-    let pk = pk.ok_or((StatusCode::NOT_FOUND, "Публичный ключ не найден".into()))?;
+    let pubk: Option<String> = row.try_get("pubk").ok().flatten();
+    let pubk = pubk.ok_or((StatusCode::NOT_FOUND, "Публичный ключ не найден".into()))?;
 
     Ok(Json(PublicKeyResponse {
         user_id,
-        public_key: pk,
+        public_key: pubk,
     }))
 }
 
@@ -342,7 +354,7 @@ async fn get_avatar(
         return Err((StatusCode::BAD_REQUEST, "Некорректный путь".into()));
     }
 
-    let file_path = Path::new("uploads/avatars").join(rel);
+    let file_path = Path::new("uploads").join(rel);
 
     let content = fs::read(&file_path).await
         .map_err(|_| (StatusCode::NOT_FOUND, "Файл не найден".into()))?;

@@ -1,7 +1,14 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:hugeicons/hugeicons.dart';
-import 'package:ren/features/chats/data/fake_chats_repository.dart';
+import 'package:provider/provider.dart';
+import 'package:ren/core/constants/keys.dart';
+import 'package:ren/core/secure/secure_storage.dart';
+import 'package:ren/features/chats/data/chats_repository.dart';
 import 'package:ren/features/chats/domain/chat_models.dart';
+import 'package:ren/core/realtime/realtime_client.dart';
 import 'package:ren/shared/widgets/background.dart';
 import 'package:ren/shared/widgets/glass_surface.dart';
 import 'package:ren/theme/themes.dart';
@@ -16,11 +23,239 @@ class ChatPage extends StatefulWidget {
 }
 
 class _ChatPageState extends State<ChatPage> {
-  final _repo = const FakeChatsRepository();
   final _controller = TextEditingController();
+  bool _loading = true;
+  final List<ChatMessage> _messages = [];
+
+  int? _myUserId;
+
+  bool _peerOnline = false;
+  bool _peerTyping = false;
+  Timer? _typingDebounce;
+
+  RealtimeClient? _rt;
+  StreamSubscription? _rtSub;
+
+  @override
+  void initState() {
+    super.initState();
+    _peerOnline = widget.chat.user.isOnline;
+    _controller.addListener(_onTextChanged);
+    _init();
+  }
+
+  void _onTextChanged() {
+    final chatId = int.tryParse(widget.chat.id) ?? 0;
+    final rt = _rt;
+    if (rt == null || !rt.isConnected) return;
+
+    _typingDebounce?.cancel();
+
+    final hasText = _controller.text.trim().isNotEmpty;
+    rt.typing(chatId, hasText);
+
+    _typingDebounce = Timer(const Duration(milliseconds: 900), () {
+      final stillHas = _controller.text.trim().isNotEmpty;
+      rt.typing(chatId, stillHas);
+    });
+  }
+
+  Future<void> _init() async {
+    final chatId = int.tryParse(widget.chat.id) ?? 0;
+    final repo = context.read<ChatsRepository>();
+
+    try {
+      final list = await repo.fetchMessages(chatId);
+      if (!mounted) return;
+      setState(() {
+        _messages
+          ..clear()
+          ..addAll(list);
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+      });
+    }
+
+    await _ensureRealtime();
+  }
+
+  Future<void> _ensureRealtime() async {
+    final chatId = int.tryParse(widget.chat.id) ?? 0;
+    _rt ??= context.read<RealtimeClient>();
+    final rt = _rt!;
+
+    _myUserId ??= await _readMyUserId();
+
+    final peerId = widget.chat.peerId ?? 0;
+
+    if (!rt.isConnected) {
+      await rt.connect();
+    }
+
+    if (peerId > 0) {
+      rt.init(contacts: [peerId]);
+    }
+
+    rt.joinChat(chatId);
+
+    _rtSub ??= rt.events.listen((evt) async {
+      if (evt.type == 'presence') {
+        final peerId = widget.chat.peerId ?? 0;
+        final userId = evt.data['user_id'];
+        if ('$userId' == '$peerId') {
+          final status = (evt.data['status'] as String?) ?? '';
+          final online = status == 'online';
+          if (online != _peerOnline && mounted) {
+            setState(() {
+              _peerOnline = online;
+            });
+          }
+        }
+        return;
+      }
+
+      if (evt.type == 'typing') {
+        final peerId = widget.chat.peerId ?? 0;
+        final evtChatId = evt.data['chat_id'];
+        final userId = evt.data['user_id'];
+        if ('$evtChatId' == '$chatId' && '$userId' == '$peerId') {
+          final isTyping = evt.data['is_typing'] == true;
+          if (isTyping != _peerTyping && mounted) {
+            setState(() {
+              _peerTyping = isTyping;
+            });
+          }
+        }
+        return;
+      }
+
+      if (evt.type != 'message_new') return;
+      final evtChatId = evt.data['chat_id'];
+      if ('$evtChatId' != '$chatId') return;
+
+      final msg = evt.data['message'];
+      if (msg is! Map) return;
+
+      final m = (msg is Map<String, dynamic>)
+          ? msg
+          : Map<String, dynamic>.fromEntries(
+              msg.entries.map(
+                (e) => MapEntry(e.key.toString(), e.value),
+              ),
+            );
+
+      debugPrint('WS message keys: ${m.keys.toList()}');
+      final encPreview = (m['message'] is String)
+          ? (m['message'] as String)
+          : (m['body'] is String ? (m['body'] as String) : '');
+      if (encPreview.isNotEmpty) {
+        debugPrint('WS message encrypted preview: ${encPreview.substring(0, encPreview.length > 200 ? 200 : encPreview.length)}');
+      }
+
+      final repo = context.read<ChatsRepository>();
+      final text = await repo.decryptIncomingWsMessage(message: m);
+
+      final senderId = m['sender_id'] is int
+          ? m['sender_id'] as int
+          : int.tryParse('${m['sender_id']}') ?? 0;
+      final createdAtStr = (m['created_at'] as String?) ?? '';
+      final createdAt = DateTime.tryParse(createdAtStr) ?? DateTime.now();
+
+      final myId = _myUserId ?? 0;
+      final isMe = (myId > 0) ? senderId == myId : senderId != peerId;
+
+      debugPrint('WS message_new chat=$chatId sender=$senderId my=$myId peer=$peerId isMe=$isMe id=${m['id']}');
+
+      if (!mounted) return;
+      setState(() {
+        final incomingId = '${m['id'] ?? ''}';
+        if (incomingId.isNotEmpty && _messages.any((x) => x.id == incomingId)) {
+          return;
+        }
+
+        // если это echo нашего сообщения, попробуем убрать последний optimistic дубль
+        if (isMe && _messages.isNotEmpty) {
+          final last = _messages.last;
+          if (last.id.startsWith('local_') && last.text == text) {
+            _messages.removeLast();
+          }
+        }
+
+        _messages.add(
+          ChatMessage(
+            id: '${m['id'] ?? DateTime.now().millisecondsSinceEpoch}',
+            chatId: chatId.toString(),
+            isMe: isMe,
+            text: text,
+            sentAt: createdAt,
+          ),
+        );
+      });
+    });
+  }
+
+  Future<int> _readMyUserId() async {
+    final v = await SecureStorage.readKey(Keys.UserId);
+    return int.tryParse(v ?? '') ?? 0;
+  }
+
+  Future<void> _send() async {
+    final chatId = int.tryParse(widget.chat.id) ?? 0;
+    final peerId = widget.chat.peerId ?? 0;
+    final text = _controller.text.trim();
+    if (text.isEmpty) return;
+    if (peerId <= 0) return;
+
+    _controller.clear();
+
+    // optimistic
+    setState(() {
+      _messages.add(
+        ChatMessage(
+          id: 'local_${DateTime.now().millisecondsSinceEpoch}',
+          chatId: chatId.toString(),
+          isMe: true,
+          text: text,
+          sentAt: DateTime.now(),
+        ),
+      );
+    });
+
+    final repo = context.read<ChatsRepository>();
+    final payload = await repo.buildEncryptedWsMessage(
+      chatId: chatId,
+      peerId: peerId,
+      plaintext: text,
+    );
+
+    _rt ??= context.read<RealtimeClient>();
+    final rt = _rt!;
+    if (!rt.isConnected) {
+      await rt.connect();
+      rt.joinChat(chatId);
+    }
+
+    rt.sendMessage(
+      chatId: chatId,
+      message: payload['message'] as String,
+      messageType: payload['message_type'] as String?,
+      envelopes: payload['envelopes'] as Map<String, dynamic>?,
+    );
+  }
 
   @override
   void dispose() {
+    final chatId = int.tryParse(widget.chat.id) ?? 0;
+    _rt?.leaveChat(chatId);
+    _rtSub?.cancel();
+    _rtSub = null;
+    _typingDebounce?.cancel();
+    _typingDebounce = null;
+    _controller.removeListener(_onTextChanged);
     _controller.dispose();
     super.dispose();
   }
@@ -30,7 +265,6 @@ class _ChatPageState extends State<ChatPage> {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final baseInk = isDark ? Colors.white : Colors.black;
-    final messages = _repo.messages(widget.chat.id);
 
     return AppBackground(
       imageOpacity: 1,
@@ -69,6 +303,7 @@ class _ChatPageState extends State<ChatPage> {
                       children: [
                         _Avatar(
                           url: widget.chat.user.avatarUrl,
+                          name: widget.chat.user.name,
                           isOnline: widget.chat.user.isOnline,
                           size: 36,
                         ),
@@ -91,9 +326,9 @@ class _ChatPageState extends State<ChatPage> {
                               ),
                               const SizedBox(height: 2),
                               Text(
-                                widget.chat.user.isOnline
-                                    ? 'Online'
-                                    : 'Offline',
+                                _peerTyping
+                                    ? 'Печатает...'
+                                    : (_peerOnline ? 'Online' : 'Offline'),
                                 style: TextStyle(
                                   fontSize: 12,
                                   color: theme.colorScheme.onSurface
@@ -134,6 +369,8 @@ class _ChatPageState extends State<ChatPage> {
             final double listTopPadding = topInset + kToolbarHeight + 12;
             final double listBottomPadding =
                 bottomInset + inputHeight + verticalPadding + 12;
+
+            final messages = _messages;
 
             Widget inputBar() {
               return Padding(
@@ -195,7 +432,7 @@ class _ChatPageState extends State<ChatPage> {
                       blurSigma: 12,
                       width: inputHeight,
                       height: inputHeight,
-                      onTap: () {},
+                      onTap: _send,
                       child: Center(
                         child: HugeIcon(
                           icon: HugeIcons.strokeRoundedSent,
@@ -212,30 +449,32 @@ class _ChatPageState extends State<ChatPage> {
             return Stack(
               children: [
                 Positioned.fill(
-                  child: ListView.separated(
-                    padding: EdgeInsets.fromLTRB(
-                      horizontalPadding,
-                      listTopPadding,
-                      horizontalPadding,
-                      listBottomPadding,
-                    ),
-                    itemCount: messages.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 10),
-                    itemBuilder: (context, index) {
-                      final msg = messages[index];
-                      return Align(
-                        alignment: msg.isMe
-                            ? Alignment.centerRight
-                            : Alignment.centerLeft,
-                        child: _MessageBubble(
-                          text: msg.text,
-                          timeLabel: _formatTime(msg.sentAt),
-                          isMe: msg.isMe,
-                          isDark: isDark,
+                  child: _loading
+                      ? const Center(child: CircularProgressIndicator())
+                      : ListView.separated(
+                          padding: EdgeInsets.fromLTRB(
+                            horizontalPadding,
+                            listTopPadding,
+                            horizontalPadding,
+                            listBottomPadding,
+                          ),
+                          itemCount: messages.length,
+                          separatorBuilder: (_, __) => const SizedBox(height: 10),
+                          itemBuilder: (context, index) {
+                            final msg = messages[index];
+                            return Align(
+                              alignment: msg.isMe
+                                  ? Alignment.centerRight
+                                  : Alignment.centerLeft,
+                              child: _MessageBubble(
+                                text: msg.text,
+                                timeLabel: _formatTime(msg.sentAt),
+                                isMe: msg.isMe,
+                                isDark: isDark,
+                              ),
+                            );
+                          },
                         ),
-                      );
-                    },
-                  ),
                 ),
                 Positioned(
                   left: 0,
@@ -322,10 +561,22 @@ class _MessageBubble extends StatelessWidget {
 
 class _Avatar extends StatelessWidget {
   final String url;
+  final String name;
   final bool isOnline;
   final double size;
 
-  const _Avatar({required this.url, required this.isOnline, required this.size});
+  const _Avatar({
+    required this.url,
+    required this.name,
+    required this.isOnline,
+    required this.size,
+  });
+
+  String _initials(String s) {
+    final parts = s.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty);
+    final letters = parts.map((p) => p.characters.first).take(2).join();
+    return letters.isEmpty ? '?' : letters.toUpperCase();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -337,7 +588,45 @@ class _Avatar extends StatelessWidget {
         children: [
           ClipRRect(
             borderRadius: BorderRadius.circular(size / 2),
-            child: Image.network(url, width: size, height: size, fit: BoxFit.cover),
+            child: url.isEmpty
+                ? Container(
+                    width: size,
+                    height: size,
+                    color: Theme.of(context).colorScheme.surface,
+                    child: Center(
+                      child: Text(
+                        _initials(name),
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.onSurface,
+                          fontWeight: FontWeight.w700,
+                          fontSize: size * 0.34,
+                        ),
+                      ),
+                    ),
+                  )
+                : Image.network(
+                    url,
+                    width: size,
+                    height: size,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stack) {
+                      return Container(
+                        width: size,
+                        height: size,
+                        color: Theme.of(context).colorScheme.surface,
+                        child: Center(
+                          child: Text(
+                            _initials(name),
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.onSurface,
+                              fontWeight: FontWeight.w700,
+                              fontSize: size * 0.34,
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
           ),
           Positioned(
             right: -1,

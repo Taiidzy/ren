@@ -30,12 +30,16 @@ class ChatMessage {
 
 class ChatPreview {
   final String id;
+  final int? peerId;
+  final String kind;
   final ChatUser user;
   final String lastMessage;
   final DateTime lastMessageAt;
 
   const ChatPreview({
     required this.id,
+    required this.peerId,
+    required this.kind,
     required this.user,
     required this.lastMessage,
     required this.lastMessageAt,

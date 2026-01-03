@@ -1,11 +1,16 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'package:hugeicons/hugeicons.dart';
+import 'package:provider/provider.dart';
 
-import 'package:ren/features/chats/data/fake_chats_repository.dart';
+import 'package:ren/features/chats/data/chats_repository.dart';
 import 'package:ren/features/chats/domain/chat_models.dart';
 import 'package:ren/features/chats/presentation/chat_page.dart';
 import 'package:ren/features/profile/presentation/profile_menu_page.dart';
+
+import 'package:ren/core/realtime/realtime_client.dart';
 
 import 'package:ren/shared/widgets/background.dart';
 import 'package:ren/shared/widgets/adaptive_page_route.dart';
@@ -18,11 +23,52 @@ class ChatsPage extends StatefulWidget {
 }
 
 class _HomePageState extends State<ChatsPage> {
-  final _repo = const FakeChatsRepository();
+  late final Future<List<ChatPreview>> _chatsFuture;
+  final Map<String, bool> _online = {};
+  RealtimeClient? _rt;
+  StreamSubscription? _rtSub;
 
   @override
   void initState() {
     super.initState();
+    _chatsFuture = context.read<ChatsRepository>().fetchChats();
+  }
+
+  @override
+  void dispose() {
+    _rtSub?.cancel();
+    _rtSub = null;
+    super.dispose();
+  }
+
+  Future<void> _ensureRealtime(List<ChatPreview> chats) async {
+    _rt ??= context.read<RealtimeClient>();
+    final rt = _rt!;
+
+    if (!rt.isConnected) {
+      await rt.connect();
+    }
+
+    final contacts = <int>[];
+    for (final c in chats) {
+      final pid = c.peerId;
+      if (pid != null && pid > 0) contacts.add(pid);
+    }
+    rt.init(contacts: contacts);
+
+    _rtSub ??= rt.events.listen((evt) {
+      if (evt.type == 'presence') {
+        final userId = evt.data['user_id'];
+        final status = (evt.data['status'] as String?) ?? '';
+        final idStr = '$userId';
+        final isOnline = status == 'online';
+        if (_online[idStr] != isOnline) {
+          setState(() {
+            _online[idStr] = isOnline;
+          });
+        }
+      }
+    });
   }
 
   @override
@@ -30,8 +76,6 @@ class _HomePageState extends State<ChatsPage> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final theme = Theme.of(context);
     final baseInk = isDark ? Colors.white : Colors.black;
-    final favorites = _repo.favorites();
-    final chats = _repo.chats();
     return AppBackground(
       // Опционально: передайте картинку, чтобы она была задним фоном
       // backgroundImage: AssetImage('assets/wallpapers/my_bg.jpg'),
@@ -119,95 +163,125 @@ class _HomePageState extends State<ChatsPage> {
         ),
         body: SafeArea(
           bottom: false,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
-            child: Column(
-              children: [
-                GlassSurface(
-                  borderRadius: 22,
-                  blurSigma: 14,
-                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
-                  borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Center(
-                        child: Text(
-                          'Избранные',
-                          style: theme.textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.w600,
-                            color: theme.colorScheme.onSurface,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      SizedBox(
-                        height: 74,
-                        child: LayoutBuilder(
-                          builder: (context, constraints) {
-                            return SingleChildScrollView(
-                              scrollDirection: Axis.horizontal,
-                              child: ConstrainedBox(
-                                constraints: BoxConstraints(
-                                  minWidth: constraints.maxWidth,
-                                ),
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    for (int i = 0;
-                                        i < favorites.length;
-                                        i++) ...[
-                                      if (i != 0) const SizedBox(width: 12),
-                                      _FavoriteItem(
-                                        user: favorites[i],
-                                        onTap: () {
-                                          final user = favorites[i];
-                                          final chat = ChatPreview(
-                                            id: 'fav_${user.id}',
-                                            user: user,
-                                            lastMessage: 'Какая?',
-                                            lastMessageAt: DateTime.now(),
-                                          );
+          child: FutureBuilder<List<ChatPreview>>(
+            future: _chatsFuture,
+            builder: (context, snapshot) {
+              final chats = snapshot.data ?? const <ChatPreview>[];
 
-                                          Navigator.of(context).push(
-                                            adaptivePageRoute(
-                                              (_) => ChatPage(chat: chat),
-                                            ),
-                                          );
-                                        },
-                                      ),
-                                    ],
-                                  ],
-                                ),
-                              ),
-                            );
-                          },
-                        ),
+              if (snapshot.hasData) {
+                Future.microtask(() => _ensureRealtime(chats));
+              }
+
+              final decoratedChats = chats
+                  .map(
+                    (c) => ChatPreview(
+                      id: c.id,
+                      peerId: c.peerId,
+                      kind: c.kind,
+                      user: ChatUser(
+                        id: c.user.id,
+                        name: c.user.name,
+                        avatarUrl: c.user.avatarUrl,
+                        isOnline: _online[c.user.id] ?? c.user.isOnline,
                       ),
-                    ],
-                  ),
+                      lastMessage: c.lastMessage,
+                      lastMessageAt: c.lastMessageAt,
+                    ),
+                  )
+                  .toList();
+
+              final favorites =
+                  decoratedChats.take(8).map((c) => c.user).toList();
+
+              return Padding(
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+                child: Column(
+                  children: [
+                    GlassSurface(
+                      borderRadius: 22,
+                      blurSigma: 14,
+                      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+                      borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Center(
+                            child: Text(
+                              'Избранные',
+                              style: theme.textTheme.titleMedium?.copyWith(
+                                fontWeight: FontWeight.w600,
+                                color: theme.colorScheme.onSurface,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          SizedBox(
+                            height: 74,
+                            child: LayoutBuilder(
+                              builder: (context, constraints) {
+                                return SingleChildScrollView(
+                                  scrollDirection: Axis.horizontal,
+                                  child: ConstrainedBox(
+                                    constraints: BoxConstraints(
+                                      minWidth: constraints.maxWidth,
+                                    ),
+                                    child: Row(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        for (int i = 0;
+                                            i < favorites.length;
+                                            i++) ...[
+                                          if (i != 0) const SizedBox(width: 12),
+                                          _FavoriteItem(
+                                            user: favorites[i],
+                                            onTap: () {
+                                              final user = favorites[i];
+                                              final chat = chats.firstWhere(
+                                                (c) => c.user.id == user.id,
+                                              );
+                                              Navigator.of(context).push(
+                                                adaptivePageRoute(
+                                                  (_) => ChatPage(chat: chat),
+                                                ),
+                                              );
+                                            },
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    Expanded(
+                      child: snapshot.connectionState == ConnectionState.waiting
+                          ? const Center(child: CircularProgressIndicator())
+                          : ListView.separated(
+                              padding: const EdgeInsets.only(bottom: 16),
+                              itemCount: decoratedChats.length,
+                              separatorBuilder: (_, __) => const SizedBox(height: 10),
+                              itemBuilder: (context, index) {
+                                final chat = decoratedChats[index];
+                                return _ChatTile(
+                                  chat: chat,
+                                  onTap: () {
+                                    Navigator.of(context).push(
+                                      adaptivePageRoute((_) => ChatPage(chat: chat)),
+                                    );
+                                  },
+                                );
+                              },
+                            ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 14),
-                Expanded(
-                  child: ListView.separated(
-                    padding: const EdgeInsets.only(bottom: 16),
-                    itemCount: chats.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 10),
-                    itemBuilder: (context, index) {
-                      final chat = chats[index];
-                      return _ChatTile(
-                        chat: chat,
-                        onTap: () {
-                          Navigator.of(context).push(
-                            adaptivePageRoute((_) => ChatPage(chat: chat)),
-                          );
-                        },
-                      );
-                    },
-                  ),
-                ),
-              ],
-            ),
+              );
+            },
           ),
         ),
       ),
@@ -237,6 +311,7 @@ class _FavoriteItem extends StatelessWidget {
             children: [
               _FavoriteAvatar(
                 url: user.avatarUrl,
+                name: user.name,
                 isOnline: user.isOnline,
                 size: avatarSize,
               ),
@@ -260,14 +335,22 @@ class _FavoriteItem extends StatelessWidget {
 
 class _FavoriteAvatar extends StatelessWidget {
   final String url;
+  final String name;
   final bool isOnline;
   final double size;
 
   const _FavoriteAvatar({
     required this.url,
+    required this.name,
     required this.isOnline,
     required this.size,
   });
+
+  String _initials(String s) {
+    final parts = s.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty);
+    final letters = parts.map((p) => p.characters.first).take(2).join();
+    return letters.isEmpty ? '?' : letters.toUpperCase();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -279,7 +362,41 @@ class _FavoriteAvatar extends StatelessWidget {
         children: [
           ClipRRect(
             borderRadius: BorderRadius.circular(size / 2),
-            child: Image.network(url, width: size, height: size, fit: BoxFit.cover),
+            child: url.isEmpty
+                ? Container(
+                    color: Theme.of(context).colorScheme.surface,
+                    child: Center(
+                      child: Text(
+                        _initials(name),
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.onSurface,
+                          fontWeight: FontWeight.w700,
+                          fontSize: size * 0.34,
+                        ),
+                      ),
+                    ),
+                  )
+                : Image.network(
+                    url,
+                    width: size,
+                    height: size,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stack) {
+                      return Container(
+                        color: Theme.of(context).colorScheme.surface,
+                        child: Center(
+                          child: Text(
+                            _initials(name),
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.onSurface,
+                              fontWeight: FontWeight.w700,
+                              fontSize: size * 0.34,
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
           ),
           Positioned(
             right: -1,
@@ -324,7 +441,11 @@ class _ChatTile extends StatelessWidget {
       onTap: onTap,
       child: Row(
         children: [
-          _Avatar(url: chat.user.avatarUrl, isOnline: chat.user.isOnline),
+          _Avatar(
+            url: chat.user.avatarUrl,
+            name: chat.user.name,
+            isOnline: chat.user.isOnline,
+          ),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
@@ -376,9 +497,16 @@ class _ChatTile extends StatelessWidget {
 
 class _Avatar extends StatelessWidget {
   final String url;
+  final String name;
   final bool isOnline;
 
-  const _Avatar({required this.url, required this.isOnline});
+  const _Avatar({required this.url, required this.name, required this.isOnline});
+
+  String _initials(String s) {
+    final parts = s.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty);
+    final letters = parts.map((p) => p.characters.first).take(2).join();
+    return letters.isEmpty ? '?' : letters.toUpperCase();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -389,8 +517,46 @@ class _Avatar extends StatelessWidget {
         clipBehavior: Clip.none,
         children: [
           ClipRRect(
-            borderRadius: BorderRadius.circular(22),
-            child: Image.network(url, width: 44, height: 44, fit: BoxFit.cover),
+            borderRadius: BorderRadius.circular(24),
+            child: url.isEmpty
+                ? Container(
+                    width: 48,
+                    height: 48,
+                    color: Theme.of(context).colorScheme.surface,
+                    child: Center(
+                      child: Text(
+                        _initials(name),
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.onSurface,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 16,
+                        ),
+                      ),
+                    ),
+                  )
+                : Image.network(
+                    url,
+                    width: 48,
+                    height: 48,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stack) {
+                      return Container(
+                        width: 48,
+                        height: 48,
+                        color: Theme.of(context).colorScheme.surface,
+                        child: Center(
+                          child: Text(
+                            _initials(name),
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.onSurface,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 16,
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
           ),
           Positioned(
             right: -1,

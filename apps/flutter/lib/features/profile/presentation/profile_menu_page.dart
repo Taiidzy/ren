@@ -1,14 +1,23 @@
 import 'package:flutter/material.dart';
 import 'package:hugeicons/hugeicons.dart';
+import 'package:provider/provider.dart';
 import 'package:ren/core/secure/secure_storage.dart';
 import 'package:ren/features/auth/presentation/auth_page.dart';
 import 'package:ren/features/profile/presentation/background_personalization_sheet.dart';
+import 'package:ren/features/profile/presentation/profile_edit_page.dart';
+import 'package:ren/features/profile/presentation/profile_store.dart';
 import 'package:ren/shared/widgets/adaptive_page_route.dart';
 import 'package:ren/shared/widgets/background.dart';
 import 'package:ren/shared/widgets/glass_surface.dart';
 
 class ProfileMenuPage extends StatelessWidget {
   const ProfileMenuPage({super.key});
+
+  String _initials(String s) {
+    final parts = s.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty);
+    final letters = parts.map((p) => p.characters.first).take(2).join();
+    return letters.isEmpty ? '?' : letters.toUpperCase();
+  }
 
   Future<void> _confirmAndLogout(BuildContext context) async {
     final theme = Theme.of(context);
@@ -126,6 +135,11 @@ class ProfileMenuPage extends StatelessWidget {
     final isDark = theme.brightness == Brightness.dark;
     final baseInk = isDark ? Colors.white : Colors.black;
 
+    final store = context.watch<ProfileStore>();
+    if (store.user == null && !store.isLoading && store.error == null) {
+      Future.microtask(() => context.read<ProfileStore>().loadMe());
+    }
+
     return AppBackground(
       imageOpacity: 1,
       imageBlurSigma: 0,
@@ -158,20 +172,55 @@ class ProfileMenuPage extends StatelessWidget {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       const SizedBox(height: 6),
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(52),
-                        child: Image.network(
-                          'https://i.pinimg.com/736x/a7/39/43/a73943b7aed2241452dc7d0bd4aa064e.jpg',
-                          width: 104,
-                          height: 104,
-                          fit: BoxFit.cover,
+                      SizedBox(
+                        width: 104,
+                        height: 104,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(52),
+                          child: (store.user?.avatar ?? '').isEmpty
+                              ? Container(
+                                  color: theme.colorScheme.surface,
+                                  child: Center(
+                                    child: Text(
+                                      _initials(store.user?.username ?? ''),
+                                      style: TextStyle(
+                                        color: theme.colorScheme.onSurface,
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 28,
+                                      ),
+                                    ),
+                                  ),
+                                )
+                              : Image.network(
+                                  store.user!.avatar!,
+                                  width: 104,
+                                  height: 104,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (context, error, stack) {
+                                    return Container(
+                                      color: theme.colorScheme.surface,
+                                      child: Center(
+                                        child: Text(
+                                          _initials(store.user?.username ?? ''),
+                                          style: TextStyle(
+                                            color: theme.colorScheme.onSurface,
+                                            fontWeight: FontWeight.w700,
+                                            fontSize: 28,
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                ),
                         ),
                       ),
                       const SizedBox(height: 18),
                       _MenuItem(
                         icon: HugeIcons.strokeRoundedUser,
                         title: 'Профиль',
-                        onTap: () {},
+                        onTap: () {
+                          ProfileEditSheet.show(context);
+                        },
                       ),
                       const SizedBox(height: 10),
                       _MenuItem(

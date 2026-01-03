@@ -43,6 +43,8 @@ dependencies:
   crypto: ^3.0.7
   image_picker: ^1.1.2
   path_provider: ^2.1.5
+  web_socket_channel: ^2.4.5
+  http: ^1.6.0
 
 dev_dependencies:
   flutter_test:

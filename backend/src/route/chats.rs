@@ -73,6 +73,7 @@ async fn create_chat(
                 created_at: row.try_get::<chrono::DateTime<chrono::Utc>,_>("created_at").map(|t| t.to_rfc3339()).unwrap_or_default(),
                 updated_at: row.try_get::<chrono::DateTime<chrono::Utc>,_>("updated_at").map(|t| t.to_rfc3339()).unwrap_or_default(),
                 is_archived: row.try_get("is_archived").ok(),
+                peer_id: None,
                 peer_username: None,
                 peer_avatar: None,
             };
@@ -135,6 +136,7 @@ async fn create_chat(
                 created_at: row.try_get::<chrono::DateTime<chrono::Utc>,_>("created_at").map(|t| t.to_rfc3339()).unwrap_or_default(),
                 updated_at: row.try_get::<chrono::DateTime<chrono::Utc>,_>("updated_at").map(|t| t.to_rfc3339()).unwrap_or_default(),
                 is_archived: row.try_get("is_archived").ok(),
+                peer_id: None,
                 peer_username: None,
                 peer_avatar: None,
             };
@@ -217,6 +219,7 @@ async fn create_chat(
         created_at: row.try_get::<chrono::DateTime<chrono::Utc>,_>("created_at").map(|t| t.to_rfc3339()).unwrap_or_default(),
         updated_at: row.try_get::<chrono::DateTime<chrono::Utc>,_>("updated_at").map(|t| t.to_rfc3339()).unwrap_or_default(),
         is_archived: row.try_get("is_archived").ok(),
+        peer_id: None,
         peer_username: None,
         peer_avatar: None,
     };
@@ -240,6 +243,19 @@ async fn list_chats(
             c.created_at,
             c.updated_at,
             c.is_archived,
+            COALESCE(
+                CASE
+                    WHEN c.kind = 'private' AND c.user_a = $1 THEN c.user_b
+                    WHEN c.kind = 'private' AND c.user_b = $1 THEN c.user_a
+                    ELSE NULL
+                END,
+                (
+                    SELECT cp.user_id
+                    FROM chat_participants cp
+                    WHERE cp.chat_id = c.id AND cp.user_id <> $1
+                    LIMIT 1
+                )
+            ) AS peer_id,
             COALESCE(u.username, u.login) AS peer_username,
             u.avatar   AS peer_avatar
         FROM chats c
@@ -275,6 +291,7 @@ async fn list_chats(
             created_at: row.try_get::<chrono::DateTime<chrono::Utc>,_>("created_at").map(|t| t.to_rfc3339()).unwrap_or_default(),
             updated_at: row.try_get::<chrono::DateTime<chrono::Utc>,_>("updated_at").map(|t| t.to_rfc3339()).unwrap_or_default(),
             is_archived: row.try_get("is_archived").ok(),
+            peer_id: row.try_get("peer_id").ok(),
             peer_username: row.try_get("peer_username").ok(),
             peer_avatar: row.try_get("peer_avatar").ok(),
         })

@@ -48,22 +48,39 @@ where
             .await
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Не удалось получить состояние приложения".to_string()))?;
 
-        // Достаём заголовок Authorization
-        let auth_header = parts
+        // Достаём токен из заголовка Authorization: Bearer <JWT>.
+        // Для WebSocket upgrade некоторые клиенты/прокси могут не прокидывать Authorization,
+        // поэтому поддерживаем fallback через query параметр ?token=<JWT>.
+        let token: String = if let Some(auth_header) = parts
             .headers
             .get("authorization")
             .and_then(|v| v.to_str().ok())
-            .ok_or((StatusCode::UNAUTHORIZED, "Отсутствует заголовок Authorization".to_string()))?;
-
-        // Ожидаем Bearer <token>
-        let token = auth_header
-            .strip_prefix("Bearer ")
-            .or_else(|| auth_header.strip_prefix("bearer "))
-            .ok_or((StatusCode::UNAUTHORIZED, "Некорректный формат заголовка Authorization".to_string()))?;
+        {
+            auth_header
+                .strip_prefix("Bearer ")
+                .or_else(|| auth_header.strip_prefix("bearer "))
+                .ok_or((StatusCode::UNAUTHORIZED, "Некорректный формат заголовка Authorization".to_string()))?
+                .to_string()
+        } else {
+            let query = parts.uri.query().unwrap_or("");
+            let mut token_q: Option<&str> = None;
+            for pair in query.split('&') {
+                let mut it = pair.splitn(2, '=');
+                let k = it.next().unwrap_or("");
+                let v = it.next().unwrap_or("");
+                if k == "token" && !v.is_empty() {
+                    token_q = Some(v);
+                    break;
+                }
+            }
+            token_q
+                .ok_or((StatusCode::UNAUTHORIZED, "Отсутствует заголовок Authorization или query token".to_string()))?
+                .to_string()
+        };
 
         // Валидируем токен
         let data = decode::<Claims>(
-            token,
+            &token,
             &DecodingKey::from_secret(app_state.jwt_secret.as_bytes()),
             &Validation::default(),
         )

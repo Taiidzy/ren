@@ -11,6 +11,7 @@ pub struct Chat {
     pub created_at: String,
     pub updated_at: String,
     pub is_archived: Option<bool>,
+    pub peer_id: Option<i32>,
     pub peer_username: Option<String>,
     pub peer_avatar: Option<String>,
 }
