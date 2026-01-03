@@ -1,0 +1,66 @@
+# Uncomment this line to define a global platform for your project
+# platform :ios, '13.0'
+
+# CocoaPods analytics sends network stats synchronously affecting flutter build latency.
+ENV['COCOAPODS_DISABLE_STATS'] = 'true'
+
+project 'Runner', {
+  'Debug' => :debug,
+  'Profile' => :release,
+  'Release' => :release,
+}
+
+def flutter_root
+  generated_xcode_build_settings_path = File.expand_path(File.join('..', 'Flutter', 'Generated.xcconfig'), __FILE__)
+  unless File.exist?(generated_xcode_build_settings_path)
+    raise "#{generated_xcode_build_settings_path} must exist. If you're running pod install manually, make sure flutter pub get is executed first"
+  end
+
+  File.foreach(generated_xcode_build_settings_path) do |line|
+    matches = line.match(/FLUTTER_ROOT\=(.*)/)
+    return matches[1].strip if matches
+  end
+  raise "FLUTTER_ROOT not found in #{generated_xcode_build_settings_path}. Try deleting Generated.xcconfig, then run flutter pub get"
+end
+
+require File.expand_path(File.join('packages', 'flutter_tools', 'bin', 'podhelper'), flutter_root)
+
+flutter_ios_podfile_setup
+
+target 'Runner' do
+  use_frameworks!
+  use_modular_headers!
+
+  flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
+  target 'RunnerTests' do
+    inherit! :search_paths
+  end
+end
+
+post_install do |installer|
+  installer.pods_project.targets.each do |target|
+    flutter_additional_ios_build_settings(target)
+  end
+
+  installer.aggregate_targets.each do |aggregate_target|
+    aggregate_target.user_project.native_targets.each do |native_target|
+      next unless native_target.name == 'Runner'
+
+      native_target.build_configurations.each do |config|
+        flags = config.build_settings['OTHER_LDFLAGS']
+        flags = [flags] if flags.is_a?(String)
+        flags = Array(flags)
+        flags << '$(inherited)' unless flags.include?('$(inherited)')
+
+        # RenSDK.xcframework contains a static library (libren_sdk.a). Without force loading,
+        # the linker may dead-strip the object files, and Dart FFI won't be able to dlsym ren_* symbols.
+        flags << '-Wl,-force_load'
+        flags << '$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a'
+        flags << '-Wl,-force_load'
+        flags << '$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64_x86_64-simulator/libren_sdk.a'
+
+        config.build_settings['OTHER_LDFLAGS'] = flags
+      end
+    end
+  end
+end
