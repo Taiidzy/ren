@@ -78,10 +78,10 @@ class _SplashPageState extends State<SplashPage>
   }
 
   void _initSDK() async {
-    // Ждем минимум 3 секунды для показа анимации
-    await Future.delayed(const Duration(seconds: 3));
     try {
-      await RenSdk.instance.initialize();
+      final minSplashDelay = Future.delayed(const Duration(seconds: 3));
+      final sdkInit = RenSdk.instance.initialize();
+      await Future.wait([minSplashDelay, sdkInit]);
 
       // small delay to let animation finish nicely
       await Future.delayed(const Duration(milliseconds: 300));

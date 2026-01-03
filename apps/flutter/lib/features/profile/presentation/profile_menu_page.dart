@@ -14,13 +14,12 @@ class ProfileMenuPage extends StatelessWidget {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final baseInk = isDark ? Colors.white : Colors.black;
+    final matteGlass = AppColors.matteGlassFor(theme.brightness);
 
     return AppBackground(
       imageOpacity: 1,
       imageBlurSigma: 0,
       imageFit: BoxFit.cover,
-      showGradient: true,
-      gradientOpacity: 1,
       animate: true,
       animationDuration: const Duration(seconds: 20),
       child: Scaffold(
@@ -45,7 +44,7 @@ class ProfileMenuPage extends StatelessWidget {
                     constraints: const BoxConstraints(maxWidth: 420),
                     padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
                     decoration: BoxDecoration(
-                      color: AppColors.matteGlass,
+                      color: matteGlass,
                       borderRadius: BorderRadius.circular(24),
                       border: Border.all(
                         color: baseInk.withOpacity(isDark ? 0.20 : 0.12),
@@ -134,10 +133,11 @@ class _MenuItem extends StatelessWidget {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final baseInk = isDark ? Colors.white : Colors.black;
+    final matteGlass = AppColors.matteGlassFor(theme.brightness);
 
     final bg = isDanger
         ? const Color(0xFF991B1B).withOpacity(0.55)
-        : AppColors.matteGlass;
+        : matteGlass;
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(16),

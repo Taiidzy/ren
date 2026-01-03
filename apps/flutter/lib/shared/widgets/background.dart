@@ -12,7 +12,6 @@ class AppBackground extends StatefulWidget {
   final Alignment imageAlignment;
   final double imageBlurSigma;
   final bool showGradient;
-  final double gradientOpacity;
   final bool animate;
   final Duration animationDuration;
 
@@ -25,7 +24,6 @@ class AppBackground extends StatefulWidget {
     this.imageAlignment = Alignment.center,
     this.imageBlurSigma = 0.0,
     this.showGradient = true,
-    this.gradientOpacity = 1.0,
     this.animate = true,
     this.animationDuration = const Duration(seconds: 20),
   });
@@ -98,9 +96,8 @@ class _AppBackgroundState extends State<AppBackground>
     final effectiveImageOpacity = settings?.imageOpacity ?? widget.imageOpacity;
     final effectiveImageBlurSigma =
         settings?.imageBlurSigma ?? widget.imageBlurSigma;
-    final effectiveShowGradient = settings?.showGradient ?? widget.showGradient;
-    final effectiveGradientOpacity =
-        settings?.gradientOpacity ?? widget.gradientOpacity;
+    final effectiveShowGradient = effectiveBackgroundImage == null;
+    final effectiveGradientOpacity = 1.0;
 
     Widget gradientLayer(double t) {
       final gradient = widget.animate

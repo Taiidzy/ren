@@ -104,7 +104,8 @@ class _SignInFormState extends State<SignInForm>
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
 
     return Column(
       children: [
@@ -113,7 +114,7 @@ class _SignInFormState extends State<SignInForm>
           hintText: 'Логин',
           prefixIcon: HugeIcon(
             icon: HugeIcons.strokeRoundedUser,
-            color: isDark ? Colors.white : Colors.black,
+            color: theme.colorScheme.onSurface.withOpacity(0.85),
             size: 24.0,
           ),
         ),
@@ -123,7 +124,7 @@ class _SignInFormState extends State<SignInForm>
           hintText: 'Пароль',
           prefixIcon: HugeIcon(
             icon: HugeIcons.strokeRoundedSquareLock02,
-            color: isDark ? Colors.white : Colors.black,
+            color: theme.colorScheme.onSurface.withOpacity(0.85),
             size: 24.0,
           ),
           isPassword: _obscurePassword,
@@ -133,7 +134,7 @@ class _SignInFormState extends State<SignInForm>
                   ? Icons.visibility_outlined
                   : Icons.visibility_off_outlined,
               size: 20,
-              color: isDark ? Colors.white : Colors.black,
+              color: theme.colorScheme.onSurface.withOpacity(0.85),
             ),
             onPressed: () {
               setState(() {

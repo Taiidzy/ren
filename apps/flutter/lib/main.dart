@@ -1,4 +1,8 @@
 // lib/src/main.dart
+import 'dart:async';
+import 'dart:isolate';
+import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:dio/dio.dart';
@@ -8,6 +12,7 @@ import 'package:ren/features/splash/presentation/splash_page.dart';
 import 'package:ren/theme/themes.dart';
 
 import 'package:ren/core/providers/background_settings.dart';
+import 'package:ren/core/providers/theme_settings.dart';
 
 import 'package:ren/core/sdk/ren_sdk.dart';
 import 'package:ren/features/auth/data/auth_api.dart';
@@ -17,8 +22,41 @@ import 'package:ren/features/splash/data/spalsh_repository.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await RenSdk.instance.initialize();
-  runApp(const MyApp());
+
+  FlutterError.onError = (FlutterErrorDetails details) {
+    FlutterError.dumpErrorToConsole(details);
+  };
+
+  PlatformDispatcher.instance.onError = (Object error, StackTrace stack) {
+    FlutterError.dumpErrorToConsole(
+      FlutterErrorDetails(exception: error, stack: stack),
+    );
+    return true;
+  };
+
+  final isolateErrorPort = ReceivePort();
+  isolateErrorPort.listen((dynamic pair) {
+    try {
+      final List<dynamic> list = pair as List<dynamic>;
+      final error = list[0];
+      final stack = list[1] as StackTrace?;
+      FlutterError.dumpErrorToConsole(
+        FlutterErrorDetails(exception: error, stack: stack),
+      );
+    } catch (_) {
+      debugPrint('Unparsable isolate error: $pair');
+    }
+  });
+  Isolate.current.addErrorListener(isolateErrorPort.sendPort);
+
+  runZonedGuarded(
+    () => runApp(const MyApp()),
+    (Object error, StackTrace stack) {
+      FlutterError.dumpErrorToConsole(
+        FlutterErrorDetails(exception: error, stack: stack),
+      );
+    },
+  );
 }
 
 class MyApp extends StatelessWidget {
@@ -29,6 +67,9 @@ class MyApp extends StatelessWidget {
       providers: [
         ChangeNotifierProvider<BackgroundSettings>(
           create: (_) => BackgroundSettings(),
+        ),
+        ChangeNotifierProvider<ThemeSettings>(
+          create: (_) => ThemeSettings(),
         ),
         Provider<RenSdk>.value(value: RenSdk.instance),
         Provider<Dio>(create: (_) => Dio()),
@@ -41,12 +82,16 @@ class MyApp extends StatelessWidget {
           update: (_, api, __) => SplashRepository(api),
         ),
       ],
-      child: MaterialApp(
-        debugShowCheckedModeBanner: false,
-        theme: AppTheme.lightTheme,
-        darkTheme: AppTheme.darkTheme,
-        themeMode: ThemeMode.system, // авто переключение
-        home: const SplashPage(),
+      child: Consumer<ThemeSettings>(
+        builder: (context, settings, _) {
+          return MaterialApp(
+            debugShowCheckedModeBanner: false,
+            theme: AppTheme.lightThemeFor(settings.colorScheme),
+            darkTheme: AppTheme.darkThemeFor(settings.colorScheme),
+            themeMode: settings.themeMode,
+            home: const SplashPage(),
+          );
+        },
       ),
     );
   }

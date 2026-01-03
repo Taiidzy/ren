@@ -17,7 +17,7 @@ class _ForgotPasswordFormState extends State<ForgotPasswordForm> {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final theme = Theme.of(context);
 
     return Column(
       children: [
@@ -26,7 +26,7 @@ class _ForgotPasswordFormState extends State<ForgotPasswordForm> {
           style: TextStyle(
             fontSize: 22,
             fontWeight: FontWeight.w300,
-            color: isDark ? Colors.white : Colors.black87,
+            color: theme.colorScheme.onSurface,
             letterSpacing: 0.5,
           ),
         ),
@@ -36,7 +36,7 @@ class _ForgotPasswordFormState extends State<ForgotPasswordForm> {
           textAlign: TextAlign.center,
           style: TextStyle(
             fontSize: 13,
-            color: isDark ? Colors.white60 : Colors.black54,
+            color: theme.colorScheme.onSurface.withOpacity(0.65),
             height: 1.4,
             fontWeight: FontWeight.w300,
           ),
@@ -47,7 +47,7 @@ class _ForgotPasswordFormState extends State<ForgotPasswordForm> {
           hintText: 'Логин',
           prefixIcon: HugeIcon(
             icon: HugeIcons.strokeRoundedUser,
-            color: Colors.red,
+            color: theme.colorScheme.onSurface.withOpacity(0.85),
             size: 20.0,
           ),
         ),
@@ -57,7 +57,7 @@ class _ForgotPasswordFormState extends State<ForgotPasswordForm> {
           hintText: 'Ключ доступа',
           prefixIcon: HugeIcon(
             icon: HugeIcons.strokeRoundedLockKey,
-            color: Colors.red,
+            color: theme.colorScheme.onSurface.withOpacity(0.85),
             size: 20.0,
           ),
         ),

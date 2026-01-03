@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:ren/core/providers/background_settings.dart';
+import 'package:ren/core/providers/theme_settings.dart';
 import 'package:ren/shared/widgets/animated_gradient.dart';
 import 'package:ren/theme/themes.dart';
 
@@ -20,6 +21,95 @@ class BackgroundPersonalizationSheet {
       },
     );
   }
+
+}
+
+class _SegmentedItem<T> {
+  final T value;
+  final String label;
+
+  const _SegmentedItem({required this.value, required this.label});
+}
+
+class _SegmentedRow<T> extends StatelessWidget {
+  final T value;
+  final List<_SegmentedItem<T>> items;
+  final ValueChanged<T> onChanged;
+
+  const _SegmentedRow({
+    required this.value,
+    required this.items,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 10,
+      runSpacing: 10,
+      children: [
+        for (final item in items)
+          _ChoiceChip(
+            label: item.label,
+            selected: item.value == value,
+            onTap: () => onChanged(item.value),
+          ),
+      ],
+    );
+  }
+}
+
+class _ChoiceChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _ChoiceChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final baseInk = isDark ? Colors.white : Colors.black;
+    final matteGlass = AppColors.matteGlassFor(theme.brightness);
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(14),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+        child: Material(
+          color: selected
+              ? theme.colorScheme.primary.withOpacity(isDark ? 0.22 : 0.18)
+              : matteGlass,
+          child: InkWell(
+            onTap: onTap,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: selected
+                      ? theme.colorScheme.primary
+                      : baseInk.withOpacity(isDark ? 0.18 : 0.10),
+                ),
+              ),
+              child: Text(
+                label,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurface,
+                  fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _SheetBody extends StatelessWidget {
@@ -28,9 +118,11 @@ class _SheetBody extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final settings = context.watch<BackgroundSettings>();
+    final themeSettings = context.watch<ThemeSettings>();
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final baseInk = isDark ? Colors.white : Colors.black;
+    final matteGlass = AppColors.matteGlassFor(theme.brightness);
 
     return DraggableScrollableSheet(
       initialChildSize: 0.74,
@@ -46,7 +138,7 @@ class _SheetBody extends StatelessWidget {
             filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
             child: Container(
               decoration: BoxDecoration(
-                color: AppColors.matteGlass,
+                color: matteGlass,
                 borderRadius: const BorderRadius.only(
                   topLeft: Radius.circular(26),
                   topRight: Radius.circular(26),
@@ -86,8 +178,6 @@ class _SheetBody extends StatelessWidget {
                           settings.setBackgroundImage(null);
                           settings.setImageBlurSigma(0);
                           settings.setImageOpacity(1);
-                          settings.setShowGradient(true);
-                          settings.setGradientOpacity(1);
                         },
                         child: Text(
                           'Сбросить',
@@ -99,6 +189,47 @@ class _SheetBody extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 14),
+                  _SectionTitle(title: 'Тема'),
+                  const SizedBox(height: 10),
+                  _SegmentedRow<ThemeMode>(
+                    value: themeSettings.themeMode,
+                    items: const [
+                      _SegmentedItem(value: ThemeMode.system, label: 'Система'),
+                      _SegmentedItem(value: ThemeMode.light, label: 'Светлая'),
+                      _SegmentedItem(value: ThemeMode.dark, label: 'Тёмная'),
+                    ],
+                    onChanged: (m) => themeSettings.setThemeMode(m),
+                  ),
+                  const SizedBox(height: 16),
+                  _SectionTitle(title: 'Цветовая схема'),
+                  const SizedBox(height: 10),
+                  _SegmentedRow<AppColorSchemePreset>(
+                    value: themeSettings.colorScheme,
+                    items: const [
+                      _SegmentedItem(
+                        value: AppColorSchemePreset.indigo,
+                        label: 'Indigo',
+                      ),
+                      _SegmentedItem(
+                        value: AppColorSchemePreset.emerald,
+                        label: 'Emerald',
+                      ),
+                      _SegmentedItem(
+                        value: AppColorSchemePreset.rose,
+                        label: 'Rose',
+                      ),
+                      _SegmentedItem(
+                        value: AppColorSchemePreset.orange,
+                        label: 'Orange',
+                      ),
+                      _SegmentedItem(
+                        value: AppColorSchemePreset.cyan,
+                        label: 'Cyan',
+                      ),
+                    ],
+                    onChanged: (p) => themeSettings.setColorScheme(p),
+                  ),
+                  const SizedBox(height: 18),
                   _SectionTitle(title: 'Фон'),
                   const SizedBox(height: 10),
                   SizedBox(
@@ -203,34 +334,6 @@ class _SheetBody extends StatelessWidget {
                     max: 20,
                     onChanged: settings.setImageBlurSigma,
                     labelFormatter: (v) => v.toStringAsFixed(0),
-                  ),
-                  const SizedBox(height: 14),
-                  _SectionTitle(title: 'Градиент поверх'),
-                  const SizedBox(height: 8),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        settings.showGradient ? 'Включен' : 'Выключен',
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          color: theme.colorScheme.onSurface.withOpacity(0.85),
-                        ),
-                      ),
-                      Switch.adaptive(
-                        value: settings.showGradient,
-                        onChanged: settings.setShowGradient,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  _SectionTitle(title: 'Прозрачность градиента'),
-                  const SizedBox(height: 8),
-                  _SliderRow(
-                    value: settings.gradientOpacity,
-                    min: 0,
-                    max: 1,
-                    onChanged: settings.setGradientOpacity,
-                    labelFormatter: (v) => v.toStringAsFixed(2),
                   ),
                   const SizedBox(height: 18),
                   SizedBox(

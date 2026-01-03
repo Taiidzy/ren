@@ -75,7 +75,8 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
     final size = MediaQuery.of(context).size;
 
     return Scaffold(
@@ -250,6 +251,7 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
 
   Widget _buildTabItem(String title, int index, bool isDark) {
     final isSelected = _selectedTab == index;
+    final theme = Theme.of(context);
 
     return Expanded(
       child: GestureDetector(
@@ -287,10 +289,9 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
                 style: TextStyle(
                   fontSize: 14,
                   fontWeight: isSelected ? FontWeight.w500 : FontWeight.w300,
-                  color:
-                      isDark
-                          ? (isSelected ? Colors.white : Colors.white70)
-                          : (isSelected ? Colors.black87 : Colors.black54),
+                  color: isSelected
+                      ? theme.colorScheme.onSurface
+                      : theme.colorScheme.onSurface.withOpacity(0.65),
                 ),
               ),
             ],
@@ -314,6 +315,7 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
   }
 
   Widget _buildForgotPasswordButton(bool isDark) {
+    final theme = Theme.of(context);
     return GestureDetector(
       onTap: () => _changeTab(2),
       child: Container(
@@ -321,11 +323,11 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
         child: Text(
           'Забыли пароль?',
           style: TextStyle(
-            color: isDark ? Colors.white70 : Colors.black45,
+            color: theme.colorScheme.onSurface.withOpacity(0.65),
             fontSize: 14,
             fontWeight: FontWeight.w300,
             decoration: TextDecoration.underline,
-            decorationColor: isDark ? Colors.white30 : Colors.black38,
+            decorationColor: theme.colorScheme.onSurface.withOpacity(0.45),
           ),
         ),
       ),

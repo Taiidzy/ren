@@ -12,9 +12,6 @@ class BackgroundSettings extends ChangeNotifier {
   double _imageOpacity = 1.0;
   double _imageBlurSigma = 0.0;
 
-  bool _showGradient = true;
-  double _gradientOpacity = 1.0;
-
   String? _backgroundType;
   String? _backgroundValue;
 
@@ -31,17 +28,11 @@ class BackgroundSettings extends ChangeNotifier {
   double get imageOpacity => _imageOpacity;
   double get imageBlurSigma => _imageBlurSigma;
 
-  bool get showGradient => _showGradient;
-  double get gradientOpacity => _gradientOpacity;
-
   Future<void> _load() async {
     final type = await SecureStorage.readKey(Keys.BackgroundType);
     final value = await SecureStorage.readKey(Keys.BackgroundValue);
     final imgOpacity = await SecureStorage.readKey(Keys.BackgroundImageOpacity);
     final blur = await SecureStorage.readKey(Keys.BackgroundImageBlur);
-    final showGrad = await SecureStorage.readKey(Keys.BackgroundShowGradient);
-    final gradOpacity =
-        await SecureStorage.readKey(Keys.BackgroundGradientOpacity);
     final historyJson =
         await SecureStorage.readKey(Keys.BackgroundGalleryHistory);
 
@@ -53,12 +44,6 @@ class BackgroundSettings extends ChangeNotifier {
     }
     if (blur != null) {
       _imageBlurSigma = double.tryParse(blur) ?? _imageBlurSigma;
-    }
-    if (showGrad != null) {
-      _showGradient = showGrad == 'true';
-    }
-    if (gradOpacity != null) {
-      _gradientOpacity = double.tryParse(gradOpacity) ?? _gradientOpacity;
     }
 
     _galleryHistoryPaths
@@ -104,14 +89,6 @@ class BackgroundSettings extends ChangeNotifier {
     await SecureStorage.writeKey(
       Keys.BackgroundImageBlur,
       _imageBlurSigma.toString(),
-    );
-    await SecureStorage.writeKey(
-      Keys.BackgroundShowGradient,
-      _showGradient.toString(),
-    );
-    await SecureStorage.writeKey(
-      Keys.BackgroundGradientOpacity,
-      _gradientOpacity.toString(),
     );
 
     await SecureStorage.writeKey(
@@ -207,18 +184,6 @@ class BackgroundSettings extends ChangeNotifier {
 
   void setImageBlurSigma(double value) {
     _imageBlurSigma = value.clamp(0.0, 30.0);
-    _persist();
-    notifyListeners();
-  }
-
-  void setShowGradient(bool value) {
-    _showGradient = value;
-    _persist();
-    notifyListeners();
-  }
-
-  void setGradientOpacity(double value) {
-    _gradientOpacity = value.clamp(0.0, 1.0);
     _persist();
     notifyListeners();
   }

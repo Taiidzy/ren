@@ -30,19 +30,18 @@ class _ChatPageState extends State<ChatPage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
+    final matteGlass = AppColors.matteGlassFor(theme.brightness);
     final messages = _repo.messages(widget.chat.id);
 
     return AppBackground(
       imageOpacity: 1,
       imageBlurSigma: 0,
       imageFit: BoxFit.cover,
-      showGradient: true,
-      gradientOpacity: 1,
       animate: true,
       animationDuration: const Duration(seconds: 20),
       child: Scaffold(
         appBar: AppBar(
-          backgroundColor: AppColors.matteGlass,
+          backgroundColor: matteGlass,
           elevation: 0,
           centerTitle: true,
           titleSpacing: 0,
@@ -143,7 +142,7 @@ class _ChatPageState extends State<ChatPage> {
                       child: BackdropFilter(
                         filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
                         child: Material(
-                          color: AppColors.matteGlass,
+                          color: matteGlass,
                           child: InkWell(
                             onTap: () {},
                             child: SizedBox(
@@ -171,10 +170,10 @@ class _ChatPageState extends State<ChatPage> {
                           child: Container(
                             height: 44,
                             decoration: BoxDecoration(
-                              color: AppColors.matteGlass,
+                              color: matteGlass,
                               borderRadius: BorderRadius.circular(18),
                               border: Border.all(
-                                color: (isDark ? Colors.white : Colors.black)
+                                color: theme.colorScheme.onSurface
                                     .withOpacity(isDark ? 0.20 : 0.10),
                               ),
                             ),
@@ -206,7 +205,7 @@ class _ChatPageState extends State<ChatPage> {
                       child: BackdropFilter(
                         filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
                         child: Material(
-                          color: AppColors.matteGlass,
+                          color: matteGlass,
                           child: InkWell(
                             onTap: () {},
                             child: SizedBox(
@@ -259,6 +258,7 @@ class _MessageBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final baseInk = isDark ? Colors.white : Colors.black;
+    final matteGlass = AppColors.matteGlassFor(theme.brightness);
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(16),
@@ -268,7 +268,7 @@ class _MessageBubble extends StatelessWidget {
           constraints: const BoxConstraints(maxWidth: 260),
           padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
           decoration: BoxDecoration(
-            color: AppColors.matteGlass,
+            color: matteGlass,
             borderRadius: BorderRadius.circular(16),
             border: Border.all(color: baseInk.withOpacity(isDark ? 0.20 : 0.10)),
           ),

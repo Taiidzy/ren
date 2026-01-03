@@ -31,6 +31,7 @@ class _HomePageState extends State<ChatsPage> {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final theme = Theme.of(context);
+    final matteGlass = AppColors.matteGlassFor(theme.brightness);
     final baseInk = isDark ? Colors.white : Colors.black;
     final favorites = _repo.favorites();
     final chats = _repo.chats();
@@ -42,8 +43,6 @@ class _HomePageState extends State<ChatsPage> {
       imageOpacity: 1, // прозрачность картинки
       imageBlurSigma: 0, // блюр картинки (0 — без блюра)
       imageFit: BoxFit.cover, // как вписывать изображение
-      showGradient: true, // показывать ли градиент поверх
-      gradientOpacity: 1, // прозрачность градиента
       animate: true, // включить анимацию
       animationDuration: Duration(seconds: 20),
       child: Scaffold(
@@ -57,7 +56,7 @@ class _HomePageState extends State<ChatsPage> {
             ),
           ),
           centerTitle: true,
-          backgroundColor: AppColors.matteGlass,
+          backgroundColor: matteGlass,
           elevation: 0,
           actions: [
             IconButton(
@@ -90,7 +89,9 @@ class _HomePageState extends State<ChatsPage> {
                 ),
                 decoration: InputDecoration(
                   hintText: 'Поиск',
-                  hintStyle: TextStyle(color: AppColors.matteGlass),
+                  hintStyle: TextStyle(
+                    color: theme.colorScheme.onSurface.withOpacity(0.55),
+                  ),
                   prefixIcon: Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 8),
                     child: HugeIcon(
@@ -104,7 +105,7 @@ class _HomePageState extends State<ChatsPage> {
                     minHeight: 0,
                   ),
                   filled: true,
-                  fillColor: AppColors.matteGlass,
+                  fillColor: matteGlass,
                   isDense: true,
                   contentPadding: const EdgeInsets.symmetric(
                     vertical: 4,
@@ -120,8 +121,9 @@ class _HomePageState extends State<ChatsPage> {
           ),
         ),
         body: SafeArea(
+          bottom: false,
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
             child: Column(
               children: [
                 ClipRRect(
@@ -131,7 +133,7 @@ class _HomePageState extends State<ChatsPage> {
                     child: Container(
                       padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
                       decoration: BoxDecoration(
-                        color: AppColors.matteGlass,
+                        color: matteGlass,
                         borderRadius: BorderRadius.circular(22),
                         border: Border.all(
                           color: baseInk.withOpacity(isDark ? 0.20 : 0.12),
@@ -214,7 +216,7 @@ class _HomePageState extends State<ChatsPage> {
                 const SizedBox(height: 14),
                 Expanded(
                   child: ListView.separated(
-                    padding: EdgeInsets.zero,
+                    padding: const EdgeInsets.only(bottom: 16),
                     itemCount: chats.length,
                     separatorBuilder: (_, __) => const SizedBox(height: 10),
                     itemBuilder: (context, index) {
@@ -344,13 +346,14 @@ class _ChatTile extends StatelessWidget {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final baseInk = isDark ? Colors.white : Colors.black;
+    final matteGlass = AppColors.matteGlassFor(theme.brightness);
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(18),
       child: BackdropFilter(
         filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
         child: Material(
-          color: AppColors.matteGlass,
+          color: matteGlass,
           child: InkWell(
             onTap: onTap,
             child: Container(

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'package:ren/core/providers/theme_settings.dart';
+
 class AppColors {
   // Современная минималистичная палитра
   static const Color primary = Color(0xFF6366F1); // Indigo-500
@@ -35,7 +37,12 @@ class AppColors {
   static const Color lightSurface = Color(0xFFFFFFFF);
   static const Color lightCard = Color(0xFFFAFAFA);
 
-  static const Color matteGlass = Color.fromARGB(120, 255, 255, 255);
+  static const Color matteGlassLight = Color.fromARGB(120, 255, 255, 255);
+  static const Color matteGlassDark = Color.fromARGB(120, 0, 0, 0);
+
+  static Color matteGlassFor(Brightness brightness) {
+    return brightness == Brightness.dark ? matteGlassDark : matteGlassLight;
+  }
 }
 
 class AppGradients {
@@ -111,29 +118,35 @@ class AppGradients {
 }
 
 class AppTheme {
-  static ThemeData lightTheme = ThemeData(
-    brightness: Brightness.light,
-    useMaterial3: true,
-    colorScheme: ColorScheme.fromSeed(
-      seedColor: AppColors.primary,
+  static ThemeData lightTheme = lightThemeFor(AppColorSchemePreset.indigo);
+
+  static ThemeData darkTheme = darkThemeFor(AppColorSchemePreset.indigo);
+
+  static ThemeData lightThemeFor(AppColorSchemePreset preset) {
+    final palette = _paletteFor(preset);
+    return ThemeData(
       brightness: Brightness.light,
-      background: AppColors.lightBackground,
-      surface: AppColors.lightSurface,
-      primary: AppColors.primary,
-      secondary: AppColors.secondary,
-      tertiary: AppColors.accent,
-      error: AppColors.error,
-      onBackground: AppColors.neutral900,
-      onSurface: AppColors.neutral900,
-      onPrimary: Colors.white,
-      surfaceVariant: AppColors.neutral100,
-      outline: AppColors.neutral300,
-    ),
+      useMaterial3: true,
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: palette.primary,
+        brightness: Brightness.light,
+        background: AppColors.lightBackground,
+        surface: AppColors.lightSurface,
+        primary: palette.primary,
+        secondary: palette.secondary,
+        tertiary: palette.tertiary,
+        error: AppColors.error,
+        onBackground: AppColors.neutral900,
+        onSurface: AppColors.neutral900,
+        onPrimary: Colors.white,
+        surfaceVariant: AppColors.neutral100,
+        outline: AppColors.neutral300,
+      ),
 
-    scaffoldBackgroundColor: Colors.transparent,
+      scaffoldBackgroundColor: Colors.transparent,
 
-    // Типографика
-    textTheme: const TextTheme(
+      // Типографика
+      textTheme: const TextTheme(
       headlineLarge: TextStyle(
         fontSize: 32,
         fontWeight: FontWeight.w700,
@@ -266,31 +279,34 @@ class AppTheme {
       thickness: 1,
       space: 1,
     ),
-  );
+    );
+  }
 
-  static ThemeData darkTheme = ThemeData(
-    brightness: Brightness.dark,
-    useMaterial3: true,
-    colorScheme: ColorScheme.fromSeed(
-      seedColor: AppColors.primary,
+  static ThemeData darkThemeFor(AppColorSchemePreset preset) {
+    final palette = _paletteFor(preset);
+    return ThemeData(
       brightness: Brightness.dark,
-      background: AppColors.darkBackground,
-      surface: AppColors.darkSurface,
-      primary: AppColors.primary,
-      secondary: AppColors.secondary,
-      tertiary: AppColors.accent,
-      error: AppColors.error,
-      onBackground: AppColors.neutral100,
-      onSurface: AppColors.neutral100,
-      onPrimary: Colors.white,
-      surfaceVariant: AppColors.darkCard,
-      outline: AppColors.neutral700,
-    ),
+      useMaterial3: true,
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: palette.primary,
+        brightness: Brightness.dark,
+        background: AppColors.darkBackground,
+        surface: AppColors.darkSurface,
+        primary: palette.primary,
+        secondary: palette.secondary,
+        tertiary: palette.tertiary,
+        error: AppColors.error,
+        onBackground: AppColors.neutral100,
+        onSurface: AppColors.neutral100,
+        onPrimary: Colors.white,
+        surfaceVariant: AppColors.darkCard,
+        outline: AppColors.neutral700,
+      ),
 
-    scaffoldBackgroundColor: Colors.transparent,
+      scaffoldBackgroundColor: Colors.transparent,
 
-    // Типографика для темной темы
-    textTheme: const TextTheme(
+      // Типографика для темной темы
+      textTheme: const TextTheme(
       headlineLarge: TextStyle(
         fontSize: 32,
         fontWeight: FontWeight.w700,
@@ -423,5 +439,53 @@ class AppTheme {
       thickness: 1,
       space: 1,
     ),
-  );
+    );
+  }
+
+  static _Palette _paletteFor(AppColorSchemePreset preset) {
+    switch (preset) {
+      case AppColorSchemePreset.indigo:
+        return const _Palette(
+          primary: Color(0xFF6366F1),
+          secondary: Color(0xFF06B6D4),
+          tertiary: Color(0xFF8B5CF6),
+        );
+      case AppColorSchemePreset.emerald:
+        return const _Palette(
+          primary: Color(0xFF10B981),
+          secondary: Color(0xFF06B6D4),
+          tertiary: Color(0xFF34D399),
+        );
+      case AppColorSchemePreset.rose:
+        return const _Palette(
+          primary: Color(0xFFF43F5E),
+          secondary: Color(0xFFFB7185),
+          tertiary: Color(0xFFA855F7),
+        );
+      case AppColorSchemePreset.orange:
+        return const _Palette(
+          primary: Color(0xFFF97316),
+          secondary: Color(0xFFF59E0B),
+          tertiary: Color(0xFFEF4444),
+        );
+      case AppColorSchemePreset.cyan:
+        return const _Palette(
+          primary: Color(0xFF06B6D4),
+          secondary: Color(0xFF3B82F6),
+          tertiary: Color(0xFF22C55E),
+        );
+    }
+  }
+}
+
+class _Palette {
+  final Color primary;
+  final Color secondary;
+  final Color tertiary;
+
+  const _Palette({
+    required this.primary,
+    required this.secondary,
+    required this.tertiary,
+  });
 }

@@ -86,7 +86,8 @@ class _SignUpFormState extends State<SignUpForm> {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
 
     return Column(
       children: [
@@ -105,6 +106,8 @@ class _SignUpFormState extends State<SignUpForm> {
 
   // Первый шаг - основная информация для входа
   Widget _buildFirstStep(bool isDark) {
+    final theme = Theme.of(context);
+    final onSurfaceFaint = theme.colorScheme.onSurface.withOpacity(0.55);
     return Column(
       children: [
         _buildFieldWithError(
@@ -113,9 +116,7 @@ class _SignUpFormState extends State<SignUpForm> {
             hintText: 'Логин',
             prefixIcon: HugeIcon(
               icon: HugeIcons.strokeRoundedUser,
-              color: isDark
-                  ? Colors.white.withOpacity(0.5)
-                  : Colors.black.withOpacity(0.5),
+              color: onSurfaceFaint,
               size: 24.0,
             ),
           ),
@@ -128,9 +129,7 @@ class _SignUpFormState extends State<SignUpForm> {
             hintText: 'Пароль',
             prefixIcon: HugeIcon(
               icon: HugeIcons.strokeRoundedSquareLock02,
-              color: isDark
-                  ? Colors.white.withOpacity(0.5)
-                  : Colors.black.withOpacity(0.5),
+              color: onSurfaceFaint,
               size: 24.0,
             ),
             isPassword: _obscurePassword,
@@ -140,9 +139,7 @@ class _SignUpFormState extends State<SignUpForm> {
                     ? Icons.visibility_outlined
                     : Icons.visibility_off_outlined,
                 size: 20,
-                color: isDark
-                    ? Colors.white.withOpacity(0.5)
-                    : Colors.black.withOpacity(0.5),
+                color: onSurfaceFaint,
               ),
               onPressed: () {
                 setState(() {
@@ -160,9 +157,7 @@ class _SignUpFormState extends State<SignUpForm> {
             hintText: 'Подтвердить пароль',
             prefixIcon: HugeIcon(
               icon: HugeIcons.strokeRoundedSquareLock02,
-              color: isDark
-                  ? Colors.white.withOpacity(0.5)
-                  : Colors.black.withOpacity(0.5),
+              color: onSurfaceFaint,
               size: 24.0,
             ),
             isPassword: _obscureConfirmPassword,
@@ -172,9 +167,7 @@ class _SignUpFormState extends State<SignUpForm> {
                     ? Icons.visibility_outlined
                     : Icons.visibility_off_outlined,
                 size: 20,
-                color: isDark
-                    ? Colors.white.withOpacity(0.5)
-                    : Colors.black.withOpacity(0.5),
+                color: onSurfaceFaint,
               ),
               onPressed: () {
                 setState(() {
