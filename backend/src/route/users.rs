@@ -157,6 +157,9 @@ async fn update_avatar(
         })
         .ok_or((StatusCode::BAD_REQUEST, "Не найден boundary в Content-Type".into()))?;
 
+    println!("Content-Type: {}", content_type);
+    println!("Boundary: {}", boundary);
+
     // Превращаем body в stream байтов для multer
     let stream = body.into_data_stream().map(|res| {
         res.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
