@@ -64,6 +64,11 @@ class RealtimeClient {
     _sub = ch.stream.listen(
       (event) {
         if (event is String) {
+          if (event.contains('"type":"message_new"') ||
+              event.contains('"type":"typing"') ||
+              event.contains('"type":"presence"')) {
+            debugPrint('WS <- $event');
+          }
           try {
             final json = jsonDecode(event);
             if (json is Map<String, dynamic>) {

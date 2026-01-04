@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:hugeicons/hugeicons.dart';
 import 'package:provider/provider.dart';
 import 'package:ren/core/constants/keys.dart';
@@ -142,6 +143,15 @@ class _ChatPageState extends State<ChatPage> {
       final m = (msg is Map<String, dynamic>)
           ? msg
           : Map<String, dynamic>.from(msg as Map);
+
+      debugPrint('WS message keys: ${m.keys.toList()}');
+      final encPreview = (m['message'] is String)
+          ? (m['message'] as String)
+          : (m['body'] is String ? (m['body'] as String) : '');
+      if (encPreview.isNotEmpty) {
+        debugPrint('WS message encrypted preview: ${encPreview.substring(0, encPreview.length > 200 ? 200 : encPreview.length)}');
+      }
+
       final repo = context.read<ChatsRepository>();
       final text = await repo.decryptIncomingWsMessage(message: m);
 
@@ -154,8 +164,23 @@ class _ChatPageState extends State<ChatPage> {
       final myId = _myUserId ?? 0;
       final isMe = (myId > 0) ? senderId == myId : senderId != peerId;
 
+      debugPrint('WS message_new chat=$chatId sender=$senderId my=$myId peer=$peerId isMe=$isMe id=${m['id']}');
+
       if (!mounted) return;
       setState(() {
+        final incomingId = '${m['id'] ?? ''}';
+        if (incomingId.isNotEmpty && _messages.any((x) => x.id == incomingId)) {
+          return;
+        }
+
+        // если это echo нашего сообщения, попробуем убрать последний optimistic дубль
+        if (isMe && _messages.isNotEmpty) {
+          final last = _messages.last;
+          if (last.id.startsWith('local_') && last.text == text) {
+            _messages.removeLast();
+          }
+        }
+
         _messages.add(
           ChatMessage(
             id: '${m['id'] ?? DateTime.now().millisecondsSinceEpoch}',

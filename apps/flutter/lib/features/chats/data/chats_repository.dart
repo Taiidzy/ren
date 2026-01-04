@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:ren/core/constants/api_url.dart';
 import 'package:ren/core/constants/keys.dart';
 import 'package:ren/core/sdk/ren_sdk.dart';
@@ -121,33 +122,49 @@ class ChatsRepository {
     final ciphertext = payload['ciphertext'] as String?;
     final nonce = payload['nonce'] as String?;
     if (ciphertext == null || nonce == null) {
+      debugPrint('decrypt: missing ciphertext/nonce');
       return '[encrypted]';
     }
 
     if (myPrivateKeyB64 == null || myPrivateKeyB64.isEmpty) {
+      debugPrint('decrypt: missing private key');
       return '[encrypted]';
     }
 
-    final envMap = (envelopes is Map) ? envelopes.cast<String, dynamic>() : null;
-    final env = envMap?['$myUserId'] as Map?;
+    final envMap = (envelopes is Map) ? envelopes : null;
+    if (envMap == null) {
+      return '[encrypted]';
+    }
+
+    // envelopes может приходить как Map<int, ...> или Map<String, ...>
+    dynamic envDyn = envMap['$myUserId'];
+    envDyn ??= envMap[myUserId];
+    final env = envDyn is Map ? envDyn : null;
     if (env == null) {
+      debugPrint('decrypt: no envelope for user=$myUserId keys=${envMap.keys.toList()}');
       return '[encrypted]';
     }
 
-    final wrapped = env['key'] as String?;
-    final eph = env['ephem_pub_key'] as String?;
-    final iv = env['iv'] as String?;
+    String? asString(dynamic v) => (v is String && v.isNotEmpty) ? v : null;
 
-    if (wrapped == null || eph == null || iv == null) {
+    final wrapped = asString(env['key']) ?? asString(env['wrapped']);
+    final eph = asString(env['ephem_pub_key']) ?? asString(env['ephemeral_public_key']);
+
+    if (wrapped == null || eph == null) {
+      debugPrint('decrypt: missing wrapped/eph in envelope for user=$myUserId');
       return '[encrypted]';
     }
 
     final msgKey = renSdk.unwrapSymmetricKey(wrapped, eph, myPrivateKeyB64);
     if (msgKey == null) {
+      debugPrint('decrypt: unwrapSymmetricKey failed');
       return '[encrypted]';
     }
 
     final decrypted = renSdk.decryptMessage(ciphertext, nonce, msgKey);
+    if (decrypted == null) {
+      debugPrint('decrypt: decryptMessage failed');
+    }
     return decrypted ?? '[encrypted]';
   }
 
