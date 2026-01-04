@@ -1,6 +1,6 @@
 use axum::{
     extract::{State, Multipart, Path as PathExtractor},
-    http::{StatusCode, header},
+    http::{StatusCode, header, HeaderMap},
     response::Response,
     routing::{get, patch},
     Json, Router,
@@ -120,6 +120,7 @@ async fn update_username(
 
 async fn update_avatar(
     State(state): State<AppState>,
+    headers: HeaderMap,
     CurrentUser { id }: CurrentUser,
     mut multipart: Multipart,
 ) -> Result<Json<UserResponse>, (StatusCode, String)> {
@@ -139,8 +140,39 @@ async fn update_avatar(
     let mut avatar_filename = None;
     let mut remove_avatar = false;
 
-    while let Some(field) = multipart.next_field().await
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Ошибка чтения multipart: {}", e)))? {
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| {
+            let content_type = headers
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("<none>")
+                .to_string();
+            let content_length = headers
+                .get(header::CONTENT_LENGTH)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("<none>")
+                .to_string();
+            let transfer_encoding = headers
+                .get(header::TRANSFER_ENCODING)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("<none>")
+                .to_string();
+            let user_agent = headers
+                .get(header::USER_AGENT)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("<none>")
+                .to_string();
+
+            (
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "Ошибка чтения multipart: {} | content-type={} content-length={} transfer-encoding={} user-agent={}",
+                    e, content_type, content_length, transfer_encoding, user_agent
+                ),
+            )
+        })? {
         let name = field.name().unwrap_or("").to_string();
         
         match name.as_str() {
