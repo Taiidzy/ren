@@ -11,29 +11,48 @@ echo -e "${GREEN}=== Ren SDK Build Script ===${NC}\n"
 # Сборка для iOS (Swift)
 # ============================================================================
 build_ios() {
-    echo -e "${YELLOW}Building for iOS...${NC}"
-    
-    # Сборка для симулятора (x86_64 и arm64)
-    cargo build --release --target x86_64-apple-ios --features ffi,crypto
-    cargo build --release --target aarch64-apple-ios-sim --features ffi,crypto
-    
-    # Сборка для реальных устройств
+    set -e
+
+    echo -e "${YELLOW}Building for iOS (XCFramework)...${NC}"
+
+    rustup target add \
+        aarch64-apple-ios \
+        aarch64-apple-ios-sim \
+        x86_64-apple-ios
+
+    # --------------------------
+    # Build libraries
+    # --------------------------
     cargo build --release --target aarch64-apple-ios --features ffi,crypto
-    
-    # Создаём xcframework
-    mkdir -p target/xcframework
-    
-    # Объединяем симуляторы
+    cargo build --release --target aarch64-apple-ios-sim --features ffi,crypto
+    cargo build --release --target x86_64-apple-ios --features ffi,crypto
+
+    # --------------------------
+    # Merge simulator libs
+    # --------------------------
+    mkdir -p target/ios-sim
+
     lipo -create \
-        target/x86_64-apple-ios/release/libren_sdk.a \
         target/aarch64-apple-ios-sim/release/libren_sdk.a \
-        -output target/xcframework/libren_sdk_sim.a
-    
-    # Копируем для устройств
-    cp target/aarch64-apple-ios/release/libren_sdk.a target/xcframework/libren_sdk_device.a
-    
-    echo -e "${GREEN}✓ iOS build complete${NC}\n"
+        target/x86_64-apple-ios/release/libren_sdk.a \
+        -output target/ios-sim/libren_sdk.a
+
+    # --------------------------
+    # Create XCFramework
+    # --------------------------
+    rm -rf target/RenSDK.xcframework
+
+    xcodebuild -create-xcframework \
+        -library target/aarch64-apple-ios/release/libren_sdk.a \
+        -headers target \
+        -library target/ios-sim/libren_sdk.a \
+        -headers target \
+        -output target/RenSDK.xcframework
+
+    echo -e "${GREEN}✓ iOS XCFramework created cleanly${NC}\n"
 }
+
+
 
 # ============================================================================
 # Сборка для Android (JNI)
@@ -93,22 +112,30 @@ build_windows() {
 # Сборка для macOS
 # ============================================================================
 build_macos() {
-    echo -e "${YELLOW}Building for macOS...${NC}"
-    
-    # Intel
+    echo -e "${YELLOW}Building for macOS (universal dylib)...${NC}"
+
+    # Проверяем таргеты
+    rustup target add x86_64-apple-darwin aarch64-apple-darwin
+
+    # Собираем для Intel
     cargo build --release --target x86_64-apple-darwin --features ffi,crypto
-    # Apple Silicon
+
+    # Собираем для Apple Silicon
     cargo build --release --target aarch64-apple-darwin --features ffi,crypto
-    
-    # Universal binary
+
+    # Создаём universal dylib
     mkdir -p target/macos
     lipo -create \
         target/x86_64-apple-darwin/release/libren_sdk.dylib \
         target/aarch64-apple-darwin/release/libren_sdk.dylib \
         -output target/macos/libren_sdk.dylib
-    
-    echo -e "${GREEN}✓ macOS build complete${NC}\n"
+
+    # Проверяем архитектуры
+    lipo -info target/macos/libren_sdk.dylib
+
+    echo -e "${GREEN}✓ macOS universal dylib built at target/macos/libren_sdk.dylib${NC}\n"
 }
+
 
 # ============================================================================
 # Сборка WASM для Web (TypeScript/React)
@@ -156,8 +183,8 @@ generate_headers() {
 
 case "$1" in
     ios)
-        build_ios
         generate_headers
+        build_ios
         ;;
     android)
         build_android
@@ -172,8 +199,8 @@ case "$1" in
         generate_headers
         ;;
     macos)
-        build_macos
         generate_headers
+        build_macos
         ;;
     wasm)
         build_wasm

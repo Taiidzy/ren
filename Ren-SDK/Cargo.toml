@@ -9,7 +9,7 @@ license = "MIT"
 [lib]
 name = "ren_sdk"
 path = "src/lib.rs"
-crate-type = ["cdylib", "rlib"] # "staticlib"
+crate-type = ["staticlib"] # "staticlib" "cdylib", "rlib", 
 
 [features]
 default = ["crypto", "wasm", "ffi"]
