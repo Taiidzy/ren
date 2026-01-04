@@ -17,6 +17,7 @@ class ChatMessage {
   final String chatId;
   final bool isMe;
   final String text;
+  final List<ChatAttachment> attachments;
   final DateTime sentAt;
 
   const ChatMessage({
@@ -24,8 +25,25 @@ class ChatMessage {
     required this.chatId,
     required this.isMe,
     required this.text,
+    this.attachments = const [],
     required this.sentAt,
   });
+}
+
+class ChatAttachment {
+  final String localPath;
+  final String filename;
+  final String mimetype;
+  final int size;
+
+  const ChatAttachment({
+    required this.localPath,
+    required this.filename,
+    required this.mimetype,
+    required this.size,
+  });
+
+  bool get isImage => mimetype.startsWith('image/');
 }
 
 class ChatPreview {

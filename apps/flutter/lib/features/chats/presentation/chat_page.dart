@@ -1,8 +1,9 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart';
 import 'package:hugeicons/hugeicons.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:ren/core/constants/keys.dart';
 import 'package:ren/core/secure/secure_storage.dart';
@@ -26,6 +27,8 @@ class _ChatPageState extends State<ChatPage> {
   final _controller = TextEditingController();
   bool _loading = true;
   final List<ChatMessage> _messages = [];
+
+  final _picker = ImagePicker();
 
   int? _myUserId;
 
@@ -157,7 +160,7 @@ class _ChatPageState extends State<ChatPage> {
       }
 
       final repo = context.read<ChatsRepository>();
-      final text = await repo.decryptIncomingWsMessage(message: m);
+      final decoded = await repo.decryptIncomingWsMessageFull(message: m);
 
       final senderId = m['sender_id'] is int
           ? m['sender_id'] as int
@@ -180,7 +183,7 @@ class _ChatPageState extends State<ChatPage> {
         // если это echo нашего сообщения, попробуем убрать последний optimistic дубль
         if (isMe && _messages.isNotEmpty) {
           final last = _messages.last;
-          if (last.id.startsWith('local_') && last.text == text) {
+          if (last.id.startsWith('local_') && last.text == decoded.text) {
             _messages.removeLast();
           }
         }
@@ -190,7 +193,8 @@ class _ChatPageState extends State<ChatPage> {
             id: '${m['id'] ?? DateTime.now().millisecondsSinceEpoch}',
             chatId: chatId.toString(),
             isMe: isMe,
-            text: text,
+            text: decoded.text,
+            attachments: decoded.attachments,
             sentAt: createdAt,
           ),
         );
@@ -244,6 +248,78 @@ class _ChatPageState extends State<ChatPage> {
       message: payload['message'] as String,
       messageType: payload['message_type'] as String?,
       envelopes: payload['envelopes'] as Map<String, dynamic>?,
+    );
+  }
+
+  Future<void> _sendImage() async {
+    final chatId = int.tryParse(widget.chat.id) ?? 0;
+    final peerId = widget.chat.peerId ?? 0;
+    if (peerId <= 0) return;
+
+    final xfile = await _picker.pickImage(source: ImageSource.gallery);
+    if (xfile == null) return;
+
+    final bytes = await xfile.readAsBytes();
+    final name = xfile.name.isNotEmpty
+        ? xfile.name
+        : 'image_${DateTime.now().millisecondsSinceEpoch}.jpg';
+
+    String mimetypeFromName(String filename) {
+      final lower = filename.toLowerCase();
+      if (lower.endsWith('.png')) return 'image/png';
+      if (lower.endsWith('.webp')) return 'image/webp';
+      if (lower.endsWith('.gif')) return 'image/gif';
+      return 'image/jpeg';
+    }
+
+    final mimetype = mimetypeFromName(name);
+    final caption = _controller.text.trim();
+    _controller.clear();
+
+    // optimistic: показываем локальный файл
+    setState(() {
+      _messages.add(
+        ChatMessage(
+          id: 'local_${DateTime.now().millisecondsSinceEpoch}',
+          chatId: chatId.toString(),
+          isMe: true,
+          text: caption,
+          attachments: [
+            ChatAttachment(
+              localPath: xfile.path,
+              filename: name,
+              mimetype: mimetype,
+              size: bytes.length,
+            ),
+          ],
+          sentAt: DateTime.now(),
+        ),
+      );
+    });
+
+    final repo = context.read<ChatsRepository>();
+    final payload = await repo.buildEncryptedWsImageMessage(
+      chatId: chatId,
+      peerId: peerId,
+      fileBytes: bytes,
+      filename: name,
+      mimetype: mimetype,
+      caption: caption,
+    );
+
+    _rt ??= context.read<RealtimeClient>();
+    final rt = _rt!;
+    if (!rt.isConnected) {
+      await rt.connect();
+      rt.joinChat(chatId);
+    }
+
+    rt.sendMessage(
+      chatId: chatId,
+      message: payload['message'] as String,
+      messageType: payload['message_type'] as String?,
+      envelopes: payload['envelopes'] as Map<String, dynamic>?,
+      metadata: payload['metadata'] as List<dynamic>?,
     );
   }
 
@@ -387,7 +463,7 @@ class _ChatPageState extends State<ChatPage> {
                       blurSigma: 12,
                       width: inputHeight,
                       height: inputHeight,
-                      onTap: () {},
+                      onTap: _sendImage,
                       child: Center(
                         child: HugeIcon(
                           icon: HugeIcons.strokeRoundedAttachment01,
@@ -468,6 +544,7 @@ class _ChatPageState extends State<ChatPage> {
                                   : Alignment.centerLeft,
                               child: _MessageBubble(
                                 text: msg.text,
+                                attachments: msg.attachments,
                                 timeLabel: _formatTime(msg.sentAt),
                                 isMe: msg.isMe,
                                 isDark: isDark,
@@ -502,12 +579,14 @@ class _ChatPageState extends State<ChatPage> {
 
 class _MessageBubble extends StatelessWidget {
   final String text;
+  final List<ChatAttachment> attachments;
   final String timeLabel;
   final bool isMe;
   final bool isDark;
 
   const _MessageBubble({
     required this.text,
+    this.attachments = const [],
     required this.timeLabel,
     required this.isMe,
     required this.isDark,
@@ -535,6 +614,33 @@ class _MessageBubble extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
+              for (final a in attachments) ...[
+                if (a.isImage)
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: Image.file(
+                      File(a.localPath),
+                      fit: BoxFit.cover,
+                      errorBuilder: (context, error, stack) {
+                        return Container(
+                          width: 220,
+                          height: 160,
+                          color: Theme.of(context).colorScheme.surface,
+                        );
+                      },
+                    ),
+                  )
+                else
+                  Text(
+                    a.filename,
+                    style: TextStyle(
+                      color: theme.colorScheme.onSurface.withOpacity(0.85),
+                      fontSize: 12,
+                      height: 1.25,
+                    ),
+                  ),
+                const SizedBox(height: 6),
+              ],
               Text(
                 text,
                 style: TextStyle(

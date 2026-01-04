@@ -150,14 +150,12 @@ typedef ren_encrypt_file_native =
       Pointer<Utf8>,
       Pointer<Utf8>,
     );
-typedef ren_decrypt_file_native =
-    RenDecryptedFile Function(
-      Pointer<Uint8>,
-      IntPtr,
-      Pointer<Utf8>,
-      Pointer<Utf8>,
-      Pointer<Utf8>,
-    );
+typedef ren_decrypt_file_native = Pointer<Uint8> Function(
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<IntPtr>,
+);
 
 // wrap / unwrap
 typedef ren_wrap_symmetric_key_native =
@@ -203,14 +201,12 @@ typedef ren_encrypt_file_dart =
       Pointer<Utf8>,
       Pointer<Utf8>,
     );
-typedef ren_decrypt_file_dart =
-    RenDecryptedFile Function(
-      Pointer<Uint8>,
-      int,
-      Pointer<Utf8>,
-      Pointer<Utf8>,
-      Pointer<Utf8>,
-    );
+typedef ren_decrypt_file_dart = Pointer<Uint8> Function(
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<IntPtr>,
+);
 typedef ren_wrap_symmetric_key_dart =
     RenWrappedKey Function(Pointer<Utf8>, Pointer<Utf8>);
 typedef ren_unwrap_symmetric_key_dart =
@@ -511,54 +507,35 @@ class RenSdk {
 
   /// Расшифровывает файл: принимает зашифрованные байты и метаданные.
   /// Возвращает карту: `data` (Uint8List), `filename`, `mimetype`, `message` (если присутствует).
-  Future<Map<String, dynamic>?> decryptFile(
-    Uint8List encryptedBytes,
-    String filename,
-    String mimetype,
+  Future<Uint8List?> decryptFileBytes(
+    String ciphertextB64,
+    String nonceB64,
     String keyB64,
   ) async {
     try {
-      final dataPtr = malloc.allocate<Uint8>(encryptedBytes.length);
-      final typed = dataPtr.asTypedList(encryptedBytes.length);
-      typed.setAll(0, encryptedBytes);
+      final pc = ciphertextB64.toNativeUtf8();
+      final pn = nonceB64.toNativeUtf8();
+      final pk = keyB64.toNativeUtf8();
+      final outLenPtr = malloc.allocate<IntPtr>(sizeOf<IntPtr>());
 
-      final pFilename = filename.toNativeUtf8();
-      final pMimetype = mimetype.toNativeUtf8();
-      final pKey = keyB64.toNativeUtf8();
+      final dataPtr = _ren_decrypt_file(pc, pn, pk, outLenPtr);
 
-      final res = _ren_decrypt_file(
-        dataPtr,
-        encryptedBytes.length,
-        pFilename,
-        pMimetype,
-        pKey,
-      );
+      malloc.free(pc);
+      malloc.free(pn);
+      malloc.free(pk);
 
-      malloc.free(dataPtr);
-      malloc.free(pFilename);
-      malloc.free(pMimetype);
-      malloc.free(pKey);
-
-      if (res.data == nullptr) {
+      if (dataPtr == nullptr) {
+        malloc.free(outLenPtr);
         return null;
       }
 
-      final len = res.len;
-      final dataList = res.data.asTypedList(len);
+      final len = outLenPtr.value;
+      malloc.free(outLenPtr);
+
+      final dataList = dataPtr.asTypedList(len);
       final bytesOut = Uint8List.fromList(dataList);
-
-      final fname = _readAndFreeString(res.filename);
-      final mime = _readAndFreeString(res.mimetype);
-      final message = _readAndFreeString(res.message);
-
-      ren_free_decrypted_file(res);
-
-      return {
-        'data': bytesOut,
-        'filename': fname,
-        'mimetype': mime,
-        'message': message,
-      };
+      ren_free_bytes(dataPtr, len);
+      return bytesOut;
     } catch (e) {
       rethrow;
     }

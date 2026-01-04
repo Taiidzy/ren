@@ -1,6 +1,8 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:ren/core/constants/api_url.dart';
 import 'package:ren/core/constants/keys.dart';
 import 'package:ren/core/sdk/ren_sdk.dart';
@@ -83,11 +85,17 @@ class ChatsRepository {
 
       final encrypted = (m['message'] as String?) ?? '';
 
-      final text = await _tryDecryptMessage(
+      final decrypted = await _tryDecryptMessageAndKey(
         encrypted: encrypted,
         envelopes: m['envelopes'],
         myUserId: myUserId,
         myPrivateKeyB64: privateKey,
+      );
+
+      final msgKey = decrypted.key;
+      final attachments = await _tryDecryptAttachments(
+        metadata: m['metadata'],
+        msgKeyB64: msgKey,
       );
 
       out.add(
@@ -95,7 +103,8 @@ class ChatsRepository {
           id: messageId.toString(),
           chatId: chatId.toString(),
           isMe: senderId == myUserId,
-          text: text,
+          text: decrypted.text,
+          attachments: attachments,
           sentAt: createdAt,
         ),
       );
@@ -104,45 +113,120 @@ class ChatsRepository {
     return out;
   }
 
-  Future<String> _tryDecryptMessage({
+  Future<List<ChatAttachment>> _tryDecryptAttachments({
+    required dynamic metadata,
+    required String? msgKeyB64,
+  }) async {
+    if (metadata is! List) return const [];
+    final key = msgKeyB64?.trim();
+    if (key == null || key.isEmpty) return const [];
+
+    final out = <ChatAttachment>[];
+
+    for (final item in metadata) {
+      if (item is! Map) continue;
+      final m = item.cast<String, dynamic>();
+      final fileIdDyn = m['file_id'];
+      final encFile = (m['enc_file'] as String?)?.trim();
+      final nonce = (m['nonce'] as String?)?.trim();
+      final filename = (m['filename'] as String?) ?? 'file';
+      final mimetype = (m['mimetype'] as String?) ?? 'application/octet-stream';
+      final size = (m['size'] is int)
+          ? m['size'] as int
+          : int.tryParse('${m['size']}') ?? 0;
+
+      if (nonce == null || nonce.isEmpty) {
+        continue;
+      }
+
+      String? ciphertextB64;
+
+      // New mode: ciphertext stored on server, referenced by file_id
+      int? fileId;
+      if (fileIdDyn is int) {
+        fileId = fileIdDyn;
+      } else if (fileIdDyn is String) {
+        fileId = int.tryParse(fileIdDyn);
+      }
+      if (fileId != null && fileId > 0) {
+        try {
+          final ciphertextBytes = await api.downloadMedia(fileId);
+          ciphertextB64 = base64Encode(ciphertextBytes);
+        } catch (e) {
+          debugPrint('download media failed fileId=$fileId err=$e');
+          continue;
+        }
+      } else if (encFile != null && encFile.isNotEmpty) {
+        // Legacy mode: ciphertext inline in metadata
+        ciphertextB64 = encFile;
+      }
+
+      if (ciphertextB64 == null || ciphertextB64.isEmpty) {
+        continue;
+      }
+
+      final bytes = await renSdk.decryptFileBytes(ciphertextB64, nonce, key);
+      if (bytes == null) continue;
+
+      final dir = await getTemporaryDirectory();
+      final safeName = filename.isNotEmpty
+          ? filename
+          : 'file_${DateTime.now().millisecondsSinceEpoch}';
+      final path = '${dir.path}/$safeName';
+      final f = File(path);
+      await f.writeAsBytes(bytes, flush: true);
+
+      out.add(
+        ChatAttachment(
+          localPath: path,
+          filename: filename,
+          mimetype: mimetype,
+          size: size,
+        ),
+      );
+    }
+
+    return out;
+  }
+
+  ({String text, String? key}) _decryptMessageWithKey({
     required String encrypted,
     required dynamic envelopes,
     required int myUserId,
     required String? myPrivateKeyB64,
-  }) async {
-    if (encrypted.isEmpty) return '';
+  }) {
+    if (encrypted.isEmpty) return (text: '', key: null);
 
     Map<String, dynamic>? payload;
     try {
       payload = jsonDecode(encrypted) as Map<String, dynamic>;
     } catch (_) {
-      return '[encrypted]';
+      return (text: '[encrypted]', key: null);
     }
 
     final ciphertext = (payload['ciphertext'] as String?)?.trim();
     final nonce = (payload['nonce'] as String?)?.trim();
     if (ciphertext == null || nonce == null) {
       debugPrint('decrypt: missing ciphertext/nonce');
-      return '[encrypted]';
+      return (text: '[encrypted]', key: null);
     }
 
     final priv = myPrivateKeyB64?.trim();
     if (priv == null || priv.isEmpty) {
       debugPrint('decrypt: missing private key');
-      return '[encrypted]';
+      return (text: '[encrypted]', key: null);
     }
 
     final envMap = (envelopes is Map) ? envelopes : null;
     if (envMap == null) {
-      return '[encrypted]';
+      return (text: '[encrypted]', key: null);
     }
 
-    // envelopes может приходить как Map<int, ...> или Map<String, ...>
     dynamic envDyn = envMap['$myUserId'];
     envDyn ??= envMap[myUserId];
     final env = envDyn is Map ? envDyn : null;
     if (env == null) {
-      return '[encrypted]';
+      return (text: '[encrypted]', key: null);
     }
 
     String? asString(dynamic v) => (v is String && v.trim().isNotEmpty) ? v.trim() : null;
@@ -153,19 +237,33 @@ class ChatsRepository {
 
     if (wrapped == null || eph == null || wrapNonce == null) {
       debugPrint('decrypt: missing wrapped/eph/nonce in envelope for user=$myUserId');
-      return '[encrypted]';
+      return (text: '[encrypted]', key: null);
     }
 
     final msgKey = renSdk.unwrapSymmetricKey(wrapped, eph, wrapNonce, priv);
     if (msgKey == null) {
-      return '[encrypted]';
+      return (text: '[encrypted]', key: null);
     }
 
     final decrypted = renSdk.decryptMessage(ciphertext, nonce, msgKey);
     if (decrypted == null) {
       debugPrint('decrypt: decryptMessage failed');
     }
-    return decrypted ?? '[encrypted]';
+    return (text: decrypted ?? '[encrypted]', key: msgKey);
+  }
+
+  Future<({String text, String? key})> _tryDecryptMessageAndKey({
+    required String encrypted,
+    required dynamic envelopes,
+    required int myUserId,
+    required String? myPrivateKeyB64,
+  }) async {
+    return _decryptMessageWithKey(
+      encrypted: encrypted,
+      envelopes: envelopes,
+      myUserId: myUserId,
+      myPrivateKeyB64: myPrivateKeyB64,
+    );
   }
 
   Future<ChatPreview> createPrivateChat(int peerId) async {
@@ -278,6 +376,108 @@ class ChatsRepository {
     };
   }
 
+  Future<Map<String, dynamic>> buildEncryptedWsImageMessage({
+    required int chatId,
+    required int peerId,
+    required Uint8List fileBytes,
+    required String filename,
+    required String mimetype,
+    required String caption,
+  }) async {
+    final myUserIdStr = await SecureStorage.readKey(Keys.UserId);
+    final myUserId = int.tryParse(myUserIdStr ?? '') ?? 0;
+    final myPrivateKeyB64 = (await SecureStorage.readKey(Keys.PrivateKey))?.trim();
+    final myPublicKeyB64 = (await SecureStorage.readKey(Keys.PublicKey))?.trim();
+
+    if (myUserId == 0) {
+      throw Exception('Не найден userId');
+    }
+    if (myPrivateKeyB64 == null || myPrivateKeyB64.isEmpty) {
+      throw Exception('Не найден приватный ключ');
+    }
+    if (myPublicKeyB64 == null || myPublicKeyB64.isEmpty) {
+      throw Exception('Не найден публичный ключ');
+    }
+
+    final peerPublicKeyB64 = (await api.getPublicKey(peerId)).trim();
+
+    final msgKeyB64 = renSdk.generateMessageKey().trim();
+    final encMsg = renSdk.encryptMessage(caption, msgKeyB64);
+    if (encMsg == null) {
+      throw Exception('Не удалось зашифровать сообщение');
+    }
+
+    final encFile = await renSdk.encryptFile(
+      fileBytes,
+      filename,
+      mimetype,
+      msgKeyB64,
+    );
+    if (encFile == null) {
+      throw Exception('Не удалось зашифровать файл');
+    }
+
+    // Upload ciphertext bytes to backend (store server-side)
+    final ciphertextBytes = base64Decode((encFile['ciphertext'] ?? '').toString());
+    final uploadResp = await api.uploadMedia(
+      chatId: chatId,
+      ciphertextBytes: ciphertextBytes,
+      filename: filename,
+      mimetype: mimetype,
+    );
+    final uploadedId = uploadResp['file_id'];
+    final fileId = (uploadedId is int)
+        ? uploadedId
+        : int.tryParse('$uploadedId') ?? 0;
+    if (fileId <= 0) {
+      throw Exception('Не удалось загрузить ciphertext файла');
+    }
+
+    final wrappedForMe = renSdk.wrapSymmetricKey(msgKeyB64, myPublicKeyB64);
+    final wrappedForPeer = renSdk.wrapSymmetricKey(msgKeyB64, peerPublicKeyB64);
+    if (wrappedForMe == null || wrappedForPeer == null) {
+      throw Exception('Не удалось сформировать envelopes');
+    }
+
+    Map<String, dynamic> env(String userId, Map<String, String> w) {
+      return {
+        'key': w['wrapped'],
+        'ephem_pub_key': w['ephemeral_public_key'],
+        'iv': w['nonce'],
+      };
+    }
+
+    final envelopes = <String, dynamic>{
+      '$myUserId': env('$myUserId', wrappedForMe),
+      '$peerId': env('$peerId', wrappedForPeer),
+    };
+
+    final messageJson = jsonEncode({
+      'ciphertext': encMsg['ciphertext'],
+      'nonce': encMsg['nonce'],
+    });
+
+    final metadata = [
+      {
+        'file_id': fileId,
+        'filename': filename,
+        'mimetype': mimetype,
+        'size': fileBytes.length,
+        'enc_file': null,
+        'nonce': encFile['nonce'],
+        'file_creation_date': null,
+      }
+    ];
+
+    return {
+      'chat_id': chatId,
+      'message': messageJson,
+      'message_type': 'image',
+      'envelopes': envelopes,
+      'metadata': metadata,
+    };
+  }
+
   Future<String> decryptIncomingWsMessage({
     required Map<String, dynamic> message,
   }) async {
@@ -288,12 +488,39 @@ class ChatsRepository {
     final encrypted = message['message'] as String? ?? '';
     final envelopes = message['envelopes'];
 
-    return _tryDecryptMessage(
+    final decrypted = await _tryDecryptMessageAndKey(
       encrypted: encrypted,
       envelopes: envelopes,
       myUserId: myUserId,
       myPrivateKeyB64: myPrivateKeyB64,
     );
+
+    return decrypted.text;
+  }
+
+  Future<({String text, List<ChatAttachment> attachments})> decryptIncomingWsMessageFull({
+    required Map<String, dynamic> message,
+  }) async {
+    final myUserIdStr = await SecureStorage.readKey(Keys.UserId);
+    final myUserId = int.tryParse(myUserIdStr ?? '') ?? 0;
+    final myPrivateKeyB64 = await SecureStorage.readKey(Keys.PrivateKey);
+
+    final encrypted = message['message'] as String? ?? '';
+    final envelopes = message['envelopes'];
+
+    final decrypted = await _tryDecryptMessageAndKey(
+      encrypted: encrypted,
+      envelopes: envelopes,
+      myUserId: myUserId,
+      myPrivateKeyB64: myPrivateKeyB64,
+    );
+
+    final attachments = await _tryDecryptAttachments(
+      metadata: message['metadata'],
+      msgKeyB64: decrypted.key,
+    );
+
+    return (text: decrypted.text, attachments: attachments);
   }
 
   String _avatarUrl(String avatarPath) {
