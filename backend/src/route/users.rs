@@ -18,6 +18,7 @@ use std::path::Path;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use std::path::Component;
+use axum::extract::Multipart as MultipartExtractor;
 
 // Конструктор роутера для users: подключаем маршруты профиля
 // - GET /users/me       — вернуть текущего пользователя
@@ -123,9 +124,8 @@ async fn update_username(
 
 async fn update_avatar(
     State(state): State<AppState>,
-    headers: HeaderMap,
     CurrentUser { id }: CurrentUser,
-    body: Body,
+    mut multipart: MultipartExtractor,
 ) -> Result<Json<UserResponse>, (StatusCode, String)> {
     // Получаем текущий путь к аватару для возможного удаления
     let current_avatar_row = sqlx::query("SELECT avatar FROM users WHERE id = $1")
@@ -143,36 +143,14 @@ async fn update_avatar(
     // Тело multipart в таком случае использует разделители вида "----dio-boundary-...".
     // Поэтому boundary НЕЛЬЗЯ триммить — иначе multer не найдёт финальный разделитель и вернёт
     // "incomplete multipart stream".
-    let content_type = headers
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
 
-    let boundary = content_type
-        .split(';')
-        .find_map(|part| {
-            let p = part.trim();
-            p.strip_prefix("boundary=")
-                .map(|b| b.trim_matches('"').to_string())
-        })
-        .ok_or((StatusCode::BAD_REQUEST, "Не найден boundary в Content-Type".into()))?;
-
-    println!("Content-Type: {}", content_type);
-    println!("Boundary: {}", boundary);
-
-    // Превращаем body в stream байтов для multer
-    let stream = body.into_data_stream().map(|res| {
-        res.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
-    });
-
-    let mut multipart = Multipart::new(stream, boundary);
 
     // Извлекаем файл из multipart
     let mut avatar_data: Option<Vec<u8>> = None;
     let mut avatar_filename: Option<String> = None;
     let mut remove_avatar = false;
 
-    while let Some(mut field) = multipart
+    while let Some(field) = multipart
         .next_field()
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("Ошибка чтения multipart: {}", e)))?
@@ -181,38 +159,21 @@ async fn update_avatar(
 
         match name.as_str() {
             "avatar" => {
-                if let Some(file_name) = field.file_name() {
-                    avatar_filename = Some(file_name.to_string());
-                }
-
-                let mut buf: Vec<u8> = Vec::new();
-                while let Some(chunk) = field
-                    .chunk()
-                    .await
-                    .map_err(|e| (StatusCode::BAD_REQUEST, format!("Ошибка чтения файла avatar: {}", e)))?
-                {
-                    buf.extend_from_slice(&chunk);
-                }
-
-                if !buf.is_empty() {
-                    avatar_data = Some(buf);
+                avatar_filename = field.file_name().map(|s| s.to_string());
+                let data = field.bytes().await
+                    .map_err(|e| (StatusCode::BAD_REQUEST, format!("Ошибка чтения файла avatar: {}", e)))?;
+                if !data.is_empty() {
+                    avatar_data = Some(data.to_vec());
                 }
             }
             "remove" => {
-                let mut buf: Vec<u8> = Vec::new();
-                while let Some(chunk) = field
-                    .chunk()
-                    .await
-                    .map_err(|e| (StatusCode::BAD_REQUEST, format!("Ошибка чтения поля remove: {}", e)))?
-                {
-                    buf.extend_from_slice(&chunk);
-                }
-                let text = String::from_utf8_lossy(&buf).trim().to_string();
+                let text = field.text().await.unwrap_or_default();
                 remove_avatar = text == "true" || text == "1";
             }
             _ => {}
         }
     }
+
 
     // Сохраняем копию текущего пути для последующего удаления
     let old_avatar_path = current_avatar_path.clone();
