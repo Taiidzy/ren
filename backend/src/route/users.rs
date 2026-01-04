@@ -323,12 +323,12 @@ async fn get_public_key(
         return Err((StatusCode::NOT_FOUND, "Пользователь не найден".into()));
     };
 
-    let pk: Option<String> = row.try_get("pk").ok().flatten();
-    let pk = pk.ok_or((StatusCode::NOT_FOUND, "Публичный ключ не найден".into()))?;
+    let pubk: Option<String> = row.try_get("pubk").ok().flatten();
+    let pubk = pubk.ok_or((StatusCode::NOT_FOUND, "Публичный ключ не найден".into()))?;
 
     Ok(Json(PublicKeyResponse {
         user_id,
-        public_key: pk,
+        public_key: pubk,
     }))
 }
 
