@@ -20,6 +20,9 @@ import 'package:ren/features/auth/data/auth_repository.dart';
 import 'package:ren/features/splash/data/spalsh_api.dart';
 import 'package:ren/features/splash/data/spalsh_repository.dart';
 
+import 'package:ren/features/chats/data/chats_api.dart';
+import 'package:ren/features/chats/data/chats_repository.dart';
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -75,11 +78,15 @@ class MyApp extends StatelessWidget {
         Provider<Dio>(create: (_) => Dio()),
         ProxyProvider<Dio, AuthApi>(update: (_, dio, __) => AuthApi(dio)),
         ProxyProvider<Dio, SplashApi>(update: (_, dio, __) => SplashApi(dio)),
+        ProxyProvider<Dio, ChatsApi>(update: (_, dio, __) => ChatsApi(dio)),
         ProxyProvider2<AuthApi, RenSdk, AuthRepository>(
           update: (_, api, sdk, __) => AuthRepository(api, sdk),
         ),
         ProxyProvider<SplashApi, SplashRepository>(
           update: (_, api, __) => SplashRepository(api),
+        ),
+        ProxyProvider2<ChatsApi, RenSdk, ChatsRepository>(
+          update: (_, api, sdk, __) => ChatsRepository(api, sdk),
         ),
       ],
       child: Consumer<ThemeSettings>(

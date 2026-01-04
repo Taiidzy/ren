@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 
 import 'package:hugeicons/hugeicons.dart';
+import 'package:provider/provider.dart';
 
-import 'package:ren/features/chats/data/fake_chats_repository.dart';
+import 'package:ren/features/chats/data/chats_repository.dart';
 import 'package:ren/features/chats/domain/chat_models.dart';
 import 'package:ren/features/chats/presentation/chat_page.dart';
 import 'package:ren/features/profile/presentation/profile_menu_page.dart';
@@ -18,11 +19,12 @@ class ChatsPage extends StatefulWidget {
 }
 
 class _HomePageState extends State<ChatsPage> {
-  final _repo = const FakeChatsRepository();
+  late final Future<List<ChatPreview>> _chatsFuture;
 
   @override
   void initState() {
     super.initState();
+    _chatsFuture = context.read<ChatsRepository>().fetchChats();
   }
 
   @override
@@ -30,8 +32,6 @@ class _HomePageState extends State<ChatsPage> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final theme = Theme.of(context);
     final baseInk = isDark ? Colors.white : Colors.black;
-    final favorites = _repo.favorites();
-    final chats = _repo.chats();
     return AppBackground(
       // Опционально: передайте картинку, чтобы она была задним фоном
       // backgroundImage: AssetImage('assets/wallpapers/my_bg.jpg'),
@@ -119,95 +119,101 @@ class _HomePageState extends State<ChatsPage> {
         ),
         body: SafeArea(
           bottom: false,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
-            child: Column(
-              children: [
-                GlassSurface(
-                  borderRadius: 22,
-                  blurSigma: 14,
-                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
-                  borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Center(
-                        child: Text(
-                          'Избранные',
-                          style: theme.textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.w600,
-                            color: theme.colorScheme.onSurface,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      SizedBox(
-                        height: 74,
-                        child: LayoutBuilder(
-                          builder: (context, constraints) {
-                            return SingleChildScrollView(
-                              scrollDirection: Axis.horizontal,
-                              child: ConstrainedBox(
-                                constraints: BoxConstraints(
-                                  minWidth: constraints.maxWidth,
-                                ),
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    for (int i = 0;
-                                        i < favorites.length;
-                                        i++) ...[
-                                      if (i != 0) const SizedBox(width: 12),
-                                      _FavoriteItem(
-                                        user: favorites[i],
-                                        onTap: () {
-                                          final user = favorites[i];
-                                          final chat = ChatPreview(
-                                            id: 'fav_${user.id}',
-                                            user: user,
-                                            lastMessage: 'Какая?',
-                                            lastMessageAt: DateTime.now(),
-                                          );
+          child: FutureBuilder<List<ChatPreview>>(
+            future: _chatsFuture,
+            builder: (context, snapshot) {
+              final chats = snapshot.data ?? const <ChatPreview>[];
+              final favorites = chats.take(8).map((c) => c.user).toList();
 
-                                          Navigator.of(context).push(
-                                            adaptivePageRoute(
-                                              (_) => ChatPage(chat: chat),
-                                            ),
-                                          );
-                                        },
-                                      ),
-                                    ],
-                                  ],
-                                ),
+              return Padding(
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+                child: Column(
+                  children: [
+                    GlassSurface(
+                      borderRadius: 22,
+                      blurSigma: 14,
+                      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+                      borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Center(
+                            child: Text(
+                              'Избранные',
+                              style: theme.textTheme.titleMedium?.copyWith(
+                                fontWeight: FontWeight.w600,
+                                color: theme.colorScheme.onSurface,
                               ),
-                            );
-                          },
-                        ),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          SizedBox(
+                            height: 74,
+                            child: LayoutBuilder(
+                              builder: (context, constraints) {
+                                return SingleChildScrollView(
+                                  scrollDirection: Axis.horizontal,
+                                  child: ConstrainedBox(
+                                    constraints: BoxConstraints(
+                                      minWidth: constraints.maxWidth,
+                                    ),
+                                    child: Row(
+                                      mainAxisAlignment: MainAxisAlignment.center,
+                                      children: [
+                                        for (int i = 0;
+                                            i < favorites.length;
+                                            i++) ...[
+                                          if (i != 0) const SizedBox(width: 12),
+                                          _FavoriteItem(
+                                            user: favorites[i],
+                                            onTap: () {
+                                              final user = favorites[i];
+                                              final chat = chats.firstWhere(
+                                                (c) => c.user.id == user.id,
+                                              );
+                                              Navigator.of(context).push(
+                                                adaptivePageRoute(
+                                                  (_) => ChatPage(chat: chat),
+                                                ),
+                                              );
+                                            },
+                                          ),
+                                        ],
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                        ],
                       ),
-                    ],
-                  ),
+                    ),
+                    const SizedBox(height: 14),
+                    Expanded(
+                      child: snapshot.connectionState == ConnectionState.waiting
+                          ? const Center(child: CircularProgressIndicator())
+                          : ListView.separated(
+                              padding: const EdgeInsets.only(bottom: 16),
+                              itemCount: chats.length,
+                              separatorBuilder: (_, __) => const SizedBox(height: 10),
+                              itemBuilder: (context, index) {
+                                final chat = chats[index];
+                                return _ChatTile(
+                                  chat: chat,
+                                  onTap: () {
+                                    Navigator.of(context).push(
+                                      adaptivePageRoute((_) => ChatPage(chat: chat)),
+                                    );
+                                  },
+                                );
+                              },
+                            ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 14),
-                Expanded(
-                  child: ListView.separated(
-                    padding: const EdgeInsets.only(bottom: 16),
-                    itemCount: chats.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 10),
-                    itemBuilder: (context, index) {
-                      final chat = chats[index];
-                      return _ChatTile(
-                        chat: chat,
-                        onTap: () {
-                          Navigator.of(context).push(
-                            adaptivePageRoute((_) => ChatPage(chat: chat)),
-                          );
-                        },
-                      );
-                    },
-                  ),
-                ),
-              ],
-            ),
+              );
+            },
           ),
         ),
       ),

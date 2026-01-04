@@ -57,6 +57,8 @@ class FakeChatsRepository {
       10,
       (i) => ChatPreview(
         id: 'c$i',
+        peerId: 1,
+        kind: 'private',
         user: user,
         lastMessage: 'Какая?',
         lastMessageAt: now.subtract(Duration(minutes: i * 7)),

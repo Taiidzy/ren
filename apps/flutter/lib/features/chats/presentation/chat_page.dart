@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:hugeicons/hugeicons.dart';
-import 'package:ren/features/chats/data/fake_chats_repository.dart';
+import 'package:provider/provider.dart';
+import 'package:ren/features/chats/data/chats_repository.dart';
 import 'package:ren/features/chats/domain/chat_models.dart';
 import 'package:ren/shared/widgets/background.dart';
 import 'package:ren/shared/widgets/glass_surface.dart';
@@ -16,8 +17,15 @@ class ChatPage extends StatefulWidget {
 }
 
 class _ChatPageState extends State<ChatPage> {
-  final _repo = const FakeChatsRepository();
   final _controller = TextEditingController();
+  late final Future<List<ChatMessage>> _messagesFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    final chatId = int.tryParse(widget.chat.id) ?? 0;
+    _messagesFuture = context.read<ChatsRepository>().fetchMessages(chatId);
+  }
 
   @override
   void dispose() {
@@ -30,7 +38,6 @@ class _ChatPageState extends State<ChatPage> {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final baseInk = isDark ? Colors.white : Colors.black;
-    final messages = _repo.messages(widget.chat.id);
 
     return AppBackground(
       imageOpacity: 1,
@@ -121,8 +128,9 @@ class _ChatPageState extends State<ChatPage> {
             ),
           ],
         ),
-        body: Builder(
-          builder: (context) {
+        body: FutureBuilder<List<ChatMessage>>(
+          future: _messagesFuture,
+          builder: (context, snapshot) {
             final media = MediaQuery.of(context);
             const double inputHeight = 44;
             const double horizontalPadding = 14;
@@ -134,6 +142,8 @@ class _ChatPageState extends State<ChatPage> {
             final double listTopPadding = topInset + kToolbarHeight + 12;
             final double listBottomPadding =
                 bottomInset + inputHeight + verticalPadding + 12;
+
+            final messages = snapshot.data ?? const <ChatMessage>[];
 
             Widget inputBar() {
               return Padding(
@@ -212,30 +222,32 @@ class _ChatPageState extends State<ChatPage> {
             return Stack(
               children: [
                 Positioned.fill(
-                  child: ListView.separated(
-                    padding: EdgeInsets.fromLTRB(
-                      horizontalPadding,
-                      listTopPadding,
-                      horizontalPadding,
-                      listBottomPadding,
-                    ),
-                    itemCount: messages.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 10),
-                    itemBuilder: (context, index) {
-                      final msg = messages[index];
-                      return Align(
-                        alignment: msg.isMe
-                            ? Alignment.centerRight
-                            : Alignment.centerLeft,
-                        child: _MessageBubble(
-                          text: msg.text,
-                          timeLabel: _formatTime(msg.sentAt),
-                          isMe: msg.isMe,
-                          isDark: isDark,
+                  child: snapshot.connectionState == ConnectionState.waiting
+                      ? const Center(child: CircularProgressIndicator())
+                      : ListView.separated(
+                          padding: EdgeInsets.fromLTRB(
+                            horizontalPadding,
+                            listTopPadding,
+                            horizontalPadding,
+                            listBottomPadding,
+                          ),
+                          itemCount: messages.length,
+                          separatorBuilder: (_, __) => const SizedBox(height: 10),
+                          itemBuilder: (context, index) {
+                            final msg = messages[index];
+                            return Align(
+                              alignment: msg.isMe
+                                  ? Alignment.centerRight
+                                  : Alignment.centerLeft,
+                              child: _MessageBubble(
+                                text: msg.text,
+                                timeLabel: _formatTime(msg.sentAt),
+                                isMe: msg.isMe,
+                                isDark: isDark,
+                              ),
+                            );
+                          },
                         ),
-                      );
-                    },
-                  ),
                 ),
                 Positioned(
                   left: 0,
