@@ -142,7 +142,11 @@ class _ChatPageState extends State<ChatPage> {
 
       final m = (msg is Map<String, dynamic>)
           ? msg
-          : Map<String, dynamic>.from(msg as Map);
+          : Map<String, dynamic>.fromEntries(
+              msg.entries.map(
+                (e) => MapEntry(e.key.toString(), e.value),
+              ),
+            );
 
       debugPrint('WS message keys: ${m.keys.toList()}');
       final encPreview = (m['message'] is String)

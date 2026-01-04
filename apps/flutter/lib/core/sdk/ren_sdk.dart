@@ -163,7 +163,12 @@ typedef ren_decrypt_file_native =
 typedef ren_wrap_symmetric_key_native =
     RenWrappedKey Function(Pointer<Utf8>, Pointer<Utf8>);
 typedef ren_unwrap_symmetric_key_native =
-    Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
+    Pointer<Utf8> Function(
+      Pointer<Utf8>,
+      Pointer<Utf8>,
+      Pointer<Utf8>,
+      Pointer<Utf8>,
+    );
 
 // --- Dart-side typedefs (для lookupFunction second generic) ---
 typedef ren_free_string_dart = void Function(Pointer<Utf8>);
@@ -209,7 +214,12 @@ typedef ren_decrypt_file_dart =
 typedef ren_wrap_symmetric_key_dart =
     RenWrappedKey Function(Pointer<Utf8>, Pointer<Utf8>);
 typedef ren_unwrap_symmetric_key_dart =
-    Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
+    Pointer<Utf8> Function(
+      Pointer<Utf8>,
+      Pointer<Utf8>,
+      Pointer<Utf8>,
+      Pointer<Utf8>,
+    );
 
 // ==============================
 // Lookup native functions
@@ -579,20 +589,23 @@ class RenSdk {
   }
 
   /// Снимает обёртку с симметричного ключа.
-  /// Параметры: `wrappedB64`, `ephemeralPublicKeyB64`, `receiverPrivateKeyB64` — все base64.
+  /// Параметры: `wrappedB64`, `ephemeralPublicKeyB64`, `nonceB64`, `receiverPrivateKeyB64` — все base64.
   /// Возвращает исходный симметричный ключ (base64) или null.
   String? unwrapSymmetricKey(
     String wrappedB64,
     String ephemeralPublicKeyB64,
+    String nonceB64,
     String receiverPrivateKeyB64,
   ) {
     try {
       final pw = wrappedB64.toNativeUtf8();
       final peph = ephemeralPublicKeyB64.toNativeUtf8();
+      final pn = nonceB64.toNativeUtf8();
       final pr = receiverPrivateKeyB64.toNativeUtf8();
-      final pres = _ren_unwrap_symmetric_key(pw, peph, pr);
+      final pres = _ren_unwrap_symmetric_key(pw, peph, pn, pr);
       malloc.free(pw);
       malloc.free(peph);
+      malloc.free(pn);
       malloc.free(pr);
       if (pres == nullptr) {
         return null;

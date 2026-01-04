@@ -30,8 +30,26 @@ class AuthRepository {
       throw Exception('Failed to decrypt private key');
     }
 
-    await SecureStorage.writeKey(Keys.PrivateKey, privateKey);
-    await SecureStorage.writeKey(Keys.PublicKey, resp.user.pubk ?? '');
+    final priv = privateKey.trim();
+    final pub = (resp.user.pubk ?? '').trim();
+    if (pub.isEmpty) {
+      throw Exception('Public key is missing');
+    }
+
+    // Self-check: pub/priv должны образовывать пару.
+    final mk = renSdk.generateMessageKey().trim();
+    final wrapped = renSdk.wrapSymmetricKey(mk, pub);
+    final w = (wrapped?['wrapped'] ?? '').trim();
+    final eph = (wrapped?['ephemeral_public_key'] ?? '').trim();
+    final n = (wrapped?['nonce'] ?? '').trim();
+    final unwrapped = (wrapped == null) ? null : renSdk.unwrapSymmetricKey(w, eph, n, priv);
+    if (unwrapped == null || unwrapped.isEmpty) {
+      await SecureStorage.deleteAllKeys();
+      throw Exception('E2EE keys mismatch: server returned incompatible pubk/pkebymk');
+    }
+
+    await SecureStorage.writeKey(Keys.PrivateKey, priv);
+    await SecureStorage.writeKey(Keys.PublicKey, pub);
     await SecureStorage.writeKey(Keys.Token, resp.token);
     await SecureStorage.writeKey(Keys.UserId, resp.user.id.toString());
 

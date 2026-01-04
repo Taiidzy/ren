@@ -119,14 +119,15 @@ class ChatsRepository {
       return '[encrypted]';
     }
 
-    final ciphertext = payload['ciphertext'] as String?;
-    final nonce = payload['nonce'] as String?;
+    final ciphertext = (payload['ciphertext'] as String?)?.trim();
+    final nonce = (payload['nonce'] as String?)?.trim();
     if (ciphertext == null || nonce == null) {
       debugPrint('decrypt: missing ciphertext/nonce');
       return '[encrypted]';
     }
 
-    if (myPrivateKeyB64 == null || myPrivateKeyB64.isEmpty) {
+    final priv = myPrivateKeyB64?.trim();
+    if (priv == null || priv.isEmpty) {
       debugPrint('decrypt: missing private key');
       return '[encrypted]';
     }
@@ -145,19 +146,23 @@ class ChatsRepository {
       return '[encrypted]';
     }
 
-    String? asString(dynamic v) => (v is String && v.isNotEmpty) ? v : null;
+    String? asString(dynamic v) => (v is String && v.trim().isNotEmpty) ? v.trim() : null;
 
     final wrapped = asString(env['key']) ?? asString(env['wrapped']);
     final eph = asString(env['ephem_pub_key']) ?? asString(env['ephemeral_public_key']);
+    final wrapNonce = asString(env['iv']) ?? asString(env['nonce']);
 
-    if (wrapped == null || eph == null) {
-      debugPrint('decrypt: missing wrapped/eph in envelope for user=$myUserId');
+    if (wrapped == null || eph == null || wrapNonce == null) {
+      debugPrint('decrypt: missing wrapped/eph/nonce in envelope for user=$myUserId');
       return '[encrypted]';
     }
 
-    final msgKey = renSdk.unwrapSymmetricKey(wrapped, eph, myPrivateKeyB64);
+    final msgKey = renSdk.unwrapSymmetricKey(wrapped, eph, wrapNonce, priv);
     if (msgKey == null) {
-      debugPrint('decrypt: unwrapSymmetricKey failed');
+      debugPrint(
+        'decrypt: unwrapSymmetricKey failed (user=$myUserId) '
+        'privLen=${priv.length} wrappedLen=${wrapped.length} ephLen=${eph.length}',
+      );
       return '[encrypted]';
     }
 
@@ -205,8 +210,8 @@ class ChatsRepository {
   }) async {
     final myUserIdStr = await SecureStorage.readKey(Keys.UserId);
     final myUserId = int.tryParse(myUserIdStr ?? '') ?? 0;
-    final myPrivateKeyB64 = await SecureStorage.readKey(Keys.PrivateKey);
-    final myPublicKeyB64 = await SecureStorage.readKey(Keys.PublicKey);
+    final myPrivateKeyB64 = (await SecureStorage.readKey(Keys.PrivateKey))?.trim();
+    final myPublicKeyB64 = (await SecureStorage.readKey(Keys.PublicKey))?.trim();
 
     if (myUserId == 0) {
       throw Exception('Не найден userId');
@@ -218,9 +223,9 @@ class ChatsRepository {
       throw Exception('Не найден публичный ключ');
     }
 
-    final peerPublicKeyB64 = await api.getPublicKey(peerId);
+    final peerPublicKeyB64 = (await api.getPublicKey(peerId)).trim();
 
-    final msgKeyB64 = renSdk.generateMessageKey();
+    final msgKeyB64 = renSdk.generateMessageKey().trim();
     final enc = renSdk.encryptMessage(plaintext, msgKeyB64);
     if (enc == null) {
       throw Exception('Не удалось зашифровать сообщение');
@@ -230,6 +235,25 @@ class ChatsRepository {
     final wrappedForPeer = renSdk.wrapSymmetricKey(msgKeyB64, peerPublicKeyB64);
     if (wrappedForMe == null || wrappedForPeer == null) {
       throw Exception('Не удалось сформировать envelopes');
+    }
+
+    // self-check: мы обязаны уметь развернуть свой же envelope
+    final selfWrapped = (wrappedForMe['wrapped'] ?? '').trim();
+    final selfEph = (wrappedForMe['ephemeral_public_key'] ?? '').trim();
+    final selfNonce = (wrappedForMe['nonce'] ?? '').trim();
+    final selfUnwrapped = renSdk.unwrapSymmetricKey(
+      selfWrapped,
+      selfEph,
+      selfNonce,
+      myPrivateKeyB64,
+    );
+    if (selfUnwrapped == null || selfUnwrapped.isEmpty) {
+      debugPrint(
+        'e2ee self-check failed: myUserId=$myUserId '
+        'privLen=${myPrivateKeyB64.length} pubLen=${myPublicKeyB64.length} '
+        'wrappedLen=${selfWrapped.length} ephLen=${selfEph.length}',
+      );
+      throw Exception('Ошибка E2EE: не удалось развернуть собственный envelope (ключи не совпадают)');
     }
 
     Map<String, dynamic> env(String userId, Map<String, String> w) {
