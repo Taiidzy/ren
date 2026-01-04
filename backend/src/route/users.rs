@@ -138,9 +138,11 @@ async fn update_avatar(
         .and_then(|row| row.try_get::<Option<String>, _>("avatar").ok())
         .flatten();
 
-    // Извлекаем boundary из Content-Type и нормализуем его:
-    // Dio на iOS иногда присылает boundary с ведущими "--" (например "--dio-boundary-..."),
-    // что ломает строгий multipart-парсер. Убираем ведущие дефисы.
+    // Извлекаем boundary из Content-Type.
+    // Важно: Dio на iOS может присылать boundary с ведущими "--" (например "--dio-boundary-...").
+    // Тело multipart в таком случае использует разделители вида "----dio-boundary-...".
+    // Поэтому boundary НЕЛЬЗЯ триммить — иначе multer не найдёт финальный разделитель и вернёт
+    // "incomplete multipart stream".
     let content_type = headers
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
@@ -154,8 +156,6 @@ async fn update_avatar(
                 .map(|b| b.trim_matches('"').to_string())
         })
         .ok_or((StatusCode::BAD_REQUEST, "Не найден boundary в Content-Type".into()))?;
-
-    let boundary = boundary.trim_start_matches('-').to_string();
 
     // Превращаем body в stream байтов для multer
     let stream = body.into_data_stream().map(|res| {
