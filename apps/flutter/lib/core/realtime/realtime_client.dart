@@ -39,7 +39,12 @@ class RealtimeClient {
       throw Exception('Нет токена авторизации');
     }
 
-    final uri = Uri.parse(Apiurl.ws).replace(
+    final base = Uri.parse(Apiurl.ws);
+    if (!(base.scheme == 'ws' || base.scheme == 'wss')) {
+      throw Exception('Apiurl.ws должен начинаться с ws:// или wss://');
+    }
+
+    final uri = base.replace(
       path: '/ws',
       queryParameters: {
         'token': token,

@@ -309,7 +309,7 @@ async fn get_public_key(
 
     let row = sqlx::query(
         r#"
-        SELECT id, pk
+        SELECT id, pubk
         FROM users
         WHERE id = $1
         "#,
