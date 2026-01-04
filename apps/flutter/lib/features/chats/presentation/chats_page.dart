@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'package:hugeicons/hugeicons.dart';
@@ -7,6 +9,8 @@ import 'package:ren/features/chats/data/chats_repository.dart';
 import 'package:ren/features/chats/domain/chat_models.dart';
 import 'package:ren/features/chats/presentation/chat_page.dart';
 import 'package:ren/features/profile/presentation/profile_menu_page.dart';
+
+import 'package:ren/core/realtime/realtime_client.dart';
 
 import 'package:ren/shared/widgets/background.dart';
 import 'package:ren/shared/widgets/adaptive_page_route.dart';
@@ -20,11 +24,51 @@ class ChatsPage extends StatefulWidget {
 
 class _HomePageState extends State<ChatsPage> {
   late final Future<List<ChatPreview>> _chatsFuture;
+  final Map<String, bool> _online = {};
+  RealtimeClient? _rt;
+  StreamSubscription? _rtSub;
 
   @override
   void initState() {
     super.initState();
     _chatsFuture = context.read<ChatsRepository>().fetchChats();
+  }
+
+  @override
+  void dispose() {
+    _rtSub?.cancel();
+    _rtSub = null;
+    super.dispose();
+  }
+
+  Future<void> _ensureRealtime(List<ChatPreview> chats) async {
+    _rt ??= context.read<RealtimeClient>();
+    final rt = _rt!;
+
+    if (!rt.isConnected) {
+      await rt.connect();
+    }
+
+    final contacts = <int>[];
+    for (final c in chats) {
+      final pid = c.peerId;
+      if (pid != null && pid > 0) contacts.add(pid);
+    }
+    rt.init(contacts: contacts);
+
+    _rtSub ??= rt.events.listen((evt) {
+      if (evt.type == 'presence') {
+        final userId = evt.data['user_id'];
+        final status = (evt.data['status'] as String?) ?? '';
+        final idStr = '$userId';
+        final isOnline = status == 'online';
+        if (_online[idStr] != isOnline) {
+          setState(() {
+            _online[idStr] = isOnline;
+          });
+        }
+      }
+    });
   }
 
   @override
@@ -123,7 +167,31 @@ class _HomePageState extends State<ChatsPage> {
             future: _chatsFuture,
             builder: (context, snapshot) {
               final chats = snapshot.data ?? const <ChatPreview>[];
-              final favorites = chats.take(8).map((c) => c.user).toList();
+
+              if (snapshot.hasData) {
+                Future.microtask(() => _ensureRealtime(chats));
+              }
+
+              final decoratedChats = chats
+                  .map(
+                    (c) => ChatPreview(
+                      id: c.id,
+                      peerId: c.peerId,
+                      kind: c.kind,
+                      user: ChatUser(
+                        id: c.user.id,
+                        name: c.user.name,
+                        avatarUrl: c.user.avatarUrl,
+                        isOnline: _online[c.user.id] ?? c.user.isOnline,
+                      ),
+                      lastMessage: c.lastMessage,
+                      lastMessageAt: c.lastMessageAt,
+                    ),
+                  )
+                  .toList();
+
+              final favorites =
+                  decoratedChats.take(8).map((c) => c.user).toList();
 
               return Padding(
                 padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
@@ -195,10 +263,10 @@ class _HomePageState extends State<ChatsPage> {
                           ? const Center(child: CircularProgressIndicator())
                           : ListView.separated(
                               padding: const EdgeInsets.only(bottom: 16),
-                              itemCount: chats.length,
+                              itemCount: decoratedChats.length,
                               separatorBuilder: (_, __) => const SizedBox(height: 10),
                               itemBuilder: (context, index) {
-                                final chat = chats[index];
+                                final chat = decoratedChats[index];
                                 return _ChatTile(
                                   chat: chat,
                                   onTap: () {

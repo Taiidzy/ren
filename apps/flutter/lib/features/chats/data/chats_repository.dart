@@ -181,6 +181,85 @@ class ChatsRepository {
     await api.deleteChat(chatId, forAll: forAll);
   }
 
+  Future<Map<String, dynamic>> buildEncryptedWsMessage({
+    required int chatId,
+    required int peerId,
+    required String plaintext,
+  }) async {
+    final myUserIdStr = await SecureStorage.readKey(Keys.UserId);
+    final myUserId = int.tryParse(myUserIdStr ?? '') ?? 0;
+    final myPrivateKeyB64 = await SecureStorage.readKey(Keys.PrivateKey);
+    final myPublicKeyB64 = await SecureStorage.readKey(Keys.PublicKey);
+
+    if (myUserId == 0) {
+      throw Exception('Не найден userId');
+    }
+    if (myPrivateKeyB64 == null || myPrivateKeyB64.isEmpty) {
+      throw Exception('Не найден приватный ключ');
+    }
+    if (myPublicKeyB64 == null || myPublicKeyB64.isEmpty) {
+      throw Exception('Не найден публичный ключ');
+    }
+
+    final peerPublicKeyB64 = await api.getPublicKey(peerId);
+
+    final msgKeyB64 = renSdk.generateMessageKey();
+    final enc = renSdk.encryptMessage(plaintext, msgKeyB64);
+    if (enc == null) {
+      throw Exception('Не удалось зашифровать сообщение');
+    }
+
+    final wrappedForMe = renSdk.wrapSymmetricKey(msgKeyB64, myPublicKeyB64);
+    final wrappedForPeer = renSdk.wrapSymmetricKey(msgKeyB64, peerPublicKeyB64);
+    if (wrappedForMe == null || wrappedForPeer == null) {
+      throw Exception('Не удалось сформировать envelopes');
+    }
+
+    Map<String, dynamic> env(String userId, Map<String, String> w) {
+      return {
+        'key': w['wrapped'],
+        'ephem_pub_key': w['ephemeral_public_key'],
+        'iv': w['nonce'],
+      };
+    }
+
+    final envelopes = <String, dynamic>{
+      '$myUserId': env('$myUserId', wrappedForMe),
+      '$peerId': env('$peerId', wrappedForPeer),
+    };
+
+    final messageJson = jsonEncode({
+      'ciphertext': enc['ciphertext'],
+      'nonce': enc['nonce'],
+    });
+
+    return {
+      'chat_id': chatId,
+      'message': messageJson,
+      'message_type': 'text',
+      'envelopes': envelopes,
+      'metadata': null,
+    };
+  }
+
+  Future<String> decryptIncomingWsMessage({
+    required Map<String, dynamic> message,
+  }) async {
+    final myUserIdStr = await SecureStorage.readKey(Keys.UserId);
+    final myUserId = int.tryParse(myUserIdStr ?? '') ?? 0;
+    final myPrivateKeyB64 = await SecureStorage.readKey(Keys.PrivateKey);
+
+    final encrypted = message['message'] as String? ?? '';
+    final envelopes = message['envelopes'];
+
+    return _tryDecryptMessage(
+      encrypted: encrypted,
+      envelopes: envelopes,
+      myUserId: myUserId,
+      myPrivateKeyB64: myPrivateKeyB64,
+    );
+  }
+
   String _avatarUrl(String avatarPath) {
     final p = avatarPath.trim();
     if (p.isEmpty) return '';

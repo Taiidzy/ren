@@ -27,6 +27,8 @@ import 'package:ren/features/profile/data/profile_api.dart';
 import 'package:ren/features/profile/data/profile_repository.dart';
 import 'package:ren/features/profile/presentation/profile_store.dart';
 
+import 'package:ren/core/realtime/realtime_client.dart';
+
 Future<void> main() async {
   runZonedGuarded(
     () {
@@ -95,6 +97,8 @@ class MyApp extends StatelessWidget {
         ProxyProvider2<ChatsApi, RenSdk, ChatsRepository>(
           update: (_, api, sdk, __) => ChatsRepository(api, sdk),
         ),
+
+        Provider<RealtimeClient>(create: (_) => RealtimeClient()),
 
         ProxyProvider<ProfileApi, ProfileRepository>(
           update: (_, api, __) => ProfileRepository(api),

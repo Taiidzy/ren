@@ -1,8 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:hugeicons/hugeicons.dart';
 import 'package:provider/provider.dart';
+import 'package:ren/core/constants/keys.dart';
+import 'package:ren/core/secure/secure_storage.dart';
 import 'package:ren/features/chats/data/chats_repository.dart';
 import 'package:ren/features/chats/domain/chat_models.dart';
+import 'package:ren/core/realtime/realtime_client.dart';
 import 'package:ren/shared/widgets/background.dart';
 import 'package:ren/shared/widgets/glass_surface.dart';
 import 'package:ren/theme/themes.dart';
@@ -18,17 +23,144 @@ class ChatPage extends StatefulWidget {
 
 class _ChatPageState extends State<ChatPage> {
   final _controller = TextEditingController();
-  late final Future<List<ChatMessage>> _messagesFuture;
+  bool _loading = true;
+  final List<ChatMessage> _messages = [];
+
+  int? _myUserId;
+
+  RealtimeClient? _rt;
+  StreamSubscription? _rtSub;
 
   @override
   void initState() {
     super.initState();
+    _init();
+  }
+
+  Future<void> _init() async {
     final chatId = int.tryParse(widget.chat.id) ?? 0;
-    _messagesFuture = context.read<ChatsRepository>().fetchMessages(chatId);
+    final repo = context.read<ChatsRepository>();
+
+    try {
+      final list = await repo.fetchMessages(chatId);
+      if (!mounted) return;
+      setState(() {
+        _messages
+          ..clear()
+          ..addAll(list);
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+      });
+    }
+
+    await _ensureRealtime();
+  }
+
+  Future<void> _ensureRealtime() async {
+    final chatId = int.tryParse(widget.chat.id) ?? 0;
+    _rt ??= context.read<RealtimeClient>();
+    final rt = _rt!;
+
+    _myUserId ??= await _readMyUserId();
+
+    if (!rt.isConnected) {
+      await rt.connect();
+    }
+
+    rt.joinChat(chatId);
+
+    _rtSub ??= rt.events.listen((evt) async {
+      if (evt.type != 'message_new') return;
+      final evtChatId = evt.data['chat_id'];
+      if ('$evtChatId' != '$chatId') return;
+
+      final msg = evt.data['message'];
+      if (msg is! Map) return;
+
+      final m = msg.cast<String, dynamic>();
+      final repo = context.read<ChatsRepository>();
+      final text = await repo.decryptIncomingWsMessage(message: m);
+
+      final senderId = m['sender_id'] is int
+          ? m['sender_id'] as int
+          : int.tryParse('${m['sender_id']}') ?? 0;
+      final createdAtStr = (m['created_at'] as String?) ?? '';
+      final createdAt = DateTime.tryParse(createdAtStr) ?? DateTime.now();
+
+      if (!mounted) return;
+      setState(() {
+        _messages.add(
+          ChatMessage(
+            id: '${m['id'] ?? DateTime.now().millisecondsSinceEpoch}',
+            chatId: chatId.toString(),
+            isMe: senderId == (_myUserId ?? -1),
+            text: text,
+            sentAt: createdAt,
+          ),
+        );
+      });
+    });
+  }
+
+  Future<int> _readMyUserId() async {
+    final v = await SecureStorage.readKey(Keys.UserId);
+    return int.tryParse(v ?? '') ?? 0;
+  }
+
+  Future<void> _send() async {
+    final chatId = int.tryParse(widget.chat.id) ?? 0;
+    final peerId = widget.chat.peerId ?? 0;
+    final text = _controller.text.trim();
+    if (text.isEmpty) return;
+    if (peerId <= 0) return;
+
+    _controller.clear();
+
+    // optimistic
+    setState(() {
+      _messages.add(
+        ChatMessage(
+          id: 'local_${DateTime.now().millisecondsSinceEpoch}',
+          chatId: chatId.toString(),
+          isMe: true,
+          text: text,
+          sentAt: DateTime.now(),
+        ),
+      );
+    });
+
+    final repo = context.read<ChatsRepository>();
+    final payload = await repo.buildEncryptedWsMessage(
+      chatId: chatId,
+      peerId: peerId,
+      plaintext: text,
+    );
+
+    _rt ??= context.read<RealtimeClient>();
+    final rt = _rt!;
+    if (!rt.isConnected) {
+      await rt.connect();
+      rt.joinChat(chatId);
+    }
+
+    rt.sendMessage(
+      chatId: chatId,
+      message: payload['message'] as String,
+      messageType: payload['message_type'] as String?,
+      envelopes: payload['envelopes'] as Map<String, dynamic>?,
+    );
   }
 
   @override
   void dispose() {
+    final chatId = int.tryParse(widget.chat.id) ?? 0;
+    _rt?.leaveChat(chatId);
+    _rtSub?.cancel();
+    _rtSub = null;
     _controller.dispose();
     super.dispose();
   }
@@ -129,9 +261,8 @@ class _ChatPageState extends State<ChatPage> {
             ),
           ],
         ),
-        body: FutureBuilder<List<ChatMessage>>(
-          future: _messagesFuture,
-          builder: (context, snapshot) {
+        body: Builder(
+          builder: (context) {
             final media = MediaQuery.of(context);
             const double inputHeight = 44;
             const double horizontalPadding = 14;
@@ -144,7 +275,7 @@ class _ChatPageState extends State<ChatPage> {
             final double listBottomPadding =
                 bottomInset + inputHeight + verticalPadding + 12;
 
-            final messages = snapshot.data ?? const <ChatMessage>[];
+            final messages = _messages;
 
             Widget inputBar() {
               return Padding(
@@ -206,7 +337,7 @@ class _ChatPageState extends State<ChatPage> {
                       blurSigma: 12,
                       width: inputHeight,
                       height: inputHeight,
-                      onTap: () {},
+                      onTap: _send,
                       child: Center(
                         child: HugeIcon(
                           icon: HugeIcons.strokeRoundedSent,
@@ -223,7 +354,7 @@ class _ChatPageState extends State<ChatPage> {
             return Stack(
               children: [
                 Positioned.fill(
-                  child: snapshot.connectionState == ConnectionState.waiting
+                  child: _loading
                       ? const Center(child: CircularProgressIndicator())
                       : ListView.separated(
                           padding: EdgeInsets.fromLTRB(
