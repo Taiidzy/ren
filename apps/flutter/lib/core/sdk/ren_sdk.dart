@@ -23,15 +23,15 @@ DynamicLibrary _openLibrary() {
       return lib;
     } else if (Platform.isIOS) {
       final lib = DynamicLibrary.process();
-      _logger.i("Android iOS Loaded");
+      _logger.i("iOS SDK Loaded");
       return lib;
     } else if (Platform.isMacOS) {
       final lib = DynamicLibrary.open('libren_sdk.dylib');
-      _logger.i("Android macOS Loaded");
+      _logger.i("macOS SDK Loaded");
       return lib;
     } else if (Platform.isLinux) {
       final lib = DynamicLibrary.open('libren_sdk.so');
-      _logger.i("Android Linux Loaded");
+      _logger.i("Linux SDK Loaded");
       return lib;
     } else if (Platform.isWindows) {
       final exeDir = File(Platform.resolvedExecutable).parent.path;
@@ -44,7 +44,7 @@ DynamicLibrary _openLibrary() {
       for (final c in candidates) {
         try {
           final lib = DynamicLibrary.open(c);
-          _logger.i("Android Windows Loaded");
+          _logger.i("Windows SDK Loaded");
           return lib;
         } catch (e) {
         }

@@ -142,7 +142,6 @@ class ChatsRepository {
     envDyn ??= envMap[myUserId];
     final env = envDyn is Map ? envDyn : null;
     if (env == null) {
-      debugPrint('decrypt: no envelope for user=$myUserId keys=${envMap.keys.toList()}');
       return '[encrypted]';
     }
 
@@ -159,10 +158,6 @@ class ChatsRepository {
 
     final msgKey = renSdk.unwrapSymmetricKey(wrapped, eph, wrapNonce, priv);
     if (msgKey == null) {
-      debugPrint(
-        'decrypt: unwrapSymmetricKey failed (user=$myUserId) '
-        'privLen=${priv.length} wrappedLen=${wrapped.length} ephLen=${eph.length}',
-      );
       return '[encrypted]';
     }
 
