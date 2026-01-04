@@ -27,7 +27,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/users/me", get(me).delete(delete_me))
         .route("/users/username", patch(update_username))
-        .route("/users/avatar", patch(update_avatar))
+        .route("/users/avatar", patch(update_avatar).post(update_avatar))
         .route("/users/:id/public-key", get(get_public_key))
         .route("/avatars/*path", get(get_avatar))
 }

@@ -23,6 +23,10 @@ import 'package:ren/features/splash/data/spalsh_repository.dart';
 import 'package:ren/features/chats/data/chats_api.dart';
 import 'package:ren/features/chats/data/chats_repository.dart';
 
+import 'package:ren/features/profile/data/profile_api.dart';
+import 'package:ren/features/profile/data/profile_repository.dart';
+import 'package:ren/features/profile/presentation/profile_store.dart';
+
 Future<void> main() async {
   runZonedGuarded(
     () {
@@ -81,6 +85,7 @@ class MyApp extends StatelessWidget {
         ProxyProvider<Dio, AuthApi>(update: (_, dio, __) => AuthApi(dio)),
         ProxyProvider<Dio, SplashApi>(update: (_, dio, __) => SplashApi(dio)),
         ProxyProvider<Dio, ChatsApi>(update: (_, dio, __) => ChatsApi(dio)),
+        ProxyProvider<Dio, ProfileApi>(update: (_, dio, __) => ProfileApi(dio)),
         ProxyProvider2<AuthApi, RenSdk, AuthRepository>(
           update: (_, api, sdk, __) => AuthRepository(api, sdk),
         ),
@@ -89,6 +94,18 @@ class MyApp extends StatelessWidget {
         ),
         ProxyProvider2<ChatsApi, RenSdk, ChatsRepository>(
           update: (_, api, sdk, __) => ChatsRepository(api, sdk),
+        ),
+
+        ProxyProvider<ProfileApi, ProfileRepository>(
+          update: (_, api, __) => ProfileRepository(api),
+        ),
+        ChangeNotifierProxyProvider<ProfileRepository, ProfileStore>(
+          create: (context) => ProfileStore(context.read<ProfileRepository>()),
+          update: (_, repo, store) {
+            store ??= ProfileStore(repo);
+            store.setRepo(repo);
+            return store;
+          },
         ),
       ],
       child: Consumer<ThemeSettings>(
