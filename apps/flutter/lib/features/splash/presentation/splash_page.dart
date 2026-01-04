@@ -9,6 +9,7 @@ import 'package:ren/features/chats/presentation/chats_page.dart';
 
 import 'package:ren/shared/widgets/animated_gradient.dart';
 import 'package:ren/shared/widgets/ren_logo.dart';
+import 'package:ren/shared/widgets/adaptive_page_route.dart';
 
 import 'package:ren/core/secure/secure_storage.dart';
 import 'package:ren/core/constants/keys.dart';
@@ -102,12 +103,7 @@ class _SplashPageState extends State<SplashPage>
       if (token == null || token.isEmpty) {
         await SecureStorage.deleteAllKeys();
         Navigator.of(context).pushReplacement(
-          PageRouteBuilder(
-            pageBuilder: (_, __, ___) => const AuthPage(),
-            transitionsBuilder: (_, anim, __, child) =>
-                FadeTransition(opacity: anim, child: child),
-            transitionDuration: const Duration(milliseconds: 400),
-          ),
+          adaptivePageRoute((_) => const AuthPage()),
         );
         return;
       }
@@ -119,22 +115,12 @@ class _SplashPageState extends State<SplashPage>
 
       if (hasUser) {
         Navigator.of(context).pushReplacement(
-          PageRouteBuilder(
-            pageBuilder: (_, __, ___) => const ChatsPage(),
-            transitionsBuilder: (_, anim, __, child) =>
-                FadeTransition(opacity: anim, child: child),
-            transitionDuration: const Duration(milliseconds: 400),
-          ),
+          adaptivePageRoute((_) => const ChatsPage()),
         );
       } else {
         await SecureStorage.deleteAllKeys();
         Navigator.of(context).pushReplacement(
-          PageRouteBuilder(
-            pageBuilder: (_, __, ___) => const AuthPage(),
-            transitionsBuilder: (_, anim, __, child) =>
-                FadeTransition(opacity: anim, child: child),
-            transitionDuration: const Duration(milliseconds: 400),
-          ),
+          adaptivePageRoute((_) => const AuthPage()),
         );
       }
     } on ApiException catch (e, st) {
@@ -144,22 +130,12 @@ class _SplashPageState extends State<SplashPage>
       }
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
-        PageRouteBuilder(
-          pageBuilder: (_, __, ___) => const AuthPage(),
-          transitionsBuilder: (_, anim, __, child) =>
-              FadeTransition(opacity: anim, child: child),
-          transitionDuration: const Duration(milliseconds: 400),
-        ),
+        adaptivePageRoute((_) => const AuthPage()),
       );
     } catch (e, st) {
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
-        PageRouteBuilder(
-          pageBuilder: (_, __, ___) => const AuthPage(),
-          transitionsBuilder: (_, anim, __, child) =>
-              FadeTransition(opacity: anim, child: child),
-          transitionDuration: const Duration(milliseconds: 400),
-        ),
+        adaptivePageRoute((_) => const AuthPage()),
       );
     }
   }

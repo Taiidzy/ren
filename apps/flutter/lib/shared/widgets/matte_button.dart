@@ -1,6 +1,5 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
-import 'package:ren/theme/themes.dart';
+import 'package:ren/shared/widgets/glass_surface.dart';
 
 class MatteButton extends StatelessWidget {
   final String text;
@@ -27,35 +26,19 @@ class MatteButton extends StatelessWidget {
     return SizedBox(
       width: width,
       height: height,
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(borderRadius),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-          child: Material(
-            type: MaterialType.transparency,
-            child: InkWell(
-              onTap: onPressed,
-              splashColor: baseInk.withOpacity(isDark ? 0.2 : 0.12),
-              highlightColor: baseInk.withOpacity(isDark ? 0.12 : 0.08),
-              child: Container(
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(borderRadius),
-                  gradient: isDark
-                      ? AppGradients.glassDark
-                      : AppGradients.glassLight,
-                  border: Border.all(
-                    color: baseInk.withOpacity(isDark ? 0.25 : 0.12),
-                  ),
-                ),
-                alignment: Alignment.center,
-                child: Text(
-                  text,
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    color: onSurface,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
+      child: GlassSurface(
+        borderRadius: borderRadius,
+        blurSigma: 12,
+        borderColor: baseInk.withOpacity(isDark ? 0.25 : 0.12),
+        splashColor: baseInk.withOpacity(isDark ? 0.2 : 0.12),
+        highlightColor: baseInk.withOpacity(isDark ? 0.12 : 0.08),
+        onTap: onPressed,
+        child: Center(
+          child: Text(
+            text,
+            style: theme.textTheme.titleMedium?.copyWith(
+              color: onSurface,
+              fontWeight: FontWeight.w600,
             ),
           ),
         ),

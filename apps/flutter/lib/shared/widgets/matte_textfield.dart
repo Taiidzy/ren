@@ -1,6 +1,5 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
-import 'package:ren/theme/themes.dart';
+import 'package:ren/shared/widgets/glass_surface.dart';
 
 import 'package:hugeicons/hugeicons.dart';
 
@@ -42,70 +41,60 @@ class _MatteTextFieldState extends State<MatteTextField> {
     final onSurface = theme.colorScheme.onSurface;
     final baseInk = isDark ? Colors.white : Colors.black;
     final double? prefixSize = widget.prefixIcon?.size;
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(16),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-        child: Container(
-          height: 56,
-          decoration: BoxDecoration(
-            gradient: isDark ? AppGradients.glassDark : AppGradients.glassLight,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: baseInk.withOpacity(isDark ? 0.25 : 0.15),
-            ),
+    return GlassSurface(
+      borderRadius: 16,
+      blurSigma: 12,
+      height: 56,
+      borderColor: baseInk.withOpacity(isDark ? 0.25 : 0.15),
+      child: TextField(
+        controller: widget.controller,
+        obscureText: _obscure,
+        keyboardType: widget.keyboardType,
+        style: TextStyle(color: onSurface, fontSize: 16),
+        cursorColor: theme.colorScheme.primary,
+        decoration: InputDecoration(
+          hintText: widget.hintText,
+          hintStyle: TextStyle(
+            color: onSurface.withOpacity(isDark ? 0.6 : 0.5),
           ),
-          child: TextField(
-            controller: widget.controller,
-            obscureText: _obscure,
-            keyboardType: widget.keyboardType,
-            style: TextStyle(color: onSurface, fontSize: 16),
-            cursorColor: theme.colorScheme.primary,
-            decoration: InputDecoration(
-              hintText: widget.hintText,
-              hintStyle: TextStyle(
-                color: onSurface.withOpacity(isDark ? 0.6 : 0.5),
-              ),
-              border: InputBorder.none,
-              prefixIconConstraints: const BoxConstraints(
-                minWidth: 0,
-                minHeight: 0,
-              ),
-              contentPadding: const EdgeInsets.symmetric(
-                horizontal: 16,
-                vertical: 18,
-              ),
-              prefixIcon: widget.prefixIcon == null
-                  ? null
-                  : Padding(
-                      padding: const EdgeInsets.only(left: 12, right: 8),
-                      child: SizedBox(
-                        width: prefixSize,
-                        height: prefixSize,
-                        child: IconTheme(
-                          data: IconThemeData(
-                            color: onSurface.withOpacity(isDark ? 0.7 : 0.6),
-                            size: prefixSize,
-                          ),
-                          child: widget.prefixIcon!,
-                        ),
-                      ),
-                    ),
-              suffixIcon: widget.isPassword
-                  ? IconButton(
-                      icon: Icon(
-                        _obscure ? Icons.visibility_off : Icons.visibility,
+          border: InputBorder.none,
+          prefixIconConstraints: const BoxConstraints(
+            minWidth: 0,
+            minHeight: 0,
+          ),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 18,
+          ),
+          prefixIcon: widget.prefixIcon == null
+              ? null
+              : Padding(
+                  padding: const EdgeInsets.only(left: 12, right: 8),
+                  child: SizedBox(
+                    width: prefixSize,
+                    height: prefixSize,
+                    child: IconTheme(
+                      data: IconThemeData(
                         color: onSurface.withOpacity(isDark ? 0.7 : 0.6),
+                        size: prefixSize,
                       ),
-                      onPressed: () {
-                        setState(() {
-                          _obscure = !_obscure;
-                        });
-                      },
-                    )
-                  : widget.suffixIcon,
-            ),
-          ),
+                      child: widget.prefixIcon!,
+                    ),
+                  ),
+                ),
+          suffixIcon: widget.isPassword
+              ? IconButton(
+                  icon: Icon(
+                    _obscure ? Icons.visibility_off : Icons.visibility,
+                    color: onSurface.withOpacity(isDark ? 0.7 : 0.6),
+                  ),
+                  onPressed: () {
+                    setState(() {
+                      _obscure = !_obscure;
+                    });
+                  },
+                )
+              : widget.suffixIcon,
         ),
       ),
     );

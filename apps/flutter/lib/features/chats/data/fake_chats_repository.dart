@@ -109,6 +109,48 @@ class FakeChatsRepository {
         text: 'Какая?',
         sentAt: base.add(const Duration(minutes: 5)),
       ),
+      ChatMessage(
+        id: 'm1',
+        chatId: chatId,
+        isMe: false,
+        text: 'Привет',
+        sentAt: base,
+      ),
+      ChatMessage(
+        id: 'm2',
+        chatId: chatId,
+        isMe: true,
+        text: 'Привет',
+        sentAt: base.add(const Duration(minutes: 1)),
+      ),
+      ChatMessage(
+        id: 'm3',
+        chatId: chatId,
+        isMe: true,
+        text: 'Как дела?',
+        sentAt: base.add(const Duration(minutes: 2)),
+      ),
+      ChatMessage(
+        id: 'm4',
+        chatId: chatId,
+        isMe: false,
+        text: 'Нормально. А у тебя?',
+        sentAt: base.add(const Duration(minutes: 3)),
+      ),
+      ChatMessage(
+        id: 'm5',
+        chatId: chatId,
+        isMe: true,
+        text: 'Тоже не плохо. У меня есть одна идея',
+        sentAt: base.add(const Duration(minutes: 4)),
+      ),
+      ChatMessage(
+        id: 'm6',
+        chatId: chatId,
+        isMe: false,
+        text: 'Какая?',
+        sentAt: base.add(const Duration(minutes: 5)),
+      ),
     ];
   }
 }

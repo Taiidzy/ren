@@ -95,13 +95,13 @@ class AuthRepository {
     );
 
     return RegisterUser(
-      id: json['id'] ?? '',
-      login: json['login'] ?? login,
-      username: json['username'] ?? username,
-      pkebymk: json['pkebymk'] ?? pkebymk,
-      pkebyrk: json['pkebyrk'] ?? pkebyrk,
-      pubk: json['pubk'] ?? pubk,
-      salt: json['salt'] ?? salt,
+      id: (json['id'] ?? '').toString(),
+      login: (json['login'] ?? login).toString(),
+      username: (json['username'] ?? username).toString(),
+      pkebymk: (json['pkebymk'] ?? pkebymk).toString(),
+      pkebyrk: (json['pkebyrk'] ?? pkebyrk).toString(),
+      pubk: (json['pubk'] ?? pubk).toString(),
+      salt: (json['salt'] ?? salt).toString(),
     );
   }
 }

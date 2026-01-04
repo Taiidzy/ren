@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:ren/shared/widgets/matte_textfield.dart';
 import 'package:ren/shared/widgets/matte_button.dart';
 import 'package:ren/shared/widgets/matte_toggle.dart';
+import 'package:ren/shared/widgets/adaptive_page_route.dart';
 
 import 'package:ren/features/splash/presentation/splash_page.dart';
 
@@ -68,15 +69,7 @@ class _SignInFormState extends State<SignInForm>
       final result = await repo.login(login, password, _rememberMe);
       if (result.id != null) {
         Navigator.of(context).pushReplacement(
-          PageRouteBuilder(
-            pageBuilder: (context, animation, secondaryAnimation) =>
-                SplashPage(),
-            transitionDuration: const Duration(milliseconds: 800),
-            transitionsBuilder:
-                (context, animation, secondaryAnimation, child) {
-                  return FadeTransition(opacity: animation, child: child);
-                },
-          ),
+          adaptivePageRoute((_) => SplashPage()),
         );
       }
     } catch (error) {

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'package:ren/shared/widgets/ren_logo.dart';
 import 'package:ren/shared/widgets/animated_gradient.dart';
+import 'package:ren/shared/widgets/glass_surface.dart';
 
 import 'package:ren/features/auth/presentation/components/signin.dart';
 import 'package:ren/features/auth/presentation/components/signup.dart';
@@ -177,32 +178,19 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
   }
 
   Widget _buildMainCard(bool isDark) {
-    return Container(
+    return GlassSurface(
+      borderRadius: 24,
+      blurSigma: 18,
       padding: const EdgeInsets.all(20), // Уменьшено с 28
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(24),
-        color:
-            isDark
-                ? Colors.white.withOpacity(0.08)
-                : Colors.white.withOpacity(0.25),
-        border: Border.all(
-          color:
-              isDark
-                  ? Colors.white.withOpacity(0.15)
-                  : Colors.white.withOpacity(0.4),
-          width: 1,
+      borderColor:
+          isDark ? Colors.white.withOpacity(0.15) : Colors.white.withOpacity(0.4),
+      boxShadow: [
+        BoxShadow(
+          color: isDark ? Colors.black.withOpacity(0.3) : Colors.black.withOpacity(0.08),
+          blurRadius: 24,
+          offset: const Offset(0, 8),
         ),
-        boxShadow: [
-          BoxShadow(
-            color:
-                isDark
-                    ? Colors.black.withOpacity(0.3)
-                    : Colors.black.withOpacity(0.08),
-            blurRadius: 24,
-            offset: const Offset(0, 8),
-          ),
-        ],
-      ),
+      ],
       child: Column(
         children: [
           _buildTabBar(isDark),
@@ -223,23 +211,14 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
   }
 
   Widget _buildTabBar(bool isDark) {
-    return Container(
+    return GlassSurface(
+      borderRadius: 23,
+      blurSigma: 14,
       height: 46,
       padding: const EdgeInsets.all(3),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(23),
-        color:
-            isDark
-                ? Colors.white.withOpacity(0.06)
-                : Colors.white.withOpacity(0.15),
-        border: Border.all(
-          color:
-              isDark
-                  ? Colors.white.withOpacity(0.1)
-                  : Colors.white.withOpacity(0.25),
-          width: 0.5,
-        ),
-      ),
+      borderWidth: 0.5,
+      borderColor:
+          isDark ? Colors.white.withOpacity(0.1) : Colors.white.withOpacity(0.25),
       child: Row(
         children: [
           _buildTabItem('Вход', 0, isDark),

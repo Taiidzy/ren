@@ -1,10 +1,9 @@
-import 'dart:ui';
-
 import 'package:flutter/material.dart';
 import 'package:hugeicons/hugeicons.dart';
 import 'package:ren/features/chats/data/fake_chats_repository.dart';
 import 'package:ren/features/chats/domain/chat_models.dart';
 import 'package:ren/shared/widgets/background.dart';
+import 'package:ren/shared/widgets/glass_surface.dart';
 import 'package:ren/theme/themes.dart';
 
 class ChatPage extends StatefulWidget {
@@ -30,7 +29,7 @@ class _ChatPageState extends State<ChatPage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final matteGlass = AppColors.matteGlassFor(theme.brightness);
+    final baseInk = isDark ? Colors.white : Colors.black;
     final messages = _repo.messages(widget.chat.id);
 
     return AppBackground(
@@ -40,9 +39,11 @@ class _ChatPageState extends State<ChatPage> {
       animate: true,
       animationDuration: const Duration(seconds: 20),
       child: Scaffold(
+        extendBodyBehindAppBar: true,
         appBar: AppBar(
-          backgroundColor: matteGlass,
+          backgroundColor: Colors.transparent,
           elevation: 0,
+          flexibleSpace: const GlassAppBarBackground(),
           centerTitle: true,
           titleSpacing: 0,
           leading: IconButton(
@@ -54,47 +55,57 @@ class _ChatPageState extends State<ChatPage> {
             children: [
               SizedBox(
                 width: double.infinity,
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _Avatar(
-                      url: widget.chat.user.avatarUrl,
-                      isOnline: widget.chat.user.isOnline,
-                      size: 36,
+                child: Center(
+                  child: GlassSurface(
+                    borderRadius: 18,
+                    blurSigma: 12,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
                     ),
-                    const SizedBox(width: 10),
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 200),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          Text(
-                            widget.chat.user.name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                              color: theme.colorScheme.onSurface,
-                            ),
+                    borderColor: baseInk.withOpacity(isDark ? 0.18 : 0.10),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _Avatar(
+                          url: widget.chat.user.avatarUrl,
+                          isOnline: widget.chat.user.isOnline,
+                          size: 36,
+                        ),
+                        const SizedBox(width: 10),
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 200),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                widget.chat.user.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                  color: theme.colorScheme.onSurface,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                widget.chat.user.isOnline
+                                    ? 'Online'
+                                    : 'Offline',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: theme.colorScheme.onSurface
+                                      .withOpacity(0.65),
+                                ),
+                              ),
+                            ],
                           ),
-                          const SizedBox(height: 2),
-                          Text(
-                            widget.chat.user.isOnline ? 'Online' : 'Offline',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: 12,
-                              color:
-                                  theme.colorScheme.onSurface.withOpacity(0.65),
-                            ),
-                          ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
               ),
             ],
@@ -110,125 +121,134 @@ class _ChatPageState extends State<ChatPage> {
             ),
           ],
         ),
-        body: SafeArea(
-          child: Column(
-            children: [
-              Expanded(
-                child: ListView.separated(
-                  padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
-                  itemCount: messages.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 10),
-                  itemBuilder: (context, index) {
-                    final msg = messages[index];
-                    return Align(
-                      alignment:
-                          msg.isMe ? Alignment.centerRight : Alignment.centerLeft,
-                      child: _MessageBubble(
-                        text: msg.text,
-                        timeLabel: _formatTime(msg.sentAt),
-                        isMe: msg.isMe,
-                        isDark: isDark,
-                      ),
-                    );
-                  },
+        body: Builder(
+          builder: (context) {
+            final media = MediaQuery.of(context);
+            const double inputHeight = 44;
+            const double horizontalPadding = 14;
+            const double verticalPadding = 14;
+
+            final double topInset = media.padding.top;
+            final double bottomInset = media.padding.bottom;
+
+            final double listTopPadding = topInset + kToolbarHeight + 12;
+            final double listBottomPadding =
+                bottomInset + inputHeight + verticalPadding + 12;
+
+            Widget inputBar() {
+              return Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  horizontalPadding,
+                  0,
+                  horizontalPadding,
+                  verticalPadding,
                 ),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
                 child: Row(
                   children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(18),
-                      child: BackdropFilter(
-                        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-                        child: Material(
-                          color: matteGlass,
-                          child: InkWell(
-                            onTap: () {},
-                            child: SizedBox(
-                              width: 44,
-                              height: 44,
-                              child: Center(
-                                child: HugeIcon(
-                                  icon: HugeIcons.strokeRoundedAttachment01,
-                                  color: theme.colorScheme.onSurface
-                                      .withOpacity(0.9),
-                                  size: 18,
-                                ),
-                              ),
-                            ),
-                          ),
+                    GlassSurface(
+                      borderRadius: 18,
+                      blurSigma: 12,
+                      width: inputHeight,
+                      height: inputHeight,
+                      onTap: () {},
+                      child: Center(
+                        child: HugeIcon(
+                          icon: HugeIcons.strokeRoundedAttachment01,
+                          color: theme.colorScheme.onSurface.withOpacity(0.9),
+                          size: 18,
                         ),
                       ),
                     ),
                     const SizedBox(width: 10),
                     Expanded(
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(18),
-                        child: BackdropFilter(
-                          filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-                          child: Container(
-                            height: 44,
-                            decoration: BoxDecoration(
-                              color: matteGlass,
-                              borderRadius: BorderRadius.circular(18),
-                              border: Border.all(
-                                color: theme.colorScheme.onSurface
-                                    .withOpacity(isDark ? 0.20 : 0.10),
-                              ),
+                      child: GlassSurface(
+                        borderRadius: 18,
+                        blurSigma: 12,
+                        height: inputHeight,
+                        borderColor: theme.colorScheme.onSurface
+                            .withOpacity(isDark ? 0.20 : 0.10),
+                        child: TextField(
+                          controller: _controller,
+                          style: TextStyle(
+                            color: theme.colorScheme.onSurface,
+                            fontSize: 14,
+                          ),
+                          cursorColor: theme.colorScheme.primary,
+                          decoration: InputDecoration(
+                            hintText: 'Введите сообщение...',
+                            hintStyle: TextStyle(
+                              color: theme.colorScheme.onSurface
+                                  .withOpacity(0.55),
                             ),
-                            child: TextField(
-                              controller: _controller,
-                              style: TextStyle(
-                                color: theme.colorScheme.onSurface,
-                                fontSize: 14,
-                              ),
-                              cursorColor: theme.colorScheme.primary,
-                              decoration: InputDecoration(
-                                hintText: 'Введите сообщение...',
-                                hintStyle: TextStyle(
-                                  color: theme.colorScheme.onSurface
-                                      .withOpacity(0.55),
-                                ),
-                                border: InputBorder.none,
-                                contentPadding:
-                                    const EdgeInsets.symmetric(horizontal: 14),
-                              ),
-                            ),
+                            filled: false,
+                            fillColor: Colors.transparent,
+                            border: InputBorder.none,
+                            contentPadding:
+                                const EdgeInsets.symmetric(horizontal: 14),
                           ),
                         ),
                       ),
                     ),
                     const SizedBox(width: 10),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(18),
-                      child: BackdropFilter(
-                        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-                        child: Material(
-                          color: matteGlass,
-                          child: InkWell(
-                            onTap: () {},
-                            child: SizedBox(
-                              width: 44,
-                              height: 44,
-                              child: Center(
-                                child: HugeIcon(
-                                  icon: HugeIcons.strokeRoundedSent,
-                                  color: theme.colorScheme.onSurface
-                                      .withOpacity(0.9),
-                                  size: 18,
-                                ),
-                              ),
-                            ),
-                          ),
+                    GlassSurface(
+                      borderRadius: 18,
+                      blurSigma: 12,
+                      width: inputHeight,
+                      height: inputHeight,
+                      onTap: () {},
+                      child: Center(
+                        child: HugeIcon(
+                          icon: HugeIcons.strokeRoundedSent,
+                          color: theme.colorScheme.onSurface.withOpacity(0.9),
+                          size: 18,
                         ),
                       ),
                     ),
                   ],
                 ),
-              ),
-            ],
-          ),
+              );
+            }
+
+            return Stack(
+              children: [
+                Positioned.fill(
+                  child: ListView.separated(
+                    padding: EdgeInsets.fromLTRB(
+                      horizontalPadding,
+                      listTopPadding,
+                      horizontalPadding,
+                      listBottomPadding,
+                    ),
+                    itemCount: messages.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 10),
+                    itemBuilder: (context, index) {
+                      final msg = messages[index];
+                      return Align(
+                        alignment: msg.isMe
+                            ? Alignment.centerRight
+                            : Alignment.centerLeft,
+                        child: _MessageBubble(
+                          text: msg.text,
+                          timeLabel: _formatTime(msg.sentAt),
+                          isMe: msg.isMe,
+                          isDark: isDark,
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: SafeArea(
+                    top: false,
+                    child: inputBar(),
+                  ),
+                ),
+              ],
+            );
+          },
         ),
       ),
     );
@@ -258,20 +278,21 @@ class _MessageBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final baseInk = isDark ? Colors.white : Colors.black;
-    final matteGlass = AppColors.matteGlassFor(theme.brightness);
+    final isMeColor = isMe
+        ? (isDark
+            ? AppColors.primary.withOpacity(0.35)
+            : AppColors.primary.withOpacity(0.22))
+        : null;
 
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(16),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-        child: Container(
-          constraints: const BoxConstraints(maxWidth: 260),
+    return GlassSurface(
+      borderRadius: 16,
+      blurSigma: 12,
+      color: isMeColor,
+      borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.10),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 260),
+        child: Padding(
           padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
-          decoration: BoxDecoration(
-            color: matteGlass,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: baseInk.withOpacity(isDark ? 0.20 : 0.10)),
-          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [

@@ -1,5 +1,3 @@
-import 'dart:ui';
-
 import 'package:flutter/material.dart';
 
 import 'package:hugeicons/hugeicons.dart';
@@ -9,9 +7,9 @@ import 'package:ren/features/chats/domain/chat_models.dart';
 import 'package:ren/features/chats/presentation/chat_page.dart';
 import 'package:ren/features/profile/presentation/profile_menu_page.dart';
 
-import 'package:ren/theme/themes.dart';
-
 import 'package:ren/shared/widgets/background.dart';
+import 'package:ren/shared/widgets/adaptive_page_route.dart';
+import 'package:ren/shared/widgets/glass_surface.dart';
 
 class ChatsPage extends StatefulWidget {
   const ChatsPage({Key? key}) : super(key: key);
@@ -31,7 +29,6 @@ class _HomePageState extends State<ChatsPage> {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final theme = Theme.of(context);
-    final matteGlass = AppColors.matteGlassFor(theme.brightness);
     final baseInk = isDark ? Colors.white : Colors.black;
     final favorites = _repo.favorites();
     final chats = _repo.chats();
@@ -56,8 +53,9 @@ class _HomePageState extends State<ChatsPage> {
             ),
           ),
           centerTitle: true,
-          backgroundColor: matteGlass,
+          backgroundColor: Colors.transparent,
           elevation: 0,
+          flexibleSpace: const GlassAppBarBackground(),
           actions: [
             IconButton(
               icon: HugeIcon(
@@ -67,12 +65,7 @@ class _HomePageState extends State<ChatsPage> {
               ),
               onPressed: () {
                 Navigator.of(context).push(
-                  PageRouteBuilder(
-                    pageBuilder: (_, __, ___) => const ProfileMenuPage(),
-                    transitionsBuilder: (_, anim, __, child) =>
-                        FadeTransition(opacity: anim, child: child),
-                    transitionDuration: const Duration(milliseconds: 220),
-                  ),
+                  adaptivePageRoute((_) => const ProfileMenuPage()),
                 );
               },
             ),
@@ -81,39 +74,43 @@ class _HomePageState extends State<ChatsPage> {
             preferredSize: const Size.fromHeight(36),
             child: Padding(
               padding: const EdgeInsets.fromLTRB(64, 0, 64, 4),
-              child: TextField(
-                cursorColor: theme.colorScheme.primary,
-                style: TextStyle(
-                  color: theme.colorScheme.onSurface,
-                  fontSize: 14,
-                ),
-                decoration: InputDecoration(
-                  hintText: 'Поиск',
-                  hintStyle: TextStyle(
-                    color: theme.colorScheme.onSurface.withOpacity(0.55),
+              child: GlassSurface(
+                borderRadius: 8,
+                blurSigma: 12,
+                borderColor: baseInk.withOpacity(isDark ? 0.18 : 0.10),
+                child: TextField(
+                  cursorColor: theme.colorScheme.primary,
+                  style: TextStyle(
+                    color: theme.colorScheme.onSurface,
+                    fontSize: 14,
                   ),
-                  prefixIcon: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    child: HugeIcon(
-                      icon: HugeIcons.strokeRoundedSearch01,
-                      color: theme.colorScheme.onSurface.withOpacity(0.8),
-                      size: 14,
+                  decoration: InputDecoration(
+                    hintText: 'Поиск',
+                    hintStyle: TextStyle(
+                      color: theme.colorScheme.onSurface.withOpacity(0.55),
                     ),
-                  ),
-                  prefixIconConstraints: const BoxConstraints(
-                    minWidth: 0,
-                    minHeight: 0,
-                  ),
-                  filled: true,
-                  fillColor: matteGlass,
-                  isDense: true,
-                  contentPadding: const EdgeInsets.symmetric(
-                    vertical: 4,
-                    horizontal: 10,
-                  ),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide: BorderSide.none,
+                    prefixIcon: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      child: HugeIcon(
+                        icon: HugeIcons.strokeRoundedSearch01,
+                        color: theme.colorScheme.onSurface.withOpacity(0.8),
+                        size: 14,
+                      ),
+                    ),
+                    prefixIconConstraints: const BoxConstraints(
+                      minWidth: 0,
+                      minHeight: 0,
+                    ),
+                    filled: false,
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(
+                      vertical: 4,
+                      horizontal: 10,
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide.none,
+                    ),
                   ),
                 ),
               ),
@@ -126,91 +123,68 @@ class _HomePageState extends State<ChatsPage> {
             padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
             child: Column(
               children: [
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(22),
-                  child: BackdropFilter(
-                    filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
-                    child: Container(
-                      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
-                      decoration: BoxDecoration(
-                        color: matteGlass,
-                        borderRadius: BorderRadius.circular(22),
-                        border: Border.all(
-                          color: baseInk.withOpacity(isDark ? 0.20 : 0.12),
+                GlassSurface(
+                  borderRadius: 22,
+                  blurSigma: 14,
+                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+                  borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Center(
+                        child: Text(
+                          'Избранные',
+                          style: theme.textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                            color: theme.colorScheme.onSurface,
+                          ),
                         ),
                       ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Center(
-                            child: Text(
-                              'Избранные',
-                              style: theme.textTheme.titleMedium?.copyWith(
-                                fontWeight: FontWeight.w600,
-                                color: theme.colorScheme.onSurface,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-                          SizedBox(
-                            height: 72,
-                            child: LayoutBuilder(
-                              builder: (context, constraints) {
-                                return SingleChildScrollView(
-                                  scrollDirection: Axis.horizontal,
-                                  child: ConstrainedBox(
-                                    constraints: BoxConstraints(
-                                      minWidth: constraints.maxWidth,
-                                    ),
-                                    child: Row(
-                                      mainAxisAlignment:
-                                          MainAxisAlignment.center,
-                                      children: [
-                                        for (int i = 0;
-                                            i < favorites.length;
-                                            i++) ...[
-                                          if (i != 0)
-                                            const SizedBox(width: 12),
-                                          _FavoriteItem(
-                                            user: favorites[i],
-                                            onTap: () {
-                                              final user = favorites[i];
-                                              final chat = ChatPreview(
-                                                id: 'fav_${user.id}',
-                                                user: user,
-                                                lastMessage: 'Какая?',
-                                                lastMessageAt: DateTime.now(),
-                                              );
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        height: 74,
+                        child: LayoutBuilder(
+                          builder: (context, constraints) {
+                            return SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              child: ConstrainedBox(
+                                constraints: BoxConstraints(
+                                  minWidth: constraints.maxWidth,
+                                ),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    for (int i = 0;
+                                        i < favorites.length;
+                                        i++) ...[
+                                      if (i != 0) const SizedBox(width: 12),
+                                      _FavoriteItem(
+                                        user: favorites[i],
+                                        onTap: () {
+                                          final user = favorites[i];
+                                          final chat = ChatPreview(
+                                            id: 'fav_${user.id}',
+                                            user: user,
+                                            lastMessage: 'Какая?',
+                                            lastMessageAt: DateTime.now(),
+                                          );
 
-                                              Navigator.of(context).push(
-                                                PageRouteBuilder(
-                                                  pageBuilder: (_, __, ___) =>
-                                                      ChatPage(chat: chat),
-                                                  transitionsBuilder:
-                                                      (_, anim, __, child) =>
-                                                          FadeTransition(
-                                                    opacity: anim,
-                                                    child: child,
-                                                  ),
-                                                  transitionDuration:
-                                                      const Duration(
-                                                    milliseconds: 220,
-                                                  ),
-                                                ),
-                                              );
-                                            },
-                                          ),
-                                        ],
-                                      ],
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
-                          ),
-                        ],
+                                          Navigator.of(context).push(
+                                            adaptivePageRoute(
+                                              (_) => ChatPage(chat: chat),
+                                            ),
+                                          );
+                                        },
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        ),
                       ),
-                    ),
+                    ],
                   ),
                 ),
                 const SizedBox(height: 14),
@@ -225,13 +199,7 @@ class _HomePageState extends State<ChatsPage> {
                         chat: chat,
                         onTap: () {
                           Navigator.of(context).push(
-                            PageRouteBuilder(
-                              pageBuilder: (_, __, ___) => ChatPage(chat: chat),
-                              transitionsBuilder: (_, anim, __, child) =>
-                                  FadeTransition(opacity: anim, child: child),
-                              transitionDuration:
-                                  const Duration(milliseconds: 220),
-                            ),
+                            adaptivePageRoute((_) => ChatPage(chat: chat)),
                           );
                         },
                       );
@@ -346,71 +314,55 @@ class _ChatTile extends StatelessWidget {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final baseInk = isDark ? Colors.white : Colors.black;
-    final matteGlass = AppColors.matteGlassFor(theme.brightness);
 
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(18),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
-        child: Material(
-          color: matteGlass,
-          child: InkWell(
-            onTap: onTap,
-            child: Container(
-              height: 72,
-              padding: const EdgeInsets.symmetric(horizontal: 14),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(
-                  color: baseInk.withOpacity(isDark ? 0.20 : 0.12),
+    return GlassSurface(
+      borderRadius: 18,
+      blurSigma: 14,
+      height: 72,
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.12),
+      onTap: onTap,
+      child: Row(
+        children: [
+          _Avatar(url: chat.user.avatarUrl, isOnline: chat.user.isOnline),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  chat.user.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    color: theme.colorScheme.onSurface,
+                  ),
                 ),
-              ),
-              child: Row(
-                children: [
-                  _Avatar(url: chat.user.avatarUrl, isOnline: chat.user.isOnline),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          chat.user.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w600,
-                            color: theme.colorScheme.onSurface,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          chat.lastMessage,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 12,
-                            color:
-                                theme.colorScheme.onSurface.withOpacity(0.70),
-                          ),
-                        ),
-                      ],
-                    ),
+                const SizedBox(height: 2),
+                Text(
+                  chat.lastMessage,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: theme.colorScheme.onSurface.withOpacity(0.70),
                   ),
-                  const SizedBox(width: 10),
-                  Text(
-                    _formatTime(chat.lastMessageAt),
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: theme.colorScheme.onSurface.withOpacity(0.60),
-                    ),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
-        ),
+          const SizedBox(width: 10),
+          Text(
+            _formatTime(chat.lastMessageAt),
+            style: TextStyle(
+              fontSize: 11,
+              color: theme.colorScheme.onSurface.withOpacity(0.60),
+            ),
+          ),
+        ],
       ),
     );
   }
