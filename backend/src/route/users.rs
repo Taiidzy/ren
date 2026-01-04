@@ -1,10 +1,13 @@
 use axum::{
-    extract::{State, Multipart, Path as PathExtractor},
+    body::Body,
+    extract::{State, Path as PathExtractor},
     http::{StatusCode, header, HeaderMap},
     response::Response,
     routing::{get, patch},
     Json, Router,
 };
+use futures_util::StreamExt;
+use multer::Multipart;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 
@@ -122,7 +125,7 @@ async fn update_avatar(
     State(state): State<AppState>,
     headers: HeaderMap,
     CurrentUser { id }: CurrentUser,
-    mut multipart: Multipart,
+    body: Body,
 ) -> Result<Json<UserResponse>, (StatusCode, String)> {
     // Получаем текущий путь к аватару для возможного удаления
     let current_avatar_row = sqlx::query("SELECT avatar FROM users WHERE id = $1")
@@ -135,60 +138,73 @@ async fn update_avatar(
         .and_then(|row| row.try_get::<Option<String>, _>("avatar").ok())
         .flatten();
 
+    // Извлекаем boundary из Content-Type и нормализуем его:
+    // Dio на iOS иногда присылает boundary с ведущими "--" (например "--dio-boundary-..."),
+    // что ломает строгий multipart-парсер. Убираем ведущие дефисы.
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    let boundary = content_type
+        .split(';')
+        .find_map(|part| {
+            let p = part.trim();
+            p.strip_prefix("boundary=")
+                .map(|b| b.trim_matches('"').to_string())
+        })
+        .ok_or((StatusCode::BAD_REQUEST, "Не найден boundary в Content-Type".into()))?;
+
+    let boundary = boundary.trim_start_matches('-').to_string();
+
+    // Превращаем body в stream байтов для multer
+    let stream = body.into_data_stream().map(|res| {
+        res.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+    });
+
+    let mut multipart = Multipart::new(stream, boundary);
+
     // Извлекаем файл из multipart
-    let mut avatar_data = None;
-    let mut avatar_filename = None;
+    let mut avatar_data: Option<Vec<u8>> = None;
+    let mut avatar_filename: Option<String> = None;
     let mut remove_avatar = false;
 
-    while let Some(field) = multipart
+    while let Some(mut field) = multipart
         .next_field()
         .await
-        .map_err(|e| {
-            let content_type = headers
-                .get(header::CONTENT_TYPE)
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("<none>")
-                .to_string();
-            let content_length = headers
-                .get(header::CONTENT_LENGTH)
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("<none>")
-                .to_string();
-            let transfer_encoding = headers
-                .get(header::TRANSFER_ENCODING)
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("<none>")
-                .to_string();
-            let user_agent = headers
-                .get(header::USER_AGENT)
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("<none>")
-                .to_string();
-
-            (
-                StatusCode::BAD_REQUEST,
-                format!(
-                    "Ошибка чтения multipart: {} | content-type={} content-length={} transfer-encoding={} user-agent={}",
-                    e, content_type, content_length, transfer_encoding, user_agent
-                ),
-            )
-        })? {
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Ошибка чтения multipart: {}", e)))?
+    {
         let name = field.name().unwrap_or("").to_string();
-        
+
         match name.as_str() {
             "avatar" => {
                 if let Some(file_name) = field.file_name() {
                     avatar_filename = Some(file_name.to_string());
                 }
-                let data = field.bytes().await
-                    .map_err(|e| (StatusCode::BAD_REQUEST, format!("Ошибка чтения файла avatar: {}", e)))?;
-                if !data.is_empty() {
-                    avatar_data = Some(data.to_vec());
+
+                let mut buf: Vec<u8> = Vec::new();
+                while let Some(chunk) = field
+                    .chunk()
+                    .await
+                    .map_err(|e| (StatusCode::BAD_REQUEST, format!("Ошибка чтения файла avatar: {}", e)))?
+                {
+                    buf.extend_from_slice(&chunk);
+                }
+
+                if !buf.is_empty() {
+                    avatar_data = Some(buf);
                 }
             }
             "remove" => {
-                let text = field.text().await
-                    .map_err(|e| (StatusCode::BAD_REQUEST, format!("Ошибка чтения поля remove: {}", e)))?;
+                let mut buf: Vec<u8> = Vec::new();
+                while let Some(chunk) = field
+                    .chunk()
+                    .await
+                    .map_err(|e| (StatusCode::BAD_REQUEST, format!("Ошибка чтения поля remove: {}", e)))?
+                {
+                    buf.extend_from_slice(&chunk);
+                }
+                let text = String::from_utf8_lossy(&buf).trim().to_string();
                 remove_avatar = text == "true" || text == "1";
             }
             _ => {}
