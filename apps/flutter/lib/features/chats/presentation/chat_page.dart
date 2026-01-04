@@ -28,13 +28,35 @@ class _ChatPageState extends State<ChatPage> {
 
   int? _myUserId;
 
+  bool _peerOnline = false;
+  bool _peerTyping = false;
+  Timer? _typingDebounce;
+
   RealtimeClient? _rt;
   StreamSubscription? _rtSub;
 
   @override
   void initState() {
     super.initState();
+    _peerOnline = widget.chat.user.isOnline;
+    _controller.addListener(_onTextChanged);
     _init();
+  }
+
+  void _onTextChanged() {
+    final chatId = int.tryParse(widget.chat.id) ?? 0;
+    final rt = _rt;
+    if (rt == null || !rt.isConnected) return;
+
+    _typingDebounce?.cancel();
+
+    final hasText = _controller.text.trim().isNotEmpty;
+    rt.typing(chatId, hasText);
+
+    _typingDebounce = Timer(const Duration(milliseconds: 900), () {
+      final stillHas = _controller.text.trim().isNotEmpty;
+      rt.typing(chatId, stillHas);
+    });
   }
 
   Future<void> _init() async {
@@ -67,13 +89,49 @@ class _ChatPageState extends State<ChatPage> {
 
     _myUserId ??= await _readMyUserId();
 
+    final peerId = widget.chat.peerId ?? 0;
+
     if (!rt.isConnected) {
       await rt.connect();
+    }
+
+    if (peerId > 0) {
+      rt.init(contacts: [peerId]);
     }
 
     rt.joinChat(chatId);
 
     _rtSub ??= rt.events.listen((evt) async {
+      if (evt.type == 'presence') {
+        final peerId = widget.chat.peerId ?? 0;
+        final userId = evt.data['user_id'];
+        if ('$userId' == '$peerId') {
+          final status = (evt.data['status'] as String?) ?? '';
+          final online = status == 'online';
+          if (online != _peerOnline && mounted) {
+            setState(() {
+              _peerOnline = online;
+            });
+          }
+        }
+        return;
+      }
+
+      if (evt.type == 'typing') {
+        final peerId = widget.chat.peerId ?? 0;
+        final evtChatId = evt.data['chat_id'];
+        final userId = evt.data['user_id'];
+        if ('$evtChatId' == '$chatId' && '$userId' == '$peerId') {
+          final isTyping = evt.data['is_typing'] == true;
+          if (isTyping != _peerTyping && mounted) {
+            setState(() {
+              _peerTyping = isTyping;
+            });
+          }
+        }
+        return;
+      }
+
       if (evt.type != 'message_new') return;
       final evtChatId = evt.data['chat_id'];
       if ('$evtChatId' != '$chatId') return;
@@ -81,7 +139,9 @@ class _ChatPageState extends State<ChatPage> {
       final msg = evt.data['message'];
       if (msg is! Map) return;
 
-      final m = msg.cast<String, dynamic>();
+      final m = (msg is Map<String, dynamic>)
+          ? msg
+          : Map<String, dynamic>.from(msg as Map);
       final repo = context.read<ChatsRepository>();
       final text = await repo.decryptIncomingWsMessage(message: m);
 
@@ -91,13 +151,16 @@ class _ChatPageState extends State<ChatPage> {
       final createdAtStr = (m['created_at'] as String?) ?? '';
       final createdAt = DateTime.tryParse(createdAtStr) ?? DateTime.now();
 
+      final myId = _myUserId ?? 0;
+      final isMe = (myId > 0) ? senderId == myId : senderId != peerId;
+
       if (!mounted) return;
       setState(() {
         _messages.add(
           ChatMessage(
             id: '${m['id'] ?? DateTime.now().millisecondsSinceEpoch}',
             chatId: chatId.toString(),
-            isMe: senderId == (_myUserId ?? -1),
+            isMe: isMe,
             text: text,
             sentAt: createdAt,
           ),
@@ -161,6 +224,9 @@ class _ChatPageState extends State<ChatPage> {
     _rt?.leaveChat(chatId);
     _rtSub?.cancel();
     _rtSub = null;
+    _typingDebounce?.cancel();
+    _typingDebounce = null;
+    _controller.removeListener(_onTextChanged);
     _controller.dispose();
     super.dispose();
   }
@@ -231,9 +297,9 @@ class _ChatPageState extends State<ChatPage> {
                               ),
                               const SizedBox(height: 2),
                               Text(
-                                widget.chat.user.isOnline
-                                    ? 'Online'
-                                    : 'Offline',
+                                _peerTyping
+                                    ? 'Печатает...'
+                                    : (_peerOnline ? 'Online' : 'Offline'),
                                 style: TextStyle(
                                   fontSize: 12,
                                   color: theme.colorScheme.onSurface

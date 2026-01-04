@@ -108,7 +108,11 @@ class ChatsApi {
 
   Future<String> getPublicKey(int userId) async {
     try {
-      final resp = await dio.get('${Apiurl.api}/users/$userId/public-key');
+      final token = await _requireToken();
+      final resp = await dio.get(
+        '${Apiurl.api}/users/$userId/public-key',
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
       final data = (resp.data as Map<String, dynamic>?);
       final pk = data?['public_key'] as String?;
       if (pk == null || pk.isEmpty) {
