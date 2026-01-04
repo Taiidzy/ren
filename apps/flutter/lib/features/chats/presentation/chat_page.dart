@@ -76,6 +76,7 @@ class _ChatPageState extends State<ChatPage> {
                       children: [
                         _Avatar(
                           url: widget.chat.user.avatarUrl,
+                          name: widget.chat.user.name,
                           isOnline: widget.chat.user.isOnline,
                           size: 36,
                         ),
@@ -334,10 +335,22 @@ class _MessageBubble extends StatelessWidget {
 
 class _Avatar extends StatelessWidget {
   final String url;
+  final String name;
   final bool isOnline;
   final double size;
 
-  const _Avatar({required this.url, required this.isOnline, required this.size});
+  const _Avatar({
+    required this.url,
+    required this.name,
+    required this.isOnline,
+    required this.size,
+  });
+
+  String _initials(String s) {
+    final parts = s.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty);
+    final letters = parts.map((p) => p.characters.first).take(2).join();
+    return letters.isEmpty ? '?' : letters.toUpperCase();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -349,7 +362,45 @@ class _Avatar extends StatelessWidget {
         children: [
           ClipRRect(
             borderRadius: BorderRadius.circular(size / 2),
-            child: Image.network(url, width: size, height: size, fit: BoxFit.cover),
+            child: url.isEmpty
+                ? Container(
+                    width: size,
+                    height: size,
+                    color: Theme.of(context).colorScheme.surface,
+                    child: Center(
+                      child: Text(
+                        _initials(name),
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.onSurface,
+                          fontWeight: FontWeight.w700,
+                          fontSize: size * 0.34,
+                        ),
+                      ),
+                    ),
+                  )
+                : Image.network(
+                    url,
+                    width: size,
+                    height: size,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stack) {
+                      return Container(
+                        width: size,
+                        height: size,
+                        color: Theme.of(context).colorScheme.surface,
+                        child: Center(
+                          child: Text(
+                            _initials(name),
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.onSurface,
+                              fontWeight: FontWeight.w700,
+                              fontSize: size * 0.34,
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
           ),
           Positioned(
             right: -1,

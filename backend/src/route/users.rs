@@ -342,7 +342,7 @@ async fn get_avatar(
         return Err((StatusCode::BAD_REQUEST, "Некорректный путь".into()));
     }
 
-    let file_path = Path::new("uploads/avatars").join(rel);
+    let file_path = Path::new("uploads").join(rel);
 
     let content = fs::read(&file_path).await
         .map_err(|_| (StatusCode::NOT_FOUND, "Файл не найден".into()))?;

@@ -24,36 +24,38 @@ import 'package:ren/features/chats/data/chats_api.dart';
 import 'package:ren/features/chats/data/chats_repository.dart';
 
 Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-
-  FlutterError.onError = (FlutterErrorDetails details) {
-    FlutterError.dumpErrorToConsole(details);
-  };
-
-  PlatformDispatcher.instance.onError = (Object error, StackTrace stack) {
-    FlutterError.dumpErrorToConsole(
-      FlutterErrorDetails(exception: error, stack: stack),
-    );
-    return true;
-  };
-
-  final isolateErrorPort = ReceivePort();
-  isolateErrorPort.listen((dynamic pair) {
-    try {
-      final List<dynamic> list = pair as List<dynamic>;
-      final error = list[0];
-      final stack = list[1] as StackTrace?;
-      FlutterError.dumpErrorToConsole(
-        FlutterErrorDetails(exception: error, stack: stack),
-      );
-    } catch (_) {
-      debugPrint('Unparsable isolate error: $pair');
-    }
-  });
-  Isolate.current.addErrorListener(isolateErrorPort.sendPort);
-
   runZonedGuarded(
-    () => runApp(const MyApp()),
+    () {
+      WidgetsFlutterBinding.ensureInitialized();
+
+      FlutterError.onError = (FlutterErrorDetails details) {
+        FlutterError.dumpErrorToConsole(details);
+      };
+
+      PlatformDispatcher.instance.onError = (Object error, StackTrace stack) {
+        FlutterError.dumpErrorToConsole(
+          FlutterErrorDetails(exception: error, stack: stack),
+        );
+        return true;
+      };
+
+      final isolateErrorPort = ReceivePort();
+      isolateErrorPort.listen((dynamic pair) {
+        try {
+          final List<dynamic> list = pair as List<dynamic>;
+          final error = list[0];
+          final stack = list[1] as StackTrace?;
+          FlutterError.dumpErrorToConsole(
+            FlutterErrorDetails(exception: error, stack: stack),
+          );
+        } catch (_) {
+          debugPrint('Unparsable isolate error: $pair');
+        }
+      });
+      Isolate.current.addErrorListener(isolateErrorPort.sendPort);
+
+      runApp(const MyApp());
+    },
     (Object error, StackTrace stack) {
       FlutterError.dumpErrorToConsole(
         FlutterErrorDetails(exception: error, stack: stack),

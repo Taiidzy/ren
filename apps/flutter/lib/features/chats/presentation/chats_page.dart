@@ -243,6 +243,7 @@ class _FavoriteItem extends StatelessWidget {
             children: [
               _FavoriteAvatar(
                 url: user.avatarUrl,
+                name: user.name,
                 isOnline: user.isOnline,
                 size: avatarSize,
               ),
@@ -266,14 +267,22 @@ class _FavoriteItem extends StatelessWidget {
 
 class _FavoriteAvatar extends StatelessWidget {
   final String url;
+  final String name;
   final bool isOnline;
   final double size;
 
   const _FavoriteAvatar({
     required this.url,
+    required this.name,
     required this.isOnline,
     required this.size,
   });
+
+  String _initials(String s) {
+    final parts = s.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty);
+    final letters = parts.map((p) => p.characters.first).take(2).join();
+    return letters.isEmpty ? '?' : letters.toUpperCase();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -285,7 +294,41 @@ class _FavoriteAvatar extends StatelessWidget {
         children: [
           ClipRRect(
             borderRadius: BorderRadius.circular(size / 2),
-            child: Image.network(url, width: size, height: size, fit: BoxFit.cover),
+            child: url.isEmpty
+                ? Container(
+                    color: Theme.of(context).colorScheme.surface,
+                    child: Center(
+                      child: Text(
+                        _initials(name),
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.onSurface,
+                          fontWeight: FontWeight.w700,
+                          fontSize: size * 0.34,
+                        ),
+                      ),
+                    ),
+                  )
+                : Image.network(
+                    url,
+                    width: size,
+                    height: size,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stack) {
+                      return Container(
+                        color: Theme.of(context).colorScheme.surface,
+                        child: Center(
+                          child: Text(
+                            _initials(name),
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.onSurface,
+                              fontWeight: FontWeight.w700,
+                              fontSize: size * 0.34,
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
           ),
           Positioned(
             right: -1,
@@ -330,7 +373,11 @@ class _ChatTile extends StatelessWidget {
       onTap: onTap,
       child: Row(
         children: [
-          _Avatar(url: chat.user.avatarUrl, isOnline: chat.user.isOnline),
+          _Avatar(
+            url: chat.user.avatarUrl,
+            name: chat.user.name,
+            isOnline: chat.user.isOnline,
+          ),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
@@ -382,9 +429,16 @@ class _ChatTile extends StatelessWidget {
 
 class _Avatar extends StatelessWidget {
   final String url;
+  final String name;
   final bool isOnline;
 
-  const _Avatar({required this.url, required this.isOnline});
+  const _Avatar({required this.url, required this.name, required this.isOnline});
+
+  String _initials(String s) {
+    final parts = s.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty);
+    final letters = parts.map((p) => p.characters.first).take(2).join();
+    return letters.isEmpty ? '?' : letters.toUpperCase();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -395,8 +449,46 @@ class _Avatar extends StatelessWidget {
         clipBehavior: Clip.none,
         children: [
           ClipRRect(
-            borderRadius: BorderRadius.circular(22),
-            child: Image.network(url, width: 44, height: 44, fit: BoxFit.cover),
+            borderRadius: BorderRadius.circular(24),
+            child: url.isEmpty
+                ? Container(
+                    width: 48,
+                    height: 48,
+                    color: Theme.of(context).colorScheme.surface,
+                    child: Center(
+                      child: Text(
+                        _initials(name),
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.onSurface,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 16,
+                        ),
+                      ),
+                    ),
+                  )
+                : Image.network(
+                    url,
+                    width: 48,
+                    height: 48,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stack) {
+                      return Container(
+                        width: 48,
+                        height: 48,
+                        color: Theme.of(context).colorScheme.surface,
+                        child: Center(
+                          child: Text(
+                            _initials(name),
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.onSurface,
+                              fontWeight: FontWeight.w700,
+                              fontSize: 16,
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
           ),
           Positioned(
             right: -1,

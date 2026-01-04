@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:ren/core/constants/api_url.dart';
 import 'package:ren/core/constants/keys.dart';
 import 'package:ren/core/sdk/ren_sdk.dart';
 import 'package:ren/core/secure/secure_storage.dart';
@@ -31,7 +32,7 @@ class ChatsRepository {
       final user = ChatUser(
         id: (peerId ?? 0).toString(),
         name: peerUsername.isNotEmpty ? peerUsername : 'User',
-        avatarUrl: peerAvatar,
+        avatarUrl: _avatarUrl(peerAvatar),
         isOnline: false,
       );
 
@@ -168,7 +169,7 @@ class ChatsRepository {
       user: ChatUser(
         id: peerId.toString(),
         name: (json['peer_username'] as String?) ?? 'User',
-        avatarUrl: (json['peer_avatar'] as String?) ?? '',
+        avatarUrl: _avatarUrl((json['peer_avatar'] as String?) ?? ''),
         isOnline: false,
       ),
       lastMessage: '',
@@ -178,5 +179,13 @@ class ChatsRepository {
 
   Future<void> deleteChat(int chatId, {bool forAll = false}) async {
     await api.deleteChat(chatId, forAll: forAll);
+  }
+
+  String _avatarUrl(String avatarPath) {
+    final p = avatarPath.trim();
+    if (p.isEmpty) return '';
+    if (p.startsWith('http://') || p.startsWith('https://')) return p;
+    final normalized = p.startsWith('/') ? p.substring(1) : p;
+    return '${Apiurl.api}/avatars/$normalized';
   }
 }
