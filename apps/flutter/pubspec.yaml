@@ -42,8 +42,9 @@ dependencies:
   dio: ^5.9.0
   crypto: ^3.0.7
   image_picker: ^1.1.2
+  file_picker: ^8.0.7
   path_provider: ^2.1.5
-  web_socket_channel: ^2.4.5
+  web_socket_channel: ^3.0.3
   http: ^1.6.0
 
 dev_dependencies:

@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:hugeicons/hugeicons.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
@@ -13,6 +15,7 @@ import 'package:ren/core/realtime/realtime_client.dart';
 import 'package:ren/shared/widgets/background.dart';
 import 'package:ren/shared/widgets/glass_surface.dart';
 import 'package:ren/theme/themes.dart';
+import 'package:path_provider/path_provider.dart';
 
 class ChatPage extends StatefulWidget {
   final ChatPreview chat;
@@ -23,12 +26,26 @@ class ChatPage extends StatefulWidget {
   State<ChatPage> createState() => _ChatPageState();
 }
 
+class _PendingAttachment {
+  final Uint8List bytes;
+  final String filename;
+  final String mimetype;
+
+  const _PendingAttachment({
+    required this.bytes,
+    required this.filename,
+    required this.mimetype,
+  });
+}
+
 class _ChatPageState extends State<ChatPage> {
   final _controller = TextEditingController();
   bool _loading = true;
   final List<ChatMessage> _messages = [];
 
   final _picker = ImagePicker();
+
+  final List<_PendingAttachment> _pending = [];
 
   int? _myUserId;
 
@@ -211,10 +228,38 @@ class _ChatPageState extends State<ChatPage> {
     final chatId = int.tryParse(widget.chat.id) ?? 0;
     final peerId = widget.chat.peerId ?? 0;
     final text = _controller.text.trim();
-    if (text.isEmpty) return;
+    final hasAttachments = _pending.isNotEmpty;
+    if (text.isEmpty && !hasAttachments) return;
     if (peerId <= 0) return;
 
+    final pendingCopy = List<_PendingAttachment>.from(_pending);
+    setState(() {
+      _pending.clear();
+    });
     _controller.clear();
+
+    List<ChatAttachment> optimisticAtt = const [];
+    if (pendingCopy.isNotEmpty) {
+      final dir = await getTemporaryDirectory();
+      final out = <ChatAttachment>[];
+      for (final p in pendingCopy) {
+        final safeName = p.filename.isNotEmpty
+            ? p.filename
+            : 'file_${DateTime.now().millisecondsSinceEpoch}';
+        final path = '${dir.path}/$safeName';
+        final f = File(path);
+        await f.writeAsBytes(p.bytes, flush: true);
+        out.add(
+          ChatAttachment(
+            localPath: path,
+            filename: safeName,
+            mimetype: p.mimetype,
+            size: p.bytes.length,
+          ),
+        );
+      }
+      optimisticAtt = out;
+    }
 
     // optimistic
     setState(() {
@@ -224,88 +269,33 @@ class _ChatPageState extends State<ChatPage> {
           chatId: chatId.toString(),
           isMe: true,
           text: text,
+          attachments: optimisticAtt,
           sentAt: DateTime.now(),
         ),
       );
     });
 
     final repo = context.read<ChatsRepository>();
-    final payload = await repo.buildEncryptedWsMessage(
-      chatId: chatId,
-      peerId: peerId,
-      plaintext: text,
-    );
-
-    _rt ??= context.read<RealtimeClient>();
-    final rt = _rt!;
-    if (!rt.isConnected) {
-      await rt.connect();
-      rt.joinChat(chatId);
-    }
-
-    rt.sendMessage(
-      chatId: chatId,
-      message: payload['message'] as String,
-      messageType: payload['message_type'] as String?,
-      envelopes: payload['envelopes'] as Map<String, dynamic>?,
-    );
-  }
-
-  Future<void> _sendImage() async {
-    final chatId = int.tryParse(widget.chat.id) ?? 0;
-    final peerId = widget.chat.peerId ?? 0;
-    if (peerId <= 0) return;
-
-    final xfile = await _picker.pickImage(source: ImageSource.gallery);
-    if (xfile == null) return;
-
-    final bytes = await xfile.readAsBytes();
-    final name = xfile.name.isNotEmpty
-        ? xfile.name
-        : 'image_${DateTime.now().millisecondsSinceEpoch}.jpg';
-
-    String mimetypeFromName(String filename) {
-      final lower = filename.toLowerCase();
-      if (lower.endsWith('.png')) return 'image/png';
-      if (lower.endsWith('.webp')) return 'image/webp';
-      if (lower.endsWith('.gif')) return 'image/gif';
-      return 'image/jpeg';
-    }
-
-    final mimetype = mimetypeFromName(name);
-    final caption = _controller.text.trim();
-    _controller.clear();
-
-    // optimistic: показываем локальный файл
-    setState(() {
-      _messages.add(
-        ChatMessage(
-          id: 'local_${DateTime.now().millisecondsSinceEpoch}',
-          chatId: chatId.toString(),
-          isMe: true,
-          text: caption,
-          attachments: [
-            ChatAttachment(
-              localPath: xfile.path,
-              filename: name,
-              mimetype: mimetype,
-              size: bytes.length,
-            ),
-          ],
-          sentAt: DateTime.now(),
-        ),
-      );
-    });
-
-    final repo = context.read<ChatsRepository>();
-    final payload = await repo.buildEncryptedWsImageMessage(
-      chatId: chatId,
-      peerId: peerId,
-      fileBytes: bytes,
-      filename: name,
-      mimetype: mimetype,
-      caption: caption,
-    );
+    final payload = hasAttachments
+        ? await repo.buildEncryptedWsMediaMessage(
+            chatId: chatId,
+            peerId: peerId,
+            caption: text,
+            attachments: pendingCopy
+                .map(
+                  (p) => OutgoingAttachment(
+                    bytes: p.bytes,
+                    filename: p.filename,
+                    mimetype: p.mimetype,
+                  ),
+                )
+                .toList(),
+          )
+        : await repo.buildEncryptedWsMessage(
+            chatId: chatId,
+            peerId: peerId,
+            plaintext: text,
+          );
 
     _rt ??= context.read<RealtimeClient>();
     final rt = _rt!;
@@ -320,6 +310,120 @@ class _ChatPageState extends State<ChatPage> {
       messageType: payload['message_type'] as String?,
       envelopes: payload['envelopes'] as Map<String, dynamic>?,
       metadata: payload['metadata'] as List<dynamic>?,
+    );
+  }
+
+  Future<void> _pickPhotos() async {
+    try {
+      final files = await _picker.pickMultiImage();
+      if (files.isEmpty) return;
+
+      String mimetypeFromName(String filename) {
+        final lower = filename.toLowerCase();
+        if (lower.endsWith('.png')) return 'image/png';
+        if (lower.endsWith('.webp')) return 'image/webp';
+        if (lower.endsWith('.gif')) return 'image/gif';
+        return 'image/jpeg';
+      }
+
+      final added = <_PendingAttachment>[];
+      for (final f in files) {
+        final bytes = await f.readAsBytes();
+        final name = f.name.isNotEmpty
+            ? f.name
+            : 'image_${DateTime.now().millisecondsSinceEpoch}.jpg';
+        added.add(
+          _PendingAttachment(
+            bytes: bytes,
+            filename: name,
+            mimetype: mimetypeFromName(name),
+          ),
+        );
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _pending.addAll(added);
+      });
+    } catch (e) {
+      debugPrint('pick photos failed: $e');
+    }
+  }
+
+  Future<void> _pickFiles() async {
+    try {
+      final res = await FilePicker.platform.pickFiles(
+        allowMultiple: true,
+        withData: true,
+      );
+      if (res == null) return;
+
+      final added = <_PendingAttachment>[];
+      for (final f in res.files) {
+        final bytes = f.bytes;
+        if (bytes == null || bytes.isEmpty) continue;
+        final name = (f.name.isNotEmpty)
+            ? f.name
+            : 'file_${DateTime.now().millisecondsSinceEpoch}';
+        final mime = (f.mimeType ?? '').isNotEmpty
+            ? f.mimeType!
+            : 'application/octet-stream';
+        added.add(
+          _PendingAttachment(
+            bytes: bytes,
+            filename: name,
+            mimetype: mime,
+          ),
+        );
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _pending.addAll(added);
+      });
+    } catch (e) {
+      debugPrint('pick files failed: $e');
+    }
+  }
+
+  Future<void> _showAttachMenu() async {
+    final theme = Theme.of(context);
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return SafeArea(
+          child: Container(
+            margin: const EdgeInsets.all(12),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surface.withOpacity(0.95),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.photo_library_outlined),
+                  title: const Text('Фото'),
+                  onTap: () async {
+                    Navigator.of(ctx).pop();
+                    await _pickPhotos();
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.insert_drive_file_outlined),
+                  title: const Text('Файл'),
+                  onTap: () async {
+                    Navigator.of(ctx).pop();
+                    await _pickFiles();
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -456,66 +560,139 @@ class _ChatPageState extends State<ChatPage> {
                   horizontalPadding,
                   verticalPadding,
                 ),
-                child: Row(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    GlassSurface(
-                      borderRadius: 18,
-                      blurSigma: 12,
-                      width: inputHeight,
-                      height: inputHeight,
-                      onTap: _sendImage,
-                      child: Center(
-                        child: HugeIcon(
-                          icon: HugeIcons.strokeRoundedAttachment01,
-                          color: theme.colorScheme.onSurface.withOpacity(0.9),
-                          size: 18,
+                    if (_pending.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: SizedBox(
+                          height: 64,
+                          child: ListView.separated(
+                            scrollDirection: Axis.horizontal,
+                            itemCount: _pending.length,
+                            separatorBuilder: (_, __) => const SizedBox(width: 10),
+                            itemBuilder: (context, index) {
+                              final p = _pending[index];
+                              final isImg = p.mimetype.startsWith('image/');
+                              return Stack(
+                                clipBehavior: Clip.none,
+                                children: [
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(12),
+                                    child: Container(
+                                      width: 64,
+                                      height: 64,
+                                      color: theme.colorScheme.surface,
+                                      child: isImg
+                                          ? Image.memory(
+                                              p.bytes,
+                                              fit: BoxFit.cover,
+                                              errorBuilder: (c, e, s) => const SizedBox(),
+                                            )
+                                          : Center(
+                                              child: Icon(
+                                                Icons.insert_drive_file,
+                                                color: theme.colorScheme.onSurface.withOpacity(0.65),
+                                              ),
+                                            ),
+                                    ),
+                                  ),
+                                  Positioned(
+                                    right: -6,
+                                    top: -6,
+                                    child: GestureDetector(
+                                      onTap: () {
+                                        setState(() {
+                                          _pending.removeAt(index);
+                                        });
+                                      },
+                                      child: Container(
+                                        width: 20,
+                                        height: 20,
+                                        decoration: BoxDecoration(
+                                          color: theme.colorScheme.surface,
+                                          shape: BoxShape.circle,
+                                          border: Border.all(
+                                            color: theme.colorScheme.onSurface.withOpacity(0.25),
+                                          ),
+                                        ),
+                                        child: Icon(
+                                          Icons.close,
+                                          size: 14,
+                                          color: theme.colorScheme.onSurface.withOpacity(0.8),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              );
+                            },
+                          ),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: GlassSurface(
-                        borderRadius: 18,
-                        blurSigma: 12,
-                        height: inputHeight,
-                        borderColor: theme.colorScheme.onSurface
-                            .withOpacity(isDark ? 0.20 : 0.10),
-                        child: TextField(
-                          controller: _controller,
-                          style: TextStyle(
-                            color: theme.colorScheme.onSurface,
-                            fontSize: 14,
-                          ),
-                          cursorColor: theme.colorScheme.primary,
-                          decoration: InputDecoration(
-                            hintText: 'Введите сообщение...',
-                            hintStyle: TextStyle(
-                              color: theme.colorScheme.onSurface
-                                  .withOpacity(0.55),
+                    Row(
+                      children: [
+                        GlassSurface(
+                          borderRadius: 18,
+                          blurSigma: 12,
+                          width: inputHeight,
+                          height: inputHeight,
+                          onTap: _showAttachMenu,
+                          child: Center(
+                            child: HugeIcon(
+                              icon: HugeIcons.strokeRoundedAttachment01,
+                              color: theme.colorScheme.onSurface.withOpacity(0.9),
+                              size: 18,
                             ),
-                            filled: false,
-                            fillColor: Colors.transparent,
-                            border: InputBorder.none,
-                            contentPadding:
-                                const EdgeInsets.symmetric(horizontal: 14),
                           ),
                         ),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    GlassSurface(
-                      borderRadius: 18,
-                      blurSigma: 12,
-                      width: inputHeight,
-                      height: inputHeight,
-                      onTap: _send,
-                      child: Center(
-                        child: HugeIcon(
-                          icon: HugeIcons.strokeRoundedSent,
-                          color: theme.colorScheme.onSurface.withOpacity(0.9),
-                          size: 18,
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: GlassSurface(
+                            borderRadius: 18,
+                            blurSigma: 12,
+                            height: inputHeight,
+                            borderColor: theme.colorScheme.onSurface
+                                .withOpacity(isDark ? 0.20 : 0.10),
+                            child: TextField(
+                              controller: _controller,
+                              style: TextStyle(
+                                color: theme.colorScheme.onSurface,
+                                fontSize: 14,
+                              ),
+                              cursorColor: theme.colorScheme.primary,
+                              decoration: InputDecoration(
+                                hintText: 'Введите сообщение...',
+                                hintStyle: TextStyle(
+                                  color: theme.colorScheme.onSurface
+                                      .withOpacity(0.55),
+                                ),
+                                filled: false,
+                                fillColor: Colors.transparent,
+                                border: InputBorder.none,
+                                contentPadding:
+                                    const EdgeInsets.symmetric(horizontal: 14),
+                              ),
+                            ),
+                          ),
                         ),
-                      ),
+                        const SizedBox(width: 10),
+                        GlassSurface(
+                          borderRadius: 18,
+                          blurSigma: 12,
+                          width: inputHeight,
+                          height: inputHeight,
+                          onTap: _send,
+                          child: Center(
+                            child: HugeIcon(
+                              icon: HugeIcons.strokeRoundedSent,
+                              color: theme.colorScheme.onSurface.withOpacity(0.9),
+                              size: 18,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),

@@ -7,6 +7,7 @@ use axum::{
     Json, Router,
 };
 use axum::extract::Multipart;
+use axum::extract::DefaultBodyLimit;
 use serde::Serialize;
 use sqlx::Row;
 use tokio::fs;
@@ -28,6 +29,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/media", post(upload_media))
         .route("/media/:id", get(download_media))
+        .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
 }
 
 async fn upload_media(
@@ -83,8 +85,8 @@ async fn upload_media(
 
     let bytes = data.ok_or((StatusCode::BAD_REQUEST, "file обязателен".into()))?;
 
-    // Limit: 25MB ciphertext
-    const MAX_BYTES: usize = 25 * 1024 * 1024;
+    // Limit: 50MB ciphertext
+    const MAX_BYTES: usize = 50 * 1024 * 1024;
     if bytes.len() > MAX_BYTES {
         return Err((StatusCode::BAD_REQUEST, "Слишком большой файл".into()));
     }

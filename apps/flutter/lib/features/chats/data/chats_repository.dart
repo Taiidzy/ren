@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
@@ -9,6 +10,18 @@ import 'package:ren/core/sdk/ren_sdk.dart';
 import 'package:ren/core/secure/secure_storage.dart';
 import 'package:ren/features/chats/data/chats_api.dart';
 import 'package:ren/features/chats/domain/chat_models.dart';
+
+class OutgoingAttachment {
+  final List<int> bytes;
+  final String filename;
+  final String mimetype;
+
+  const OutgoingAttachment({
+    required this.bytes,
+    required this.filename,
+    required this.mimetype,
+  });
+}
 
 class ChatsRepository {
   final ChatsApi api;
@@ -473,6 +486,110 @@ class ChatsRepository {
       'chat_id': chatId,
       'message': messageJson,
       'message_type': 'image',
+      'envelopes': envelopes,
+      'metadata': metadata,
+    };
+  }
+
+  Future<Map<String, dynamic>> buildEncryptedWsMediaMessage({
+    required int chatId,
+    required int peerId,
+    required String caption,
+    required List<OutgoingAttachment> attachments,
+  }) async {
+    if (peerId <= 0) {
+      throw Exception('Некорректный peerId');
+    }
+
+    final myIdStr = await SecureStorage.readKey(Keys.UserId);
+    final myId = int.tryParse(myIdStr ?? '') ?? 0;
+    if (myId <= 0) {
+      throw Exception('Не удалось определить userId');
+    }
+
+    final myPublicKeyB64 = (await SecureStorage.readKey(Keys.PublicKey))?.trim();
+    if (myPublicKeyB64 == null || myPublicKeyB64.isEmpty) {
+      throw Exception('Отсутствует публичный ключ');
+    }
+
+    final peerPublicKeyB64 = (await api.getPublicKey(peerId)).trim();
+
+    final msgKeyB64 = renSdk.generateMessageKey().trim();
+
+    final encMsg = renSdk.encryptMessage(caption, msgKeyB64);
+    if (encMsg == null) {
+      throw Exception('Не удалось зашифровать сообщение');
+    }
+
+    final wrappedForMe = renSdk.wrapSymmetricKey(msgKeyB64, myPublicKeyB64);
+    final wrappedForPeer = renSdk.wrapSymmetricKey(msgKeyB64, peerPublicKeyB64);
+    if (wrappedForMe == null || wrappedForPeer == null) {
+      throw Exception('Не удалось сформировать envelopes');
+    }
+
+    Map<String, dynamic> env(String userId, Map<String, String> w) {
+      return {
+        'key': w['wrapped'],
+        'ephem_pub_key': w['ephemeral_public_key'],
+        'iv': w['nonce'],
+      };
+    }
+
+    final envelopes = {
+      '$myId': env('$myId', wrappedForMe),
+      '$peerId': env('$peerId', wrappedForPeer),
+    };
+
+    final metadata = <Map<String, dynamic>>[];
+    for (final att in attachments) {
+      final filename = att.filename.isNotEmpty
+          ? att.filename
+          : 'file_${DateTime.now().millisecondsSinceEpoch}';
+      final mimetype = att.mimetype.isNotEmpty ? att.mimetype : 'application/octet-stream';
+
+      final encFile = await renSdk.encryptFile(
+        Uint8List.fromList(att.bytes),
+        filename,
+        mimetype,
+        msgKeyB64,
+      );
+      if (encFile == null) {
+        throw Exception('Не удалось зашифровать файл');
+      }
+
+      final ciphertextBytes = base64Decode((encFile['ciphertext'] ?? '').toString());
+      final uploadResp = await api.uploadMedia(
+        chatId: chatId,
+        ciphertextBytes: ciphertextBytes,
+        filename: filename,
+        mimetype: mimetype,
+      );
+      final uploadedId = uploadResp['file_id'];
+      final fileId = (uploadedId is int) ? uploadedId : int.tryParse('$uploadedId') ?? 0;
+      if (fileId <= 0) {
+        throw Exception('Не удалось загрузить ciphertext файла');
+      }
+
+      metadata.add({
+        'file_id': fileId,
+        'filename': filename,
+        'mimetype': mimetype,
+        'size': att.bytes.length,
+        'enc_file': null,
+        'nonce': encFile['nonce'],
+        'file_creation_date': null,
+      });
+    }
+
+    final messageJson = jsonEncode({
+      'ciphertext': encMsg['ciphertext'],
+      'nonce': encMsg['nonce'],
+    });
+
+    return {
+      'chat_id': chatId,
+      'message': messageJson,
+      'message_type': 'media',
       'envelopes': envelopes,
       'metadata': metadata,
     };
