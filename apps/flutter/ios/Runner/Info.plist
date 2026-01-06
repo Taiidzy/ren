@@ -24,6 +24,12 @@
 	<string>????</string>
 	<key>CFBundleVersion</key>
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Нужен доступ к камере, чтобы делать фото для отправки в чат.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Нужен доступ к фото, чтобы выбирать изображения для отправки в чат.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Нужен доступ к фото, чтобы сохранять файлы из чата в галерею.</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>

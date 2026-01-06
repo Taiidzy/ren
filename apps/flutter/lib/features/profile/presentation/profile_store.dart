@@ -14,6 +14,34 @@ class ProfileStore extends ChangeNotifier {
 
   ProfileStore(this.repo);
 
+  ProfileUser _bustAvatarCache(ProfileUser u) {
+    final avatar = u.avatar;
+    if (avatar == null || avatar.trim().isEmpty) return u;
+
+    final ts = DateTime.now().millisecondsSinceEpoch.toString();
+    Uri? uri;
+    try {
+      uri = Uri.parse(avatar);
+    } catch (_) {
+      uri = null;
+    }
+    if (uri == null) return u;
+
+    final nextUri = uri.replace(
+      queryParameters: <String, String>{
+        ...uri.queryParameters,
+        'v': ts,
+      },
+    );
+
+    return ProfileUser(
+      id: u.id,
+      login: u.login,
+      username: u.username,
+      avatar: nextUri.toString(),
+    );
+  }
+
   void setRepo(ProfileRepository next) {
     repo = next;
   }
@@ -53,7 +81,8 @@ class ProfileStore extends ChangeNotifier {
     error = null;
     notifyListeners();
     try {
-      user = await repo.uploadAvatar(file);
+      final updated = await repo.uploadAvatar(file);
+      user = _bustAvatarCache(updated);
       return true;
     } catch (e) {
       error = e.toString();

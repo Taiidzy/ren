@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:dio/dio.dart';
 
 import 'package:ren/core/constants/api_url.dart';
@@ -124,6 +126,62 @@ class ChatsApi {
         (e.response?.data is String)
             ? e.response?.data as String
             : 'Ошибка получения публичного ключа',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
+  Future<Map<String, dynamic>> uploadMedia({
+    required int chatId,
+    required List<int> ciphertextBytes,
+    required String filename,
+    required String mimetype,
+  }) async {
+    final token = await _requireToken();
+    try {
+      final form = FormData.fromMap({
+        'chat_id': chatId,
+        'filename': filename,
+        'mimetype': mimetype,
+        'file': MultipartFile.fromBytes(
+          ciphertextBytes,
+          filename: filename,
+        ),
+      });
+
+      final resp = await dio.post(
+        '${Apiurl.api}/media',
+        data: form,
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+      return (resp.data as Map<String, dynamic>?) ?? <String, dynamic>{};
+    } on DioException catch (e) {
+      throw ApiException(
+        (e.response?.data is String)
+            ? e.response?.data as String
+            : 'Ошибка загрузки файла',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
+  Future<Uint8List> downloadMedia(int fileId) async {
+    final token = await _requireToken();
+    try {
+      final resp = await dio.get<List<int>>(
+        '${Apiurl.api}/media/$fileId',
+        options: Options(
+          headers: {'Authorization': 'Bearer $token'},
+          responseType: ResponseType.bytes,
+        ),
+      );
+      final data = resp.data ?? <int>[];
+      return Uint8List.fromList(data);
+    } on DioException catch (e) {
+      throw ApiException(
+        (e.response?.data is String)
+            ? e.response?.data as String
+            : 'Ошибка скачивания файла',
         statusCode: e.response?.statusCode,
       );
     }

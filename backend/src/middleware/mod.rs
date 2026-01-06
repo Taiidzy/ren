@@ -1,4 +1,4 @@
-use axum::{async_trait, extract::{FromRequestParts, State, MatchedPath, ConnectInfo, Request}, http::{request::Parts, StatusCode}, middleware::Next, response::Response};
+use axum::{async_trait, extract::{FromRequestParts, State, MatchedPath, ConnectInfo, Request}, http::{request::Parts, StatusCode, header}, middleware::Next, response::Response};
 use axum::body::{Body, Bytes, to_bytes};
 use axum::extract::FromRef;
 use jsonwebtoken::{decode, DecodingKey, Validation};
@@ -99,8 +99,44 @@ pub async fn logging(req: Request, next: Next) -> Response {
     let path = req.extensions().get::<MatchedPath>().map(|p| p.as_str().to_string()).unwrap_or_else(|| uri.path().to_string());
     let from = req.extensions().get::<ConnectInfo<SocketAddr>>().map(|c| c.0.ip().to_string()).unwrap_or_else(|| "-".to_string());
 
-    // Read and clone body with limit
+    // IMPORTANT: do not consume request body for multipart uploads (it breaks parsing).
+    // We also bypass body preview for /media endpoints.
     let (parts, body) = req.into_parts();
+
+    let content_type = parts
+        .headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    let should_skip_body = path.starts_with("/media")
+        || content_type.to_ascii_lowercase().starts_with("multipart/");
+
+    if should_skip_body {
+        let req = Request::from_parts(parts, body);
+        let res = next.run(req).await;
+
+        let status = res.status();
+        let elapsed = started.elapsed();
+        println!(
+            "{} | {} | {} {} | {} ms | {}",
+            now,
+            from,
+            method,
+            path,
+            elapsed.as_millis(),
+            status.as_u16()
+        );
+        if !query.is_empty() {
+            println!("  query: {}", query);
+        }
+        if status.is_client_error() || status.is_server_error() {
+            println!("Ошибка: статус {}", status.as_u16());
+        }
+        return res;
+    }
+
+    // Read and clone body with limit
     let bytes: Bytes = match to_bytes(body, 64 * 1024).await { // 64KB limit
         Ok(b) => b,
         Err(_) => Bytes::new(),
