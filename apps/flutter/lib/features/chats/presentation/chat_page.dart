@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
@@ -50,6 +49,11 @@ class _ChatPageState extends State<ChatPage> {
   bool _loading = true;
   final List<ChatMessage> _messages = [];
 
+  ChatMessage? _replyTo;
+  ChatMessage? _editing;
+
+  String? _pressedMessageId;
+
   bool _selectionMode = false;
   final Set<String> _selectedMessageIds = {};
 
@@ -69,6 +73,23 @@ class _ChatPageState extends State<ChatPage> {
 
   RealtimeClient? _rt;
   StreamSubscription? _rtSub;
+
+  Future<void> _ensureWsReady(int chatId) async {
+    _rt ??= context.read<RealtimeClient>();
+    final rt = _rt!;
+    if (!rt.isConnected) {
+      await rt.connect();
+    }
+    rt.joinChat(chatId);
+  }
+
+  ChatMessage? _findMessageById(String? id) {
+    if (id == null || id.isEmpty) return null;
+    for (final m in _messages) {
+      if (m.id == id) return m;
+    }
+    return null;
+  }
 
   @override
   void initState() {
@@ -190,6 +211,7 @@ class _ChatPageState extends State<ChatPage> {
 
   Future<void> _ensureRealtime() async {
     final chatId = int.tryParse(widget.chat.id) ?? 0;
+    final repo = context.read<ChatsRepository>();
     _rt ??= context.read<RealtimeClient>();
     final rt = _rt!;
 
@@ -227,6 +249,67 @@ class _ChatPageState extends State<ChatPage> {
             });
           }
         }
+        return;
+      }
+
+      if (evt.type == 'message_updated') {
+        final evtChatId = evt.data['chat_id'];
+        if ('$evtChatId' != '$chatId') return;
+
+        final msg = evt.data['message'];
+        if (msg is! Map) return;
+
+        final m = (msg is Map<String, dynamic>)
+            ? msg
+            : Map<String, dynamic>.fromEntries(
+                msg.entries.map((e) => MapEntry(e.key.toString(), e.value)),
+              );
+
+        final decoded = await repo.decryptIncomingWsMessageFull(message: m);
+        final incomingId = '${m['id'] ?? ''}';
+        if (incomingId.isEmpty) return;
+
+        if (!mounted) return;
+        setState(() {
+          final idx = _messages.indexWhere((x) => x.id == incomingId);
+          if (idx < 0) return;
+          final old = _messages[idx];
+          _messages[idx] = ChatMessage(
+            id: old.id,
+            chatId: old.chatId,
+            isMe: old.isMe,
+            text: decoded.text,
+            attachments: old.attachments,
+            sentAt: old.sentAt,
+            replyToMessageId: old.replyToMessageId,
+          );
+
+          if (_editing?.id == incomingId) {
+            _editing = null;
+          }
+        });
+        return;
+      }
+
+      if (evt.type == 'message_deleted') {
+        final evtChatId = evt.data['chat_id'];
+        if ('$evtChatId' != '$chatId') return;
+
+        final mid = evt.data['message_id'];
+        final messageId = (mid is int) ? mid : int.tryParse('$mid') ?? 0;
+        if (messageId <= 0) return;
+
+        if (!mounted) return;
+        setState(() {
+          _messages.removeWhere((m) => m.id == messageId.toString());
+          _selectedMessageIds.removeWhere((id) => id == messageId.toString());
+          if (_selectedMessageIds.isEmpty) {
+            _selectionMode = false;
+          }
+          if (_replyTo?.id == messageId.toString()) {
+            _replyTo = null;
+          }
+        });
         return;
       }
 
@@ -268,7 +351,6 @@ class _ChatPageState extends State<ChatPage> {
         debugPrint('WS message encrypted preview: ${encPreview.substring(0, encPreview.length > 200 ? 200 : encPreview.length)}');
       }
 
-      final repo = context.read<ChatsRepository>();
       final decoded = await repo.decryptIncomingWsMessageFull(message: m);
 
       final senderId = m['sender_id'] is int
@@ -276,6 +358,11 @@ class _ChatPageState extends State<ChatPage> {
           : int.tryParse('${m['sender_id']}') ?? 0;
       final createdAtStr = (m['created_at'] as String?) ?? '';
       final createdAt = DateTime.tryParse(createdAtStr) ?? DateTime.now();
+
+      final replyDyn = m['reply_to_message_id'] ?? m['replyToMessageId'];
+      final replyId = (replyDyn is int)
+          ? replyDyn
+          : int.tryParse('${replyDyn ?? ''}');
 
       final myId = _myUserId ?? 0;
       final isMe = (myId > 0) ? senderId == myId : senderId != peerId;
@@ -305,6 +392,7 @@ class _ChatPageState extends State<ChatPage> {
             text: decoded.text,
             attachments: decoded.attachments,
             sentAt: createdAt,
+            replyToMessageId: (replyId != null && replyId > 0) ? replyId.toString() : null,
           ),
         );
       });
@@ -328,14 +416,71 @@ class _ChatPageState extends State<ChatPage> {
     if (text.isEmpty && !hasAttachments) return;
     if (peerId <= 0) return;
 
+    final repo = context.read<ChatsRepository>();
+    _rt ??= context.read<RealtimeClient>();
+    final rt = _rt!;
+
     _typingDebounce?.cancel();
     _sendTyping(false);
 
     final pendingCopy = List<_PendingAttachment>.from(_pending);
+
+    final replyTo = _replyTo;
+    final editing = _editing;
     setState(() {
       _pending.clear();
+      _replyTo = null;
+      _editing = null;
     });
     _controller.clear();
+
+    if (editing != null) {
+      // редактирование: поддерживаем только текст без файлов
+      if (hasAttachments || pendingCopy.isNotEmpty || editing.attachments.isNotEmpty) {
+        return;
+      }
+
+      // optimistic replace
+      setState(() {
+        final idx = _messages.indexWhere((m) => m.id == editing.id);
+        if (idx >= 0) {
+          final old = _messages[idx];
+          _messages[idx] = ChatMessage(
+            id: old.id,
+            chatId: old.chatId,
+            isMe: old.isMe,
+            text: text,
+            attachments: old.attachments,
+            sentAt: old.sentAt,
+            replyToMessageId: old.replyToMessageId,
+          );
+        }
+      });
+
+      final payload = await repo.buildEncryptedWsMessage(
+        chatId: chatId,
+        peerId: peerId,
+        plaintext: text,
+      );
+
+      if (!rt.isConnected) {
+        await rt.connect();
+      }
+      rt.joinChat(chatId);
+
+      final mid = int.tryParse(editing.id) ?? 0;
+      if (mid > 0) {
+        rt.editMessage(
+          chatId: chatId,
+          messageId: mid,
+          message: payload['message'] as String,
+          messageType: payload['message_type'] as String?,
+          envelopes: payload['envelopes'] as Map<String, dynamic>?,
+          metadata: payload['metadata'] as List<dynamic>?,
+        );
+      }
+      return;
+    }
 
     List<ChatAttachment> optimisticAtt = const [];
     if (pendingCopy.isNotEmpty) {
@@ -370,13 +515,13 @@ class _ChatPageState extends State<ChatPage> {
           text: text,
           attachments: optimisticAtt,
           sentAt: DateTime.now(),
+          replyToMessageId: replyTo?.id,
         ),
       );
     });
 
     _scheduleScrollToBottom(animated: true);
 
-    final repo = context.read<ChatsRepository>();
     final payload = hasAttachments
         ? await repo.buildEncryptedWsMediaMessage(
             chatId: chatId,
@@ -398,12 +543,10 @@ class _ChatPageState extends State<ChatPage> {
             plaintext: text,
           );
 
-    _rt ??= context.read<RealtimeClient>();
-    final rt = _rt!;
     if (!rt.isConnected) {
       await rt.connect();
-      rt.joinChat(chatId);
     }
+    rt.joinChat(chatId);
 
     rt.sendMessage(
       chatId: chatId,
@@ -411,6 +554,7 @@ class _ChatPageState extends State<ChatPage> {
       messageType: payload['message_type'] as String?,
       envelopes: payload['envelopes'] as Map<String, dynamic>?,
       metadata: payload['metadata'] as List<dynamic>?,
+      replyToMessageId: replyTo == null ? null : int.tryParse(replyTo.id),
     );
   }
 
@@ -716,7 +860,7 @@ class _ChatPageState extends State<ChatPage> {
                           _Avatar(
                             url: widget.chat.user.avatarUrl,
                             name: widget.chat.user.name,
-                            isOnline: widget.chat.user.isOnline,
+                            isOnline: _peerOnline,
                             size: 36,
                           ),
                           const SizedBox(width: 10),
@@ -779,7 +923,9 @@ class _ChatPageState extends State<ChatPage> {
                 onPressed: _selectedMessageIds.isEmpty
                     ? null
                     : () {
-                        _deleteByIds(Set<String>.from(_selectedMessageIds));
+                        final ids = Set<String>.from(_selectedMessageIds);
+                        _deleteByIds(ids);
+                        _deleteRemote(ids);
                       },
               ),
             ] else
@@ -822,13 +968,89 @@ class _ChatPageState extends State<ChatPage> {
               return Padding(
                 padding: const EdgeInsets.fromLTRB(
                   horizontalPadding,
-                  0,
+                  10,
                   horizontalPadding,
-                  verticalPadding,
+                  10,
                 ),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    if (_editing != null)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: GlassSurface(
+                          borderRadius: 16,
+                          blurSigma: 10,
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  'Редактирование',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: theme.colorScheme.onSurface.withOpacity(0.9),
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              GestureDetector(
+                                onTap: () {
+                                  setState(() {
+                                    _editing = null;
+                                  });
+                                  _controller.clear();
+                                },
+                                child: Icon(
+                                  Icons.close,
+                                  size: 18,
+                                  color: theme.colorScheme.onSurface.withOpacity(0.8),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    if (_replyTo != null)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: GlassSurface(
+                          borderRadius: 16,
+                          blurSigma: 12,
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  _replyTo!.text,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: theme.colorScheme.onSurface.withOpacity(0.9),
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              GestureDetector(
+                                onTap: () {
+                                  setState(() {
+                                    _replyTo = null;
+                                  });
+                                },
+                                child: Icon(
+                                  Icons.close,
+                                  size: 18,
+                                  color: theme.colorScheme.onSurface.withOpacity(0.7),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                     if (_pending.isNotEmpty)
                       Padding(
                         padding: const EdgeInsets.only(bottom: 10),
@@ -988,11 +1210,37 @@ class _ChatPageState extends State<ChatPage> {
                           separatorBuilder: (_, __) => const SizedBox(height: 10),
                           itemBuilder: (context, index) {
                             final msg = messages[index];
+                            final replied = _findMessageById(msg.replyToMessageId);
+                            final replyPreview = replied?.text.trim();
+                            final selected = _selectionMode && _selectedMessageIds.contains(msg.id);
+                            final pressed = _pressedMessageId == msg.id;
                             return Align(
                               alignment: msg.isMe
                                   ? Alignment.centerRight
                                   : Alignment.centerLeft,
                               child: GestureDetector(
+                                onTapDown: (_) {
+                                  if (!mounted) return;
+                                  setState(() {
+                                    _pressedMessageId = msg.id;
+                                  });
+                                },
+                                onTapCancel: () {
+                                  if (!mounted) return;
+                                  setState(() {
+                                    if (_pressedMessageId == msg.id) {
+                                      _pressedMessageId = null;
+                                    }
+                                  });
+                                },
+                                onTapUp: (_) {
+                                  if (!mounted) return;
+                                  setState(() {
+                                    if (_pressedMessageId == msg.id) {
+                                      _pressedMessageId = null;
+                                    }
+                                  });
+                                },
                                 onTap: () {
                                   if (_selectionMode) {
                                     _toggleSelected(msg);
@@ -1000,30 +1248,104 @@ class _ChatPageState extends State<ChatPage> {
                                 },
                                 onLongPressStart: (d) async {
                                   HapticFeedback.selectionClick();
+                                  if (mounted) {
+                                    setState(() {
+                                      _pressedMessageId = msg.id;
+                                    });
+                                  }
                                   if (_selectionMode) {
                                     _toggleSelected(msg);
                                   } else {
                                     await _showMessageContextMenu(msg, d.globalPosition);
                                   }
+
+                                  if (mounted) {
+                                    setState(() {
+                                      if (_pressedMessageId == msg.id) {
+                                        _pressedMessageId = null;
+                                      }
+                                    });
+                                  }
                                 },
-                                child: AnimatedContainer(
-                                  duration: const Duration(milliseconds: 140),
-                                  decoration: BoxDecoration(
-                                    borderRadius: BorderRadius.circular(16),
-                                    border: _selectionMode && _selectedMessageIds.contains(msg.id)
-                                        ? Border.all(
-                                            color: theme.colorScheme.primary.withOpacity(0.8),
-                                            width: 1.2,
-                                          )
-                                        : null,
-                                  ),
-                                  child: _MessageBubble(
-                                    text: msg.text,
-                                    attachments: msg.attachments,
-                                    timeLabel: _formatTime(msg.sentAt),
-                                    isMe: msg.isMe,
-                                    isDark: isDark,
-                                    onOpenAttachment: (a) => _openAttachmentSheet(a),
+                                onLongPressEnd: (_) {
+                                  if (!mounted) return;
+                                  setState(() {
+                                    if (_pressedMessageId == msg.id) {
+                                      _pressedMessageId = null;
+                                    }
+                                  });
+                                },
+                                child: AnimatedScale(
+                                  scale: pressed ? 0.985 : (selected ? 1.3 : 1.0),
+                                  duration: const Duration(milliseconds: 110),
+                                  curve: Curves.easeOut,
+                                  child: Stack(
+                                    clipBehavior: Clip.none,
+                                    children: [
+                                      AnimatedContainer(
+                                        duration: const Duration(milliseconds: 110),
+                                        curve: Curves.easeOut,
+                                        decoration: BoxDecoration(
+                                          borderRadius: BorderRadius.circular(16),
+                                          color: pressed
+                                              ? theme.colorScheme.onSurface.withOpacity(isDark ? 0.10 : 0.06)
+                                              : (selected
+                                                  ? theme.colorScheme.primary.withOpacity(isDark ? 0.12 : 0.10)
+                                                  : Colors.transparent),
+                                          border: selected
+                                              ? Border.all(
+                                                  color: theme.colorScheme.primary.withOpacity(0.8),
+                                                  width: 1.2,
+                                                )
+                                              : null,
+                                        ),
+                                        child: Padding(
+                                          padding: const EdgeInsets.all(2),
+                                          child: _MessageBubble(
+                                            replyPreview: (replyPreview != null && replyPreview.isNotEmpty)
+                                                ? replyPreview
+                                                : null,
+                                            text: msg.text,
+                                            attachments: msg.attachments,
+                                            timeLabel: _formatTime(msg.sentAt),
+                                            isMe: msg.isMe,
+                                            isDark: isDark,
+                                            onOpenAttachment: (a) => _openAttachmentSheet(a),
+                                          ),
+                                        ),
+                                      ),
+                                      Positioned(
+                                        right: -6,
+                                        top: -6,
+                                        child: AnimatedOpacity(
+                                          opacity: selected ? 1 : 0,
+                                          duration: const Duration(milliseconds: 120),
+                                          curve: Curves.easeOut,
+                                          child: AnimatedScale(
+                                            scale: selected ? 1 : 0.9,
+                                            duration: const Duration(milliseconds: 120),
+                                            curve: Curves.easeOut,
+                                            child: Container(
+                                              width: 20,
+                                              height: 20,
+                                              decoration: BoxDecoration(
+                                                color: theme.colorScheme.primary,
+                                                shape: BoxShape.circle,
+                                                border: Border.all(
+                                                  color: theme.colorScheme.surface.withOpacity(0.9),
+                                                  width: 1,
+                                                ),
+                                              ),
+                                              child: Icon(
+                                                Icons.check,
+                                                size: 14,
+                                                color: theme.colorScheme.onPrimary,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ),
                               ),
@@ -1129,14 +1451,109 @@ class _ChatPageState extends State<ChatPage> {
       if (_selectedMessageIds.isEmpty) {
         _selectionMode = false;
       }
+      if (_replyTo != null && ids.contains(_replyTo!.id)) {
+        _replyTo = null;
+      }
     });
+  }
+
+  void _deleteRemote(Set<String> ids) {
+    final chatId = int.tryParse(widget.chat.id) ?? 0;
+    if (chatId <= 0) return;
+    () async {
+      await _ensureWsReady(chatId);
+      final rt = _rt!;
+      for (final id in ids) {
+        final mid = int.tryParse(id);
+        if (mid == null || mid <= 0) continue;
+        rt.deleteMessage(chatId: chatId, messageId: mid);
+      }
+    }();
   }
 
   Future<void> _forwardSelected() async {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Пересылка: выбери чат (пока не реализовано)')),
+    final chatId = int.tryParse(widget.chat.id) ?? 0;
+    if (chatId <= 0) return;
+
+    final repo = context.read<ChatsRepository>();
+
+    await _ensureWsReady(chatId);
+
+    final chats = await repo.fetchChats();
+    if (!mounted) return;
+
+    final selectedChat = await showModalBottomSheet<ChatPreview>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) {
+        return GlassSurface(
+          child: SafeArea(
+            top: false,
+            child: SizedBox(
+              height: MediaQuery.of(ctx).size.height * 0.55,
+              child: ListView.builder(
+                itemCount: chats.length,
+                itemBuilder: (c, i) {
+                  final it = chats[i];
+                  return ListTile(
+                    title: Text(it.user.name),
+                    subtitle: Text('chat ${it.id}'),
+                    onTap: () => Navigator.of(ctx).pop(it),
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+      },
     );
+
+    if (!mounted) return;
+    if (selectedChat == null) return;
+
+    final toChatId = int.tryParse(selectedChat.id) ?? 0;
+    final toPeerId = selectedChat.peerId ?? 0;
+    if (toChatId <= 0 || toPeerId <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Пересылка поддерживается только для private чатов')),
+      );
+      return;
+    }
+
+    _rt ??= context.read<RealtimeClient>();
+    final rt = _rt!;
+
+    final ids = List<String>.from(_selectedMessageIds);
+    ids.sort((a, b) => a.compareTo(b));
+
+    for (final id in ids) {
+      final mid = int.tryParse(id);
+      if (mid == null || mid <= 0) continue;
+      final msg = _messages.where((m) => m.id == id).cast<ChatMessage?>().firstWhere(
+            (m) => m != null,
+            orElse: () => null,
+          );
+      if (msg == null) continue;
+      if (msg.attachments.isNotEmpty) continue;
+      final payload = await repo.buildEncryptedWsMessage(
+        chatId: toChatId,
+        peerId: toPeerId,
+        plaintext: msg.text,
+      );
+      rt.forwardMessage(
+        fromChatId: chatId,
+        messageId: mid,
+        toChatId: toChatId,
+        message: payload['message'] as String,
+        messageType: payload['message_type'] as String?,
+        envelopes: payload['envelopes'] as Map<String, dynamic>?,
+        metadata: payload['metadata'] as List<dynamic>?,
+      );
+    }
+
+    _exitSelectionMode();
   }
 
   Future<void> _showMessageContextMenu(ChatMessage msg, Offset globalPosition) async {
@@ -1150,38 +1567,44 @@ class _ChatPageState extends State<ChatPage> {
       );
     }
 
-    Future<void> doShare() async {
-      try {
-        final files = msg.attachments
-            .where((a) => a.localPath.isNotEmpty)
-            .map((a) => XFile(a.localPath, name: a.filename))
-            .toList();
+    Future<void> doForward() async {
+      _enterSelectionMode(initial: msg);
+      await _forwardSelected();
+    }
 
-        if (files.isNotEmpty) {
-          await Share.shareXFiles(
-            files,
-            text: msg.text.trim().isEmpty ? null : msg.text.trim(),
-          );
-        } else {
-          final t = msg.text.trim();
-          if (t.isEmpty) return;
-          await Share.share(t);
-        }
-      } catch (e) {
-        debugPrint('Failed to share message: $e');
-      }
+    void doEdit() {
+      setState(() {
+        _editing = msg;
+        _replyTo = null;
+      });
+      _controller.text = msg.text;
+      _controller.selection = TextSelection.fromPosition(
+        TextPosition(offset: _controller.text.length),
+      );
+      _focusNode.requestFocus();
     }
 
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
     final size = overlay.size;
 
+    final media = MediaQuery.of(context);
+    final safe = media.padding;
+
     const menuWidth = 220.0;
     const itemHeight = 44.0;
-    final itemCount = 4;
-    final menuHeight = itemHeight * itemCount;
 
-    final left = (globalPosition.dx).clamp(12.0, size.width - menuWidth - 12.0);
-    final top = (globalPosition.dy).clamp(12.0, size.height - menuHeight - 12.0);
+    final canEdit = msg.isMe && msg.attachments.isEmpty;
+    final itemCount = canEdit ? 6 : 5;
+    final menuHeight = itemHeight * itemCount + 16;
+
+    final minLeft = 12.0 + safe.left;
+    final maxLeft = size.width - menuWidth - 12.0 - safe.right;
+
+    final minTop = 12.0 + safe.top;
+    final maxTop = size.height - menuHeight - 12.0 - safe.bottom;
+
+    final left = (globalPosition.dx).clamp(minLeft, maxLeft < minLeft ? minLeft : maxLeft);
+    final top = (globalPosition.dy).clamp(minTop, maxTop < minTop ? minTop : maxTop);
 
     final selected = await showGeneralDialog<String>(
       context: context,
@@ -1210,6 +1633,12 @@ class _ChatPageState extends State<ChatPage> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      if (canEdit)
+                        _ContextMenuItem(
+                          icon: HugeIcon(icon: HugeIcons.strokeRoundedEdit02),
+                          label: 'Редактировать',
+                          onTap: () => Navigator.of(ctx).pop('edit'),
+                        ),
                       _ContextMenuItem(
                         icon: HugeIcon(icon: HugeIcons.strokeRoundedArrowTurnBackward),
                         label: 'Ответить',
@@ -1222,7 +1651,7 @@ class _ChatPageState extends State<ChatPage> {
                       ),
                       _ContextMenuItem(
                         icon: HugeIcon(icon: HugeIcons.strokeRoundedShare08),
-                        label: msg.attachments.isNotEmpty ? 'Переслать (с файлами)' : 'Переслать',
+                        label: msg.attachments.isNotEmpty ? 'Переслать (без файлов)' : 'Переслать',
                         onTap: () => Navigator.of(ctx).pop('share'),
                       ),
                       _ContextMenuItem(
@@ -1248,17 +1677,27 @@ class _ChatPageState extends State<ChatPage> {
 
     if (!mounted) return;
     switch (selected) {
+      case 'reply':
+        setState(() {
+          _replyTo = msg;
+        });
+        _focusNode.requestFocus();
+        break;
+      case 'edit':
+        doEdit();
+        break;
       case 'copy':
         await doCopy();
         break;
       case 'share':
-        await doShare();
+        await doForward();
         break;
       case 'select':
         _enterSelectionMode(initial: msg);
         break;
       case 'delete':
         _deleteByIds({msg.id});
+        _deleteRemote({msg.id});
         break;
       default:
         break;
@@ -1533,6 +1972,7 @@ class _AttachmentViewerSheetState extends State<_AttachmentViewerSheet> {
 }
 
 class _MessageBubble extends StatelessWidget {
+  final String? replyPreview;
   final String text;
   final List<ChatAttachment> attachments;
   final String timeLabel;
@@ -1541,6 +1981,7 @@ class _MessageBubble extends StatelessWidget {
   final void Function(ChatAttachment a)? onOpenAttachment;
 
   const _MessageBubble({
+    this.replyPreview,
     required this.text,
     this.attachments = const [],
     required this.timeLabel,
@@ -1575,6 +2016,30 @@ class _MessageBubble extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
+              if (replyPreview != null && replyPreview!.trim().isNotEmpty) ...[
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.onSurface.withOpacity(0.06),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: theme.colorScheme.onSurface.withOpacity(0.08),
+                    ),
+                  ),
+                  child: Text(
+                    replyPreview!.trim(),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: theme.colorScheme.onSurface.withOpacity(0.75),
+                      fontSize: 12,
+                      height: 1.25,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 6),
+              ],
               for (final a in attachments) ...[
                 if (a.isImage)
                   Material(

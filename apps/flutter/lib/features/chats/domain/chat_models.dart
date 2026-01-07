@@ -19,6 +19,7 @@ class ChatMessage {
   final String text;
   final List<ChatAttachment> attachments;
   final DateTime sentAt;
+  final String? replyToMessageId;
 
   const ChatMessage({
     required this.id,
@@ -27,6 +28,7 @@ class ChatMessage {
     required this.text,
     this.attachments = const [],
     required this.sentAt,
+    this.replyToMessageId,
   });
 }
 

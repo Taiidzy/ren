@@ -321,11 +321,18 @@ async fn get_messages(
             COALESCE(message_type, 'text') AS message_type,
             created_at,
             edited_at,
+            reply_to_message_id::INT8 AS reply_to_message_id,
+            forwarded_from_message_id::INT8 AS forwarded_from_message_id,
+            forwarded_from_chat_id::INT8 AS forwarded_from_chat_id,
+            forwarded_from_sender_id::INT8 AS forwarded_from_sender_id,
+            deleted_at,
+            deleted_by::INT8 AS deleted_by,
             COALESCE(is_read, false) AS is_read,
             envelopes,
             metadata
         FROM messages
         WHERE chat_id = $1
+          AND deleted_at IS NULL
         ORDER BY created_at ASC
         "#,
     )
@@ -351,6 +358,15 @@ async fn get_messages(
                 message_type: row.try_get("message_type").unwrap_or_else(|_| "text".to_string()),
                 created_at: row.try_get::<chrono::DateTime<chrono::Utc>,_>("created_at").map(|t| t.to_rfc3339()).unwrap_or_default(),
                 edited_at: row.try_get::<chrono::DateTime<chrono::Utc>,_>("edited_at").ok().map(|t| t.to_rfc3339()),
+                reply_to_message_id: row.try_get("reply_to_message_id").ok(),
+                forwarded_from_message_id: row.try_get("forwarded_from_message_id").ok(),
+                forwarded_from_chat_id: row.try_get("forwarded_from_chat_id").ok(),
+                forwarded_from_sender_id: row.try_get("forwarded_from_sender_id").ok(),
+                deleted_at: row
+                    .try_get::<chrono::DateTime<chrono::Utc>,_>("deleted_at")
+                    .ok()
+                    .map(|t| t.to_rfc3339()),
+                deleted_by: row.try_get("deleted_by").ok(),
                 is_read: row.try_get("is_read").unwrap_or(false),
                 has_files,
                 metadata: metadata_vec,

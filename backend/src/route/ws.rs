@@ -40,6 +40,28 @@ enum ClientEvent {
         message_type: Option<String>, // 'text' | 'file' | 'image' и т.д.
         envelopes: Option<Value>,      // JSON объект с конвертами для каждого участника
         metadata: Option<Vec<FileMetadata>>, // метаданные файлов
+        reply_to_message_id: Option<i64>,
+    },
+    edit_message {
+        chat_id: i32,
+        message_id: i64,
+        message: String,
+        message_type: Option<String>,
+        envelopes: Option<Value>,
+        metadata: Option<Vec<FileMetadata>>,
+    },
+    delete_message {
+        chat_id: i32,
+        message_id: i64,
+    },
+    forward_message {
+        from_chat_id: i32,
+        message_id: i64,
+        to_chat_id: i32,
+        message: String,
+        message_type: Option<String>,
+        envelopes: Option<Value>,
+        metadata: Option<Vec<FileMetadata>>,
     },
     typing { chat_id: i32, is_typing: bool },
 }
@@ -50,6 +72,8 @@ enum ServerEvent<'a> {
     ok,
     error { error: &'a str },
     message_new { chat_id: i32, message: OutMessage },
+    message_updated { chat_id: i32, message: OutMessage },
+    message_deleted { chat_id: i32, message_id: i64, deleted_at: String, deleted_by: i64 },
     typing { chat_id: i32, user_id: i32, is_typing: bool },
     presence { user_id: i32, status: &'a str }, // online/offline (глобальная)
 }
@@ -192,7 +216,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                             }
                         }
                     }
-                    Ok(ClientEvent::send_message { chat_id, message, message_type, envelopes, metadata }) => {
+                    Ok(ClientEvent::send_message { chat_id, message, message_type, envelopes, metadata, reply_to_message_id }) => {
                         if !subs.joined.contains(&chat_id) {
                             // safety: проверка членства
                             if let Err(e) = ensure_member(&state, chat_id, user_id).await {
@@ -213,8 +237,8 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                         // Сохраняем сообщение в БД
                         let row = match sqlx::query(
                             r#"
-                            INSERT INTO messages (chat_id, sender_id, message, message_type, envelopes, metadata)
-                            VALUES ($1, $2, $3, $4, $5, $6)
+                            INSERT INTO messages (chat_id, sender_id, message, message_type, envelopes, metadata, reply_to_message_id)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7)
                             RETURNING
                                 id::INT8 AS id,
                                 chat_id::INT8 AS chat_id,
@@ -223,6 +247,12 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                                 message_type,
                                 created_at,
                                 edited_at,
+                                reply_to_message_id::INT8 AS reply_to_message_id,
+                                forwarded_from_message_id::INT8 AS forwarded_from_message_id,
+                                forwarded_from_chat_id::INT8 AS forwarded_from_chat_id,
+                                forwarded_from_sender_id::INT8 AS forwarded_from_sender_id,
+                                deleted_at,
+                                deleted_by::INT8 AS deleted_by,
                                 is_read,
                                 envelopes,
                                 metadata
@@ -234,6 +264,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                         .bind(&msg_type)
                         .bind(&envelopes_json)
                         .bind(&metadata_json)
+                        .bind(reply_to_message_id.map(|v| v as i32))
                         .fetch_one(&state.pool)
                         .await {
                             Ok(r) => r,
@@ -265,6 +296,15 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                             edited_at: row.try_get::<chrono::DateTime<chrono::Utc>, _>("edited_at")
                                 .ok()
                                 .map(|t| t.to_rfc3339()),
+                            reply_to_message_id: row.try_get("reply_to_message_id").ok(),
+                            forwarded_from_message_id: row.try_get("forwarded_from_message_id").ok(),
+                            forwarded_from_chat_id: row.try_get("forwarded_from_chat_id").ok(),
+                            forwarded_from_sender_id: row.try_get("forwarded_from_sender_id").ok(),
+                            deleted_at: row
+                                .try_get::<chrono::DateTime<chrono::Utc>, _>("deleted_at")
+                                .ok()
+                                .map(|t| t.to_rfc3339()),
+                            deleted_by: row.try_get("deleted_by").ok(),
                             is_read: row.try_get("is_read").unwrap_or(false),
                             has_files,
                             metadata: metadata_vec,
@@ -273,6 +313,387 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                         };
                         if let Ok(evt) = serde_json::to_string(&ServerEvent::message_new { chat_id, message: msg }) {
                             publish(&state, chat_id, evt);
+                        }
+                    }
+                    Ok(ClientEvent::edit_message { chat_id, message_id, message, message_type, envelopes, metadata }) => {
+                        if !subs.joined.contains(&chat_id) {
+                            if let Err(e) = ensure_member(&state, chat_id, user_id).await {
+                                let err_msg = serde_json::to_string(&ServerEvent::error { error: &e.1 })
+                                    .unwrap_or_else(|_| format!("{{\"type\":\"error\",\"error\":{}}}", serde_json::to_string(&e.1).unwrap_or_else(|_| "\"Ошибка\"".to_string())));
+                                let _ = out_tx.send(WsMessage::Text(err_msg));
+                                continue;
+                            }
+                        }
+
+                        // Только автор может редактировать. Нельзя редактировать удалённое.
+                        let envelopes_value = envelopes.clone();
+                        let metadata_json = match metadata {
+                            Some(ref v) => serde_json::to_value(v).ok(),
+                            None => None,
+                        };
+                        let has_files = metadata.as_ref().map(|v| !v.is_empty()).unwrap_or(false);
+
+                        let updated = sqlx::query(
+                            r#"
+                            UPDATE messages
+                            SET message = $1,
+                                message_type = $2,
+                                envelopes = $3,
+                                metadata = $4,
+                                edited_at = now()
+                            WHERE id = $5
+                              AND chat_id = $6
+                              AND sender_id = $7
+                              AND deleted_at IS NULL
+                            RETURNING
+                                id::INT8 AS id,
+                                chat_id::INT8 AS chat_id,
+                                sender_id::INT8 AS sender_id,
+                                message,
+                                message_type,
+                                created_at,
+                                edited_at,
+                                reply_to_message_id::INT8 AS reply_to_message_id,
+                                forwarded_from_message_id::INT8 AS forwarded_from_message_id,
+                                forwarded_from_chat_id::INT8 AS forwarded_from_chat_id,
+                                forwarded_from_sender_id::INT8 AS forwarded_from_sender_id,
+                                deleted_at,
+                                deleted_by::INT8 AS deleted_by,
+                                is_read,
+                                envelopes,
+                                metadata
+                            "#,
+                        )
+                        .bind(&message)
+                        .bind(&message_type)
+                        .bind(&envelopes_value)
+                        .bind(&metadata_json)
+                        .bind(message_id)
+                        .bind(chat_id)
+                        .bind(user_id)
+                        .fetch_optional(&state.pool)
+                        .await;
+
+                        let row = match updated {
+                            Ok(Some(r)) => r,
+                            Ok(None) => {
+                                let err_msg = serde_json::to_string(&ServerEvent::error { error: "Сообщение не найдено" })
+                                    .unwrap_or_else(|_| "{\"type\":\"error\",\"error\":\"Сообщение не найдено\"}".to_string());
+                                let _ = out_tx.send(WsMessage::Text(err_msg));
+                                continue;
+                            }
+                            Err(e) => {
+                                let err_txt = format!("Ошибка БД: {}", e);
+                                let err_msg = serde_json::to_string(&ServerEvent::error { error: &err_txt })
+                                    .unwrap_or_else(|_| format!("{{\"type\":\"error\",\"error\":{}}}", serde_json::to_string(&err_txt).unwrap_or_else(|_| "\"Ошибка\"".to_string())));
+                                let _ = out_tx.send(WsMessage::Text(err_msg));
+                                continue;
+                            }
+                        };
+
+                        let envelopes_value: Option<Value> = row.try_get("envelopes").ok().flatten();
+                        let metadata_value: Option<Value> = row.try_get("metadata").ok().flatten();
+                        let metadata_vec: Option<Vec<FileMetadata>> = metadata_value
+                            .and_then(|v| serde_json::from_value(v).ok());
+
+                        let msg = OutMessage {
+                            id: row.try_get("id").unwrap_or_default(),
+                            chat_id: row.try_get("chat_id").unwrap_or_default(),
+                            sender_id: row.try_get("sender_id").unwrap_or_default(),
+                            message: row.try_get("message").unwrap_or_default(),
+                            message_type: row.try_get("message_type").unwrap_or_else(|_| "text".to_string()),
+                            created_at: row
+                                .try_get::<chrono::DateTime<chrono::Utc>, _>("created_at")
+                                .map(|t| t.to_rfc3339())
+                                .unwrap_or_default(),
+                            edited_at: row
+                                .try_get::<chrono::DateTime<chrono::Utc>, _>("edited_at")
+                                .ok()
+                                .map(|t| t.to_rfc3339()),
+                            is_read: row.try_get("is_read").unwrap_or(false),
+                            reply_to_message_id: row.try_get("reply_to_message_id").ok(),
+                            forwarded_from_message_id: row.try_get("forwarded_from_message_id").ok(),
+                            forwarded_from_chat_id: row.try_get("forwarded_from_chat_id").ok(),
+                            forwarded_from_sender_id: row.try_get("forwarded_from_sender_id").ok(),
+                            deleted_at: row
+                                .try_get::<chrono::DateTime<chrono::Utc>, _>("deleted_at")
+                                .ok()
+                                .map(|t| t.to_rfc3339()),
+                            deleted_by: row.try_get("deleted_by").ok(),
+                            has_files: Some(has_files),
+                            metadata: metadata_vec,
+                            envelopes: envelopes_value,
+                            status: Some("sent".to_string()),
+                        };
+
+                        let evt = match serde_json::to_string(&ServerEvent::message_updated { chat_id, message: msg }) {
+                            Ok(s) => s,
+                            Err(_) => {
+                                let err_msg = serde_json::to_string(&ServerEvent::error { error: "Ошибка сериализации" })
+                                    .unwrap_or_else(|_| "{\"type\":\"error\",\"error\":\"Ошибка сериализации\"}".to_string());
+                                let _ = out_tx.send(WsMessage::Text(err_msg));
+                                continue;
+                            }
+                        };
+
+                        publish(&state, chat_id, evt.clone());
+
+                        let participants = sqlx::query(
+                            r#"
+                            SELECT user_id
+                            FROM chat_participants
+                            WHERE chat_id = $1
+                            "#,
+                        )
+                        .bind(chat_id)
+                        .fetch_all(&state.pool)
+                        .await;
+
+                        if let Ok(rows) = participants {
+                            for r in rows {
+                                let uid: i32 = r.try_get("user_id").unwrap_or_default();
+                                if uid <= 0 { continue; }
+                                if state.user_hub.get(&uid).is_none() {
+                                    let (txc, _rx) = broadcast::channel::<String>(200);
+                                    state.user_hub.insert(uid, txc);
+                                }
+                                publish_user(&state, uid, evt.clone());
+                            }
+                        }
+                    }
+                    Ok(ClientEvent::delete_message { chat_id, message_id }) => {
+                        if !subs.joined.contains(&chat_id) {
+                            if let Err(e) = ensure_member(&state, chat_id, user_id).await {
+                                let err_msg = serde_json::to_string(&ServerEvent::error { error: &e.1 })
+                                    .unwrap_or_else(|_| format!("{{\"type\":\"error\",\"error\":{}}}", serde_json::to_string(&e.1).unwrap_or_else(|_| "\"Ошибка\"".to_string())));
+                                let _ = out_tx.send(WsMessage::Text(err_msg));
+                                continue;
+                            }
+                        }
+
+                        let updated = sqlx::query(
+                            r#"
+                            UPDATE messages
+                            SET deleted_at = now(), deleted_by = $3
+                            WHERE id = $1 AND chat_id = $2
+                            RETURNING deleted_at
+                            "#,
+                        )
+                        .bind(message_id as i32)
+                        .bind(chat_id)
+                        .bind(user_id)
+                        .fetch_optional(&state.pool)
+                        .await;
+
+                        let row = match updated {
+                            Ok(r) => r,
+                            Err(e) => {
+                                let err_txt = format!("Ошибка БД: {}", e);
+                                let err_msg = serde_json::to_string(&ServerEvent::error { error: &err_txt })
+                                    .unwrap_or_else(|_| format!("{{\"type\":\"error\",\"error\":{}}}", serde_json::to_string(&err_txt).unwrap_or_else(|_| "\"Ошибка\"".to_string())));
+                                let _ = out_tx.send(WsMessage::Text(err_msg));
+                                continue;
+                            }
+                        };
+
+                        let Some(row) = row else {
+                            let err_msg = serde_json::to_string(&ServerEvent::error { error: "Сообщение не найдено" })
+                                .unwrap_or_else(|_| "{\"type\":\"error\",\"error\":\"Сообщение не найдено\"}".to_string());
+                            let _ = out_tx.send(WsMessage::Text(err_msg));
+                            continue;
+                        };
+
+                        let deleted_at = row
+                            .try_get::<chrono::DateTime<chrono::Utc>, _>("deleted_at")
+                            .map(|t| t.to_rfc3339())
+                            .unwrap_or_default();
+
+                        let evt = match serde_json::to_string(&ServerEvent::message_deleted {
+                            chat_id,
+                            message_id,
+                            deleted_at,
+                            deleted_by: user_id as i64,
+                        }) {
+                            Ok(s) => s,
+                            Err(_) => {
+                                let err_msg = serde_json::to_string(&ServerEvent::error { error: "Ошибка сериализации" })
+                                    .unwrap_or_else(|_| "{\"type\":\"error\",\"error\":\"Ошибка сериализации\"}".to_string());
+                                let _ = out_tx.send(WsMessage::Text(err_msg));
+                                continue;
+                            }
+                        };
+
+                        // 1) realtime для тех, кто подписан на чат
+                        publish(&state, chat_id, evt.clone());
+
+                        // 2) realtime всем участникам чата через личные каналы (на случай отсутствия join_chat)
+                        let participants = sqlx::query(
+                            r#"
+                            SELECT user_id
+                            FROM chat_participants
+                            WHERE chat_id = $1
+                            "#,
+                        )
+                        .bind(chat_id)
+                        .fetch_all(&state.pool)
+                        .await;
+
+                        if let Ok(rows) = participants {
+                            for r in rows {
+                                let uid: i32 = r.try_get("user_id").unwrap_or_default();
+                                if uid <= 0 { continue; }
+                                if state.user_hub.get(&uid).is_none() {
+                                    let (txc, _rx) = broadcast::channel::<String>(200);
+                                    state.user_hub.insert(uid, txc);
+                                }
+                                publish_user(&state, uid, evt.clone());
+                            }
+                        }
+                    }
+                    Ok(ClientEvent::forward_message { from_chat_id, message_id, to_chat_id, message, message_type, envelopes, metadata }) => {
+                        // Должен быть участником и исходного, и целевого чата
+                        if let Err(e) = ensure_member(&state, from_chat_id, user_id).await {
+                            let err_msg = serde_json::to_string(&ServerEvent::error { error: &e.1 })
+                                .unwrap_or_else(|_| format!("{{\"type\":\"error\",\"error\":{}}}", serde_json::to_string(&e.1).unwrap_or_else(|_| "\"Ошибка\"".to_string())));
+                            let _ = out_tx.send(WsMessage::Text(err_msg));
+                            continue;
+                        }
+                        if let Err(e) = ensure_member(&state, to_chat_id, user_id).await {
+                            let err_msg = serde_json::to_string(&ServerEvent::error { error: &e.1 })
+                                .unwrap_or_else(|_| format!("{{\"type\":\"error\",\"error\":{}}}", serde_json::to_string(&e.1).unwrap_or_else(|_| "\"Ошибка\"".to_string())));
+                            let _ = out_tx.send(WsMessage::Text(err_msg));
+                            continue;
+                        }
+
+                        // Получаем автора исходного сообщения
+                        let src = sqlx::query(
+                            r#"
+                            SELECT sender_id::INT8 AS sender_id
+                            FROM messages
+                            WHERE id = $1 AND chat_id = $2
+                            LIMIT 1
+                            "#,
+                        )
+                        .bind(message_id as i32)
+                        .bind(from_chat_id)
+                        .fetch_optional(&state.pool)
+                        .await;
+
+                        let src = match src {
+                            Ok(r) => r,
+                            Err(e) => {
+                                let err_txt = format!("Ошибка БД: {}", e);
+                                let err_msg = serde_json::to_string(&ServerEvent::error { error: &err_txt })
+                                    .unwrap_or_else(|_| format!("{{\"type\":\"error\",\"error\":{}}}", serde_json::to_string(&err_txt).unwrap_or_else(|_| "\"Ошибка\"".to_string())));
+                                let _ = out_tx.send(WsMessage::Text(err_msg));
+                                continue;
+                            }
+                        };
+
+                        let Some(src_row) = src else {
+                            let err_msg = serde_json::to_string(&ServerEvent::error { error: "Исходное сообщение не найдено" })
+                                .unwrap_or_else(|_| "{\"type\":\"error\",\"error\":\"Исходное сообщение не найдено\"}".to_string());
+                            let _ = out_tx.send(WsMessage::Text(err_msg));
+                            continue;
+                        };
+
+                        let original_sender_id: i64 = src_row.try_get("sender_id").unwrap_or_default();
+
+                        let msg_type = message_type.unwrap_or_else(|| "text".to_string());
+                        let has_files = metadata.as_ref().map(|m| !m.is_empty());
+                        let envelopes_json = envelopes.map(|v| serde_json::to_value(v).ok()).flatten();
+                        let metadata_json = metadata.as_ref().map(|m| serde_json::to_value(m).ok()).flatten();
+
+                        let row = match sqlx::query(
+                            r#"
+                            INSERT INTO messages (
+                                chat_id,
+                                sender_id,
+                                message,
+                                message_type,
+                                envelopes,
+                                metadata,
+                                forwarded_from_message_id,
+                                forwarded_from_chat_id,
+                                forwarded_from_sender_id
+                            )
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                            RETURNING
+                                id::INT8 AS id,
+                                chat_id::INT8 AS chat_id,
+                                sender_id::INT8 AS sender_id,
+                                message,
+                                message_type,
+                                created_at,
+                                edited_at,
+                                reply_to_message_id::INT8 AS reply_to_message_id,
+                                forwarded_from_message_id::INT8 AS forwarded_from_message_id,
+                                forwarded_from_chat_id::INT8 AS forwarded_from_chat_id,
+                                forwarded_from_sender_id::INT8 AS forwarded_from_sender_id,
+                                deleted_at,
+                                deleted_by::INT8 AS deleted_by,
+                                is_read,
+                                envelopes,
+                                metadata
+                            "#,
+                        )
+                        .bind(to_chat_id)
+                        .bind(user_id)
+                        .bind(&message)
+                        .bind(&msg_type)
+                        .bind(&envelopes_json)
+                        .bind(&metadata_json)
+                        .bind(message_id as i32)
+                        .bind(from_chat_id)
+                        .bind(original_sender_id as i32)
+                        .fetch_one(&state.pool)
+                        .await {
+                            Ok(r) => r,
+                            Err(e) => {
+                                let err_txt = format!("Ошибка БД: {}", e);
+                                let err_msg = serde_json::to_string(&ServerEvent::error { error: &err_txt })
+                                    .unwrap_or_else(|_| format!("{{\"type\":\"error\",\"error\":{}}}", serde_json::to_string(&err_txt).unwrap_or_else(|_| "\"Ошибка\"".to_string())));
+                                let _ = out_tx.send(WsMessage::Text(err_msg));
+                                continue;
+                            }
+                        };
+
+                        let envelopes_value: Option<Value> = row.try_get("envelopes").ok().flatten();
+                        let metadata_value: Option<Value> = row.try_get("metadata").ok().flatten();
+                        let metadata_vec: Option<Vec<FileMetadata>> = metadata_value
+                            .and_then(|v| serde_json::from_value(v).ok());
+
+                        let msg = OutMessage {
+                            id: row.try_get("id").unwrap_or_default(),
+                            chat_id: row.try_get("chat_id").unwrap_or_default(),
+                            sender_id: row.try_get("sender_id").unwrap_or_default(),
+                            message: row.try_get("message").unwrap_or_default(),
+                            message_type: row.try_get("message_type").unwrap_or_else(|_| "text".to_string()),
+                            created_at: row
+                                .try_get::<chrono::DateTime<chrono::Utc>, _>("created_at")
+                                .map(|t| t.to_rfc3339())
+                                .unwrap_or_default(),
+                            edited_at: row.try_get::<chrono::DateTime<chrono::Utc>, _>("edited_at")
+                                .ok()
+                                .map(|t| t.to_rfc3339()),
+                            reply_to_message_id: row.try_get("reply_to_message_id").ok(),
+                            forwarded_from_message_id: row.try_get("forwarded_from_message_id").ok(),
+                            forwarded_from_chat_id: row.try_get("forwarded_from_chat_id").ok(),
+                            forwarded_from_sender_id: row.try_get("forwarded_from_sender_id").ok(),
+                            deleted_at: row
+                                .try_get::<chrono::DateTime<chrono::Utc>, _>("deleted_at")
+                                .ok()
+                                .map(|t| t.to_rfc3339()),
+                            deleted_by: row.try_get("deleted_by").ok(),
+                            is_read: row.try_get("is_read").unwrap_or(false),
+                            has_files,
+                            metadata: metadata_vec,
+                            envelopes: envelopes_value,
+                            status: Some("sent".to_string()),
+                        };
+
+                        if let Ok(evt) = serde_json::to_string(&ServerEvent::message_new { chat_id: to_chat_id, message: msg }) {
+                            publish(&state, to_chat_id, evt);
                         }
                     }
                     Err(_) => {
