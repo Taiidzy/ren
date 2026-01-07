@@ -148,7 +148,7 @@ async fn upload_media(
     let rel_path = rel_path.unwrap_or_else(|| "".to_string());
 
     let row = sqlx::query(
-        r#
+        r#"
         INSERT INTO media_files (owner_id, chat_id, path, filename, mimetype, size)
         VALUES ($1, $2, $3, $4, $5, $6)
         RETURNING id::INT8 AS id
