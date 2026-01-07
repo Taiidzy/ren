@@ -324,7 +324,7 @@ async fn get_messages(
     let after_id = q.after_id;
 
     let rows = sqlx::query(
-        r#
+        r#"
         SELECT * FROM (
             SELECT 
                 id::INT8 AS id, 
