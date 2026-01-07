@@ -124,10 +124,44 @@ class RealtimeClient {
     required Map<String, dynamic>? envelopes,
     String? messageType,
     List<dynamic>? metadata,
+    int? replyToMessageId,
   }) {
     _send({
       'type': 'send_message',
       'chat_id': chatId,
+      'message': message,
+      'message_type': messageType,
+      'envelopes': envelopes,
+      'metadata': metadata,
+      'reply_to_message_id': replyToMessageId,
+    });
+  }
+
+  void deleteMessage({
+    required int chatId,
+    required int messageId,
+  }) {
+    _send({
+      'type': 'delete_message',
+      'chat_id': chatId,
+      'message_id': messageId,
+    });
+  }
+
+  void forwardMessage({
+    required int fromChatId,
+    required int messageId,
+    required int toChatId,
+    required String message,
+    required Map<String, dynamic>? envelopes,
+    String? messageType,
+    List<dynamic>? metadata,
+  }) {
+    _send({
+      'type': 'forward_message',
+      'from_chat_id': fromChatId,
+      'message_id': messageId,
+      'to_chat_id': toChatId,
       'message': message,
       'message_type': messageType,
       'envelopes': envelopes,

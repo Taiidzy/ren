@@ -49,6 +49,12 @@ pub struct Message {
     pub message_type: String,               // 'text' | 'file' | 'image' и т.д.
     pub created_at: String,
     pub edited_at: Option<String>,
+    pub reply_to_message_id: Option<i64>,
+    pub forwarded_from_message_id: Option<i64>,
+    pub forwarded_from_chat_id: Option<i64>,
+    pub forwarded_from_sender_id: Option<i64>,
+    pub deleted_at: Option<String>,
+    pub deleted_by: Option<i64>,
     pub is_read: bool,
     pub has_files: Option<bool>,            // опционально, для обратной совместимости
     pub metadata: Option<Vec<FileMetadata>>, // метаданные файлов

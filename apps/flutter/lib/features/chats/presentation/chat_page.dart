@@ -50,6 +50,8 @@ class _ChatPageState extends State<ChatPage> {
   bool _loading = true;
   final List<ChatMessage> _messages = [];
 
+  ChatMessage? _replyTo;
+
   bool _selectionMode = false;
   final Set<String> _selectedMessageIds = {};
 
@@ -190,6 +192,7 @@ class _ChatPageState extends State<ChatPage> {
 
   Future<void> _ensureRealtime() async {
     final chatId = int.tryParse(widget.chat.id) ?? 0;
+    final repo = context.read<ChatsRepository>();
     _rt ??= context.read<RealtimeClient>();
     final rt = _rt!;
 
@@ -227,6 +230,28 @@ class _ChatPageState extends State<ChatPage> {
             });
           }
         }
+        return;
+      }
+
+      if (evt.type == 'message_deleted') {
+        final evtChatId = evt.data['chat_id'];
+        if ('$evtChatId' != '$chatId') return;
+
+        final mid = evt.data['message_id'];
+        final messageId = (mid is int) ? mid : int.tryParse('$mid') ?? 0;
+        if (messageId <= 0) return;
+
+        if (!mounted) return;
+        setState(() {
+          _messages.removeWhere((m) => m.id == messageId.toString());
+          _selectedMessageIds.removeWhere((id) => id == messageId.toString());
+          if (_selectedMessageIds.isEmpty) {
+            _selectionMode = false;
+          }
+          if (_replyTo?.id == messageId.toString()) {
+            _replyTo = null;
+          }
+        });
         return;
       }
 
@@ -268,7 +293,6 @@ class _ChatPageState extends State<ChatPage> {
         debugPrint('WS message encrypted preview: ${encPreview.substring(0, encPreview.length > 200 ? 200 : encPreview.length)}');
       }
 
-      final repo = context.read<ChatsRepository>();
       final decoded = await repo.decryptIncomingWsMessageFull(message: m);
 
       final senderId = m['sender_id'] is int
@@ -332,8 +356,11 @@ class _ChatPageState extends State<ChatPage> {
     _sendTyping(false);
 
     final pendingCopy = List<_PendingAttachment>.from(_pending);
+
+    final replyTo = _replyTo;
     setState(() {
       _pending.clear();
+      _replyTo = null;
     });
     _controller.clear();
 
@@ -411,6 +438,7 @@ class _ChatPageState extends State<ChatPage> {
       messageType: payload['message_type'] as String?,
       envelopes: payload['envelopes'] as Map<String, dynamic>?,
       metadata: payload['metadata'] as List<dynamic>?,
+      replyToMessageId: replyTo == null ? null : int.tryParse(replyTo.id),
     );
   }
 
@@ -779,7 +807,9 @@ class _ChatPageState extends State<ChatPage> {
                 onPressed: _selectedMessageIds.isEmpty
                     ? null
                     : () {
-                        _deleteByIds(Set<String>.from(_selectedMessageIds));
+                        final ids = Set<String>.from(_selectedMessageIds);
+                        _deleteByIds(ids);
+                        _deleteRemote(ids);
                       },
               ),
             ] else
@@ -829,6 +859,43 @@ class _ChatPageState extends State<ChatPage> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    if (_replyTo != null)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: GlassSurface(
+                          borderRadius: 14,
+                          blurSigma: 12,
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  _replyTo!.text,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: theme.colorScheme.onSurface.withOpacity(0.9),
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              GestureDetector(
+                                onTap: () {
+                                  setState(() {
+                                    _replyTo = null;
+                                  });
+                                },
+                                child: Icon(
+                                  Icons.close,
+                                  size: 18,
+                                  color: theme.colorScheme.onSurface.withOpacity(0.7),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                     if (_pending.isNotEmpty)
                       Padding(
                         padding: const EdgeInsets.only(bottom: 10),
@@ -1129,14 +1196,104 @@ class _ChatPageState extends State<ChatPage> {
       if (_selectedMessageIds.isEmpty) {
         _selectionMode = false;
       }
+      if (_replyTo != null && ids.contains(_replyTo!.id)) {
+        _replyTo = null;
+      }
     });
+  }
+
+  void _deleteRemote(Set<String> ids) {
+    final chatId = int.tryParse(widget.chat.id) ?? 0;
+    if (chatId <= 0) return;
+    _rt ??= context.read<RealtimeClient>();
+    final rt = _rt!;
+    for (final id in ids) {
+      final mid = int.tryParse(id);
+      if (mid == null || mid <= 0) continue;
+      rt.deleteMessage(chatId: chatId, messageId: mid);
+    }
   }
 
   Future<void> _forwardSelected() async {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Пересылка: выбери чат (пока не реализовано)')),
+    final chatId = int.tryParse(widget.chat.id) ?? 0;
+    if (chatId <= 0) return;
+
+    final repo = context.read<ChatsRepository>();
+    final chats = await repo.fetchChats();
+    if (!mounted) return;
+
+    final selectedChat = await showModalBottomSheet<ChatPreview>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) {
+        return GlassSurface(
+          child: SafeArea(
+            top: false,
+            child: SizedBox(
+              height: MediaQuery.of(ctx).size.height * 0.55,
+              child: ListView.builder(
+                itemCount: chats.length,
+                itemBuilder: (c, i) {
+                  final it = chats[i];
+                  return ListTile(
+                    title: Text(it.user.name),
+                    subtitle: Text('chat ${it.id}'),
+                    onTap: () => Navigator.of(ctx).pop(it),
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+      },
     );
+
+    if (!mounted) return;
+    if (selectedChat == null) return;
+
+    final toChatId = int.tryParse(selectedChat.id) ?? 0;
+    final toPeerId = selectedChat.peerId ?? 0;
+    if (toChatId <= 0 || toPeerId <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Пересылка поддерживается только для private чатов')),
+      );
+      return;
+    }
+
+    _rt ??= context.read<RealtimeClient>();
+    final rt = _rt!;
+
+    final ids = List<String>.from(_selectedMessageIds);
+    ids.sort((a, b) => a.compareTo(b));
+
+    for (final id in ids) {
+      final mid = int.tryParse(id);
+      if (mid == null || mid <= 0) continue;
+      final msg = _messages.where((m) => m.id == id).cast<ChatMessage?>().firstWhere(
+            (m) => m != null,
+            orElse: () => null,
+          );
+      if (msg == null) continue;
+      if (msg.attachments.isNotEmpty) continue;
+      final payload = await repo.buildEncryptedWsMessage(
+        chatId: toChatId,
+        peerId: toPeerId,
+        plaintext: msg.text,
+      );
+      rt.forwardMessage(
+        fromChatId: chatId,
+        messageId: mid,
+        toChatId: toChatId,
+        message: payload['message'] as String,
+        messageType: payload['message_type'] as String?,
+        envelopes: payload['envelopes'] as Map<String, dynamic>?,
+        metadata: payload['metadata'] as List<dynamic>?,
+      );
+    }
+
+    _exitSelectionMode();
   }
 
   Future<void> _showMessageContextMenu(ChatMessage msg, Offset globalPosition) async {
@@ -1248,6 +1405,12 @@ class _ChatPageState extends State<ChatPage> {
 
     if (!mounted) return;
     switch (selected) {
+      case 'reply':
+        setState(() {
+          _replyTo = msg;
+        });
+        _focusNode.requestFocus();
+        break;
       case 'copy':
         await doCopy();
         break;
@@ -1259,6 +1422,7 @@ class _ChatPageState extends State<ChatPage> {
         break;
       case 'delete':
         _deleteByIds({msg.id});
+        _deleteRemote({msg.id});
         break;
       default:
         break;
