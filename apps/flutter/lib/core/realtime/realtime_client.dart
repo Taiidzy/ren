@@ -168,4 +168,23 @@ class RealtimeClient {
       'metadata': metadata,
     });
   }
+
+  void editMessage({
+    required int chatId,
+    required int messageId,
+    required String message,
+    required Map<String, dynamic>? envelopes,
+    String? messageType,
+    List<dynamic>? metadata,
+  }) {
+    _send({
+      'type': 'edit_message',
+      'chat_id': chatId,
+      'message_id': messageId,
+      'message': message,
+      'message_type': messageType,
+      'envelopes': envelopes,
+      'metadata': metadata,
+    });
+  }
 }

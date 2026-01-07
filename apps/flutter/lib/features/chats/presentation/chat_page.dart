@@ -50,6 +50,9 @@ class _ChatPageState extends State<ChatPage> {
   final List<ChatMessage> _messages = [];
 
   ChatMessage? _replyTo;
+  ChatMessage? _editing;
+
+  String? _pressedMessageId;
 
   bool _selectionMode = false;
   final Set<String> _selectedMessageIds = {};
@@ -249,6 +252,45 @@ class _ChatPageState extends State<ChatPage> {
         return;
       }
 
+      if (evt.type == 'message_updated') {
+        final evtChatId = evt.data['chat_id'];
+        if ('$evtChatId' != '$chatId') return;
+
+        final msg = evt.data['message'];
+        if (msg is! Map) return;
+
+        final m = (msg is Map<String, dynamic>)
+            ? msg
+            : Map<String, dynamic>.fromEntries(
+                msg.entries.map((e) => MapEntry(e.key.toString(), e.value)),
+              );
+
+        final decoded = await repo.decryptIncomingWsMessageFull(message: m);
+        final incomingId = '${m['id'] ?? ''}';
+        if (incomingId.isEmpty) return;
+
+        if (!mounted) return;
+        setState(() {
+          final idx = _messages.indexWhere((x) => x.id == incomingId);
+          if (idx < 0) return;
+          final old = _messages[idx];
+          _messages[idx] = ChatMessage(
+            id: old.id,
+            chatId: old.chatId,
+            isMe: old.isMe,
+            text: decoded.text,
+            attachments: old.attachments,
+            sentAt: old.sentAt,
+            replyToMessageId: old.replyToMessageId,
+          );
+
+          if (_editing?.id == incomingId) {
+            _editing = null;
+          }
+        });
+        return;
+      }
+
       if (evt.type == 'message_deleted') {
         final evtChatId = evt.data['chat_id'];
         if ('$evtChatId' != '$chatId') return;
@@ -384,11 +426,61 @@ class _ChatPageState extends State<ChatPage> {
     final pendingCopy = List<_PendingAttachment>.from(_pending);
 
     final replyTo = _replyTo;
+    final editing = _editing;
     setState(() {
       _pending.clear();
       _replyTo = null;
+      _editing = null;
     });
     _controller.clear();
+
+    if (editing != null) {
+      // редактирование: поддерживаем только текст без файлов
+      if (hasAttachments || pendingCopy.isNotEmpty || editing.attachments.isNotEmpty) {
+        return;
+      }
+
+      // optimistic replace
+      setState(() {
+        final idx = _messages.indexWhere((m) => m.id == editing.id);
+        if (idx >= 0) {
+          final old = _messages[idx];
+          _messages[idx] = ChatMessage(
+            id: old.id,
+            chatId: old.chatId,
+            isMe: old.isMe,
+            text: text,
+            attachments: old.attachments,
+            sentAt: old.sentAt,
+            replyToMessageId: old.replyToMessageId,
+          );
+        }
+      });
+
+      final payload = await repo.buildEncryptedWsMessage(
+        chatId: chatId,
+        peerId: peerId,
+        plaintext: text,
+      );
+
+      if (!rt.isConnected) {
+        await rt.connect();
+      }
+      rt.joinChat(chatId);
+
+      final mid = int.tryParse(editing.id) ?? 0;
+      if (mid > 0) {
+        rt.editMessage(
+          chatId: chatId,
+          messageId: mid,
+          message: payload['message'] as String,
+          messageType: payload['message_type'] as String?,
+          envelopes: payload['envelopes'] as Map<String, dynamic>?,
+          metadata: payload['metadata'] as List<dynamic>?,
+        );
+      }
+      return;
+    }
 
     List<ChatAttachment> optimisticAtt = const [];
     if (pendingCopy.isNotEmpty) {
@@ -768,7 +860,7 @@ class _ChatPageState extends State<ChatPage> {
                           _Avatar(
                             url: widget.chat.user.avatarUrl,
                             name: widget.chat.user.name,
-                            isOnline: widget.chat.user.isOnline,
+                            isOnline: _peerOnline,
                             size: 36,
                           ),
                           const SizedBox(width: 10),
@@ -876,18 +968,57 @@ class _ChatPageState extends State<ChatPage> {
               return Padding(
                 padding: const EdgeInsets.fromLTRB(
                   horizontalPadding,
-                  0,
+                  10,
                   horizontalPadding,
-                  verticalPadding,
+                  10,
                 ),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    if (_editing != null)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: GlassSurface(
+                          borderRadius: 16,
+                          blurSigma: 10,
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  'Редактирование',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: theme.colorScheme.onSurface.withOpacity(0.9),
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              GestureDetector(
+                                onTap: () {
+                                  setState(() {
+                                    _editing = null;
+                                  });
+                                  _controller.clear();
+                                },
+                                child: Icon(
+                                  Icons.close,
+                                  size: 18,
+                                  color: theme.colorScheme.onSurface.withOpacity(0.8),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                     if (_replyTo != null)
                       Padding(
                         padding: const EdgeInsets.only(bottom: 10),
                         child: GlassSurface(
-                          borderRadius: 14,
+                          borderRadius: 16,
                           blurSigma: 12,
                           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                           child: Row(
@@ -1081,11 +1212,35 @@ class _ChatPageState extends State<ChatPage> {
                             final msg = messages[index];
                             final replied = _findMessageById(msg.replyToMessageId);
                             final replyPreview = replied?.text.trim();
+                            final selected = _selectionMode && _selectedMessageIds.contains(msg.id);
+                            final pressed = _pressedMessageId == msg.id;
                             return Align(
                               alignment: msg.isMe
                                   ? Alignment.centerRight
                                   : Alignment.centerLeft,
                               child: GestureDetector(
+                                onTapDown: (_) {
+                                  if (!mounted) return;
+                                  setState(() {
+                                    _pressedMessageId = msg.id;
+                                  });
+                                },
+                                onTapCancel: () {
+                                  if (!mounted) return;
+                                  setState(() {
+                                    if (_pressedMessageId == msg.id) {
+                                      _pressedMessageId = null;
+                                    }
+                                  });
+                                },
+                                onTapUp: (_) {
+                                  if (!mounted) return;
+                                  setState(() {
+                                    if (_pressedMessageId == msg.id) {
+                                      _pressedMessageId = null;
+                                    }
+                                  });
+                                },
                                 onTap: () {
                                   if (_selectionMode) {
                                     _toggleSelected(msg);
@@ -1093,33 +1248,104 @@ class _ChatPageState extends State<ChatPage> {
                                 },
                                 onLongPressStart: (d) async {
                                   HapticFeedback.selectionClick();
+                                  if (mounted) {
+                                    setState(() {
+                                      _pressedMessageId = msg.id;
+                                    });
+                                  }
                                   if (_selectionMode) {
                                     _toggleSelected(msg);
                                   } else {
                                     await _showMessageContextMenu(msg, d.globalPosition);
                                   }
+
+                                  if (mounted) {
+                                    setState(() {
+                                      if (_pressedMessageId == msg.id) {
+                                        _pressedMessageId = null;
+                                      }
+                                    });
+                                  }
                                 },
-                                child: AnimatedContainer(
-                                  duration: const Duration(milliseconds: 140),
-                                  decoration: BoxDecoration(
-                                    borderRadius: BorderRadius.circular(16),
-                                    border: _selectionMode && _selectedMessageIds.contains(msg.id)
-                                        ? Border.all(
-                                            color: theme.colorScheme.primary.withOpacity(0.8),
-                                            width: 1.2,
-                                          )
-                                        : null,
-                                  ),
-                                  child: _MessageBubble(
-                                    replyPreview: (replyPreview != null && replyPreview.isNotEmpty)
-                                        ? replyPreview
-                                        : null,
-                                    text: msg.text,
-                                    attachments: msg.attachments,
-                                    timeLabel: _formatTime(msg.sentAt),
-                                    isMe: msg.isMe,
-                                    isDark: isDark,
-                                    onOpenAttachment: (a) => _openAttachmentSheet(a),
+                                onLongPressEnd: (_) {
+                                  if (!mounted) return;
+                                  setState(() {
+                                    if (_pressedMessageId == msg.id) {
+                                      _pressedMessageId = null;
+                                    }
+                                  });
+                                },
+                                child: AnimatedScale(
+                                  scale: pressed ? 0.985 : (selected ? 1.3 : 1.0),
+                                  duration: const Duration(milliseconds: 110),
+                                  curve: Curves.easeOut,
+                                  child: Stack(
+                                    clipBehavior: Clip.none,
+                                    children: [
+                                      AnimatedContainer(
+                                        duration: const Duration(milliseconds: 110),
+                                        curve: Curves.easeOut,
+                                        decoration: BoxDecoration(
+                                          borderRadius: BorderRadius.circular(16),
+                                          color: pressed
+                                              ? theme.colorScheme.onSurface.withOpacity(isDark ? 0.10 : 0.06)
+                                              : (selected
+                                                  ? theme.colorScheme.primary.withOpacity(isDark ? 0.12 : 0.10)
+                                                  : Colors.transparent),
+                                          border: selected
+                                              ? Border.all(
+                                                  color: theme.colorScheme.primary.withOpacity(0.8),
+                                                  width: 1.2,
+                                                )
+                                              : null,
+                                        ),
+                                        child: Padding(
+                                          padding: const EdgeInsets.all(2),
+                                          child: _MessageBubble(
+                                            replyPreview: (replyPreview != null && replyPreview.isNotEmpty)
+                                                ? replyPreview
+                                                : null,
+                                            text: msg.text,
+                                            attachments: msg.attachments,
+                                            timeLabel: _formatTime(msg.sentAt),
+                                            isMe: msg.isMe,
+                                            isDark: isDark,
+                                            onOpenAttachment: (a) => _openAttachmentSheet(a),
+                                          ),
+                                        ),
+                                      ),
+                                      Positioned(
+                                        right: -6,
+                                        top: -6,
+                                        child: AnimatedOpacity(
+                                          opacity: selected ? 1 : 0,
+                                          duration: const Duration(milliseconds: 120),
+                                          curve: Curves.easeOut,
+                                          child: AnimatedScale(
+                                            scale: selected ? 1 : 0.9,
+                                            duration: const Duration(milliseconds: 120),
+                                            curve: Curves.easeOut,
+                                            child: Container(
+                                              width: 20,
+                                              height: 20,
+                                              decoration: BoxDecoration(
+                                                color: theme.colorScheme.primary,
+                                                shape: BoxShape.circle,
+                                                border: Border.all(
+                                                  color: theme.colorScheme.surface.withOpacity(0.9),
+                                                  width: 1,
+                                                ),
+                                              ),
+                                              child: Icon(
+                                                Icons.check,
+                                                size: 14,
+                                                color: theme.colorScheme.onPrimary,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ),
                               ),
@@ -1346,16 +1572,39 @@ class _ChatPageState extends State<ChatPage> {
       await _forwardSelected();
     }
 
+    void doEdit() {
+      setState(() {
+        _editing = msg;
+        _replyTo = null;
+      });
+      _controller.text = msg.text;
+      _controller.selection = TextSelection.fromPosition(
+        TextPosition(offset: _controller.text.length),
+      );
+      _focusNode.requestFocus();
+    }
+
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
     final size = overlay.size;
 
+    final media = MediaQuery.of(context);
+    final safe = media.padding;
+
     const menuWidth = 220.0;
     const itemHeight = 44.0;
-    final itemCount = 4;
-    final menuHeight = itemHeight * itemCount;
 
-    final left = (globalPosition.dx).clamp(12.0, size.width - menuWidth - 12.0);
-    final top = (globalPosition.dy).clamp(12.0, size.height - menuHeight - 12.0);
+    final canEdit = msg.isMe && msg.attachments.isEmpty;
+    final itemCount = canEdit ? 6 : 5;
+    final menuHeight = itemHeight * itemCount + 16;
+
+    final minLeft = 12.0 + safe.left;
+    final maxLeft = size.width - menuWidth - 12.0 - safe.right;
+
+    final minTop = 12.0 + safe.top;
+    final maxTop = size.height - menuHeight - 12.0 - safe.bottom;
+
+    final left = (globalPosition.dx).clamp(minLeft, maxLeft < minLeft ? minLeft : maxLeft);
+    final top = (globalPosition.dy).clamp(minTop, maxTop < minTop ? minTop : maxTop);
 
     final selected = await showGeneralDialog<String>(
       context: context,
@@ -1384,6 +1633,12 @@ class _ChatPageState extends State<ChatPage> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      if (canEdit)
+                        _ContextMenuItem(
+                          icon: HugeIcon(icon: HugeIcons.strokeRoundedEdit02),
+                          label: 'Редактировать',
+                          onTap: () => Navigator.of(ctx).pop('edit'),
+                        ),
                       _ContextMenuItem(
                         icon: HugeIcon(icon: HugeIcons.strokeRoundedArrowTurnBackward),
                         label: 'Ответить',
@@ -1427,6 +1682,9 @@ class _ChatPageState extends State<ChatPage> {
           _replyTo = msg;
         });
         _focusNode.requestFocus();
+        break;
+      case 'edit':
+        doEdit();
         break;
       case 'copy':
         await doCopy();
