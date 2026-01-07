@@ -44,6 +44,7 @@ class ChatAttachment {
   });
 
   bool get isImage => mimetype.startsWith('image/');
+  bool get isVideo => mimetype.startsWith('video/');
 }
 
 class ChatPreview {

@@ -6,7 +6,13 @@ import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:hugeicons/hugeicons.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:open_filex/open_filex.dart';
 import 'package:provider/provider.dart';
+import 'package:mime/mime.dart';
+import 'package:flutter/services.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:video_player/video_player.dart';
+
 import 'package:ren/core/constants/keys.dart';
 import 'package:ren/core/secure/secure_storage.dart';
 import 'package:ren/features/chats/data/chats_repository.dart';
@@ -14,7 +20,6 @@ import 'package:ren/features/chats/domain/chat_models.dart';
 import 'package:ren/core/realtime/realtime_client.dart';
 import 'package:ren/shared/widgets/background.dart';
 import 'package:ren/shared/widgets/glass_surface.dart';
-import 'package:ren/theme/themes.dart';
 import 'package:path_provider/path_provider.dart';
 
 class ChatPage extends StatefulWidget {
@@ -40,8 +45,13 @@ class _PendingAttachment {
 
 class _ChatPageState extends State<ChatPage> {
   final _controller = TextEditingController();
+  final _focusNode = FocusNode();
+  final _scrollController = ScrollController();
   bool _loading = true;
   final List<ChatMessage> _messages = [];
+
+  bool _selectionMode = false;
+  final Set<String> _selectedMessageIds = {};
 
   final _picker = ImagePicker();
 
@@ -53,6 +63,10 @@ class _ChatPageState extends State<ChatPage> {
   bool _peerTyping = false;
   Timer? _typingDebounce;
 
+  bool _isAtBottom = true;
+
+  double _lastViewInsetsBottom = 0;
+
   RealtimeClient? _rt;
   StreamSubscription? _rtSub;
 
@@ -61,22 +75,92 @@ class _ChatPageState extends State<ChatPage> {
     super.initState();
     _peerOnline = widget.chat.user.isOnline;
     _controller.addListener(_onTextChanged);
+    _focusNode.addListener(_onFocusChanged);
+    _scrollController.addListener(_onScroll);
     _init();
   }
 
-  void _onTextChanged() {
+  void _scheduleScrollToBottom({required bool animated}) {
+    // Scroll can be requested before ListView reports correct maxScrollExtent.
+    // Retry a few times after layout to ensure we end up at the bottom.
+    void attempt(int left) {
+      _scrollToBottom(animated: animated);
+      if (left <= 0) return;
+
+      Future.delayed(const Duration(milliseconds: 60), () {
+        if (!mounted) return;
+        if (!_scrollController.hasClients) return;
+        final pos = _scrollController.position;
+        final dist = pos.maxScrollExtent - pos.pixels;
+        if (dist > 8) {
+          attempt(left - 1);
+        }
+      });
+    }
+
+    attempt(4);
+  }
+
+  void _onScroll() {
+    if (!_scrollController.hasClients) return;
+    final pos = _scrollController.position;
+    final dist = pos.maxScrollExtent - pos.pixels;
+    final atBottom = dist < 120;
+    if (atBottom != _isAtBottom && mounted) {
+      setState(() {
+        _isAtBottom = atBottom;
+      });
+    }
+  }
+
+  void _onFocusChanged() {
+    if (!_focusNode.hasFocus) {
+      _sendTyping(false);
+    } else {
+      _scheduleScrollToBottom(animated: true);
+    }
+  }
+
+  void _scrollToBottom({required bool animated}) {
+    if (!mounted) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (!_scrollController.hasClients) return;
+      final pos = _scrollController.position;
+      final target = pos.maxScrollExtent;
+      if (animated) {
+        _scrollController.animateTo(
+          target,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+        );
+      } else {
+        _scrollController.jumpTo(target);
+      }
+    });
+  }
+
+  void _sendTyping(bool isTyping) {
     final chatId = int.tryParse(widget.chat.id) ?? 0;
     final rt = _rt;
     if (rt == null || !rt.isConnected) return;
+    rt.typing(chatId, isTyping);
+  }
 
+  void _onTextChanged() {
     _typingDebounce?.cancel();
 
     final hasText = _controller.text.trim().isNotEmpty;
-    rt.typing(chatId, hasText);
+    if (!hasText) {
+      _sendTyping(false);
+      return;
+    }
+
+    // When user types: send true immediately, then send false after inactivity
+    _sendTyping(true);
 
     _typingDebounce = Timer(const Duration(milliseconds: 900), () {
-      final stillHas = _controller.text.trim().isNotEmpty;
-      rt.typing(chatId, stillHas);
+      _sendTyping(false);
     });
   }
 
@@ -93,6 +177,7 @@ class _ChatPageState extends State<ChatPage> {
           ..addAll(list);
         _loading = false;
       });
+      _scheduleScrollToBottom(animated: false);
     } catch (_) {
       if (!mounted) return;
       setState(() {
@@ -125,10 +210,17 @@ class _ChatPageState extends State<ChatPage> {
     _rtSub ??= rt.events.listen((evt) async {
       if (evt.type == 'presence') {
         final peerId = widget.chat.peerId ?? 0;
-        final userId = evt.data['user_id'];
+        final userId = evt.data['user_id'] ?? evt.data['userId'] ?? evt.data['id'];
         if ('$userId' == '$peerId') {
-          final status = (evt.data['status'] as String?) ?? '';
-          final online = status == 'online';
+          final statusRaw = (evt.data['status'] ??
+                  evt.data['state'] ??
+                  evt.data['online'] ??
+                  evt.data['is_online'] ??
+                  evt.data['isOnline'])
+              .toString()
+              .trim()
+              .toLowerCase();
+          final online = statusRaw == 'online' || statusRaw == 'true' || statusRaw == '1';
           if (online != _peerOnline && mounted) {
             setState(() {
               _peerOnline = online;
@@ -216,6 +308,10 @@ class _ChatPageState extends State<ChatPage> {
           ),
         );
       });
+
+      if (isMe || _isAtBottom) {
+        _scheduleScrollToBottom(animated: true);
+      }
     });
   }
 
@@ -231,6 +327,9 @@ class _ChatPageState extends State<ChatPage> {
     final hasAttachments = _pending.isNotEmpty;
     if (text.isEmpty && !hasAttachments) return;
     if (peerId <= 0) return;
+
+    _typingDebounce?.cancel();
+    _sendTyping(false);
 
     final pendingCopy = List<_PendingAttachment>.from(_pending);
     setState(() {
@@ -274,6 +373,8 @@ class _ChatPageState extends State<ChatPage> {
         ),
       );
     });
+
+    _scheduleScrollToBottom(animated: true);
 
     final repo = context.read<ChatsRepository>();
     final payload = hasAttachments
@@ -350,6 +451,35 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
+  Future<void> _takePhoto() async {
+    try {
+      final file = await _picker.pickImage(
+        source: ImageSource.camera,
+      );
+      if (file == null) return;
+
+      final bytes = await file.readAsBytes();
+      if (bytes.isEmpty) return;
+
+      final name = file.name.isNotEmpty
+          ? file.name
+          : 'photo_${DateTime.now().millisecondsSinceEpoch}.jpg';
+
+      if (!mounted) return;
+      setState(() {
+        _pending.add(
+          _PendingAttachment(
+            bytes: bytes,
+            filename: name,
+            mimetype: 'image/jpeg',
+          ),
+        );
+      });
+    } catch (e) {
+      debugPrint('take photo failed: $e');
+    }
+  }
+
   Future<void> _pickFiles() async {
     try {
       final res = await FilePicker.platform.pickFiles(
@@ -365,9 +495,8 @@ class _ChatPageState extends State<ChatPage> {
         final name = (f.name.isNotEmpty)
             ? f.name
             : 'file_${DateTime.now().millisecondsSinceEpoch}';
-        final mime = (f.mimeType ?? '').isNotEmpty
-            ? f.mimeType!
-            : 'application/octet-stream';
+        final mime = lookupMimeType(f.path ?? '') ?? 'application/octet-stream';
+
         added.add(
           _PendingAttachment(
             bytes: bytes,
@@ -386,40 +515,120 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
-  Future<void> _showAttachMenu() async {
+  Future<void> showAttachMenu(
+    BuildContext context, {
+    required Future<void> Function()? onPickPhotos,
+    required Future<void> Function()? onPickFiles,
+    required Future<void> Function()? onTakePhoto,
+  }) async {
     final theme = Theme.of(context);
+
     await showModalBottomSheet<void>(
       context: context,
       backgroundColor: Colors.transparent,
+      isScrollControlled: true,
       builder: (ctx) {
-        return SafeArea(
-          child: Container(
-            margin: const EdgeInsets.all(12),
+        return GlassSurface(
+          child: Padding(
             padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: theme.colorScheme.surface.withOpacity(0.95),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                ListTile(
-                  leading: const Icon(Icons.photo_library_outlined),
-                  title: const Text('Фото'),
-                  onTap: () async {
-                    Navigator.of(ctx).pop();
-                    await _pickPhotos();
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.insert_drive_file_outlined),
-                  title: const Text('Файл'),
-                  onTap: () async {
-                    Navigator.of(ctx).pop();
-                    await _pickFiles();
-                  },
-                ),
-              ],
+            child: Container(
+              padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
+              decoration: BoxDecoration(
+                color: Colors.transparent,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Drag handle
+                  Container(
+                    height: 4,
+                    width: 48,
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.onSurface.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+
+                  // Title / optional subtitle
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Добавить',
+                          style: theme.textTheme.titleMedium,
+                        ),
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(height: 8),
+
+                  // Options row
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      _AttachOption(
+                        icon: Icons.photo_library_outlined,
+                        label: 'Фото',
+                        onTap: () async {
+                          Navigator.of(ctx).pop();
+                          HapticFeedback.selectionClick();
+                          if (onPickPhotos != null) await onPickPhotos();
+                        },
+                      ),
+
+                      _AttachOption(
+                        icon: Icons.insert_drive_file_outlined,
+                        label: 'Файл',
+                        onTap: () async {
+                          Navigator.of(ctx).pop();
+                          HapticFeedback.selectionClick();
+                          if (onPickFiles != null) await onPickFiles();
+                        },
+                      ),
+
+                      // Example: add a third quick action (camera)
+                      _AttachOption(
+                        icon: Icons.camera_alt_outlined,
+                        label: 'Камера',
+                        onTap: () async {
+                          Navigator.of(ctx).pop();
+                          HapticFeedback.selectionClick();
+                          if (onTakePhoto != null) await onTakePhoto();
+                        },
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(height: 12),
+
+                  // Optional explanatory text
+                  Text(
+                    'Выберите источник, чтобы прикрепить файл или фото',
+                    style: theme.textTheme.bodySmall,
+                    textAlign: TextAlign.center,
+                  ),
+
+                  const SizedBox(height: 8),
+
+                  // Cancel button
+                  SizedBox(
+                    width: double.infinity,
+                    child: TextButton(
+                      onPressed: () => Navigator.of(ctx).pop(),
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: const Text('Отмена'),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         );
@@ -427,16 +636,22 @@ class _ChatPageState extends State<ChatPage> {
     );
   }
 
+
   @override
   void dispose() {
     final chatId = int.tryParse(widget.chat.id) ?? 0;
+    _typingDebounce?.cancel();
+    _typingDebounce = null;
+    _rt?.typing(chatId, false);
     _rt?.leaveChat(chatId);
     _rtSub?.cancel();
     _rtSub = null;
-    _typingDebounce?.cancel();
-    _typingDebounce = null;
     _controller.removeListener(_onTextChanged);
+    _focusNode.removeListener(_onFocusChanged);
+    _scrollController.removeListener(_onScroll);
     _controller.dispose();
+    _focusNode.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -453,6 +668,7 @@ class _ChatPageState extends State<ChatPage> {
       animate: true,
       animationDuration: const Duration(seconds: 20),
       child: Scaffold(
+        resizeToAvoidBottomInset: false,
         extendBodyBehindAppBar: true,
         appBar: AppBar(
           backgroundColor: Colors.transparent,
@@ -462,7 +678,13 @@ class _ChatPageState extends State<ChatPage> {
           titleSpacing: 0,
           leading: IconButton(
             icon: const Icon(Icons.arrow_back_ios_new_rounded),
-            onPressed: () => Navigator.of(context).maybePop(),
+            onPressed: () {
+              if (_selectionMode) {
+                _exitSelectionMode();
+              } else {
+                Navigator.of(context).maybePop();
+              }
+            },
           ),
           title: Stack(
             alignment: Alignment.center,
@@ -481,43 +703,54 @@ class _ChatPageState extends State<ChatPage> {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        _Avatar(
-                          url: widget.chat.user.avatarUrl,
-                          name: widget.chat.user.name,
-                          isOnline: widget.chat.user.isOnline,
-                          size: 36,
-                        ),
-                        const SizedBox(width: 10),
-                        ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 200),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                widget.chat.user.name,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w600,
-                                  color: theme.colorScheme.onSurface,
-                                ),
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                _peerTyping
-                                    ? 'Печатает...'
-                                    : (_peerOnline ? 'Online' : 'Offline'),
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: theme.colorScheme.onSurface
-                                      .withOpacity(0.65),
-                                ),
-                              ),
-                            ],
+                        if (_selectionMode)
+                          Text(
+                            'Выбрано: ${_selectedMessageIds.length}',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              color: theme.colorScheme.onSurface,
+                            ),
+                          )
+                        else ...[
+                          _Avatar(
+                            url: widget.chat.user.avatarUrl,
+                            name: widget.chat.user.name,
+                            isOnline: widget.chat.user.isOnline,
+                            size: 36,
                           ),
-                        ),
+                          const SizedBox(width: 10),
+                          ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 200),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  widget.chat.user.name,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w600,
+                                    color: theme.colorScheme.onSurface,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  _peerTyping
+                                      ? 'Печатает...'
+                                      : (_peerOnline ? 'Online' : 'Offline'),
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: theme.colorScheme.onSurface
+                                        .withOpacity(0.65),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -526,14 +759,38 @@ class _ChatPageState extends State<ChatPage> {
             ],
           ),
           actions: [
-            IconButton(
-              icon: HugeIcon(
-                icon: HugeIcons.strokeRoundedMenu01,
-                color: theme.colorScheme.onSurface,
-                size: 24.0,
+            if (_selectionMode) ...[
+              IconButton(
+                icon: Icon(
+                  Icons.share_outlined,
+                  color: theme.colorScheme.onSurface,
+                ),
+                onPressed: _selectedMessageIds.isEmpty
+                    ? null
+                    : () async {
+                        await _forwardSelected();
+                      },
               ),
-              onPressed: () {},
-            ),
+              IconButton(
+                icon: Icon(
+                  Icons.delete_outline,
+                  color: theme.colorScheme.onSurface,
+                ),
+                onPressed: _selectedMessageIds.isEmpty
+                    ? null
+                    : () {
+                        _deleteByIds(Set<String>.from(_selectedMessageIds));
+                      },
+              ),
+            ] else
+              IconButton(
+                icon: HugeIcon(
+                  icon: HugeIcons.strokeRoundedMenu01,
+                  color: theme.colorScheme.onSurface,
+                  size: 24.0,
+                ),
+                onPressed: () {},
+              ),
           ],
         ),
         body: Builder(
@@ -544,6 +801,7 @@ class _ChatPageState extends State<ChatPage> {
             const double verticalPadding = 14;
 
             final double topInset = media.padding.top;
+            // viewInsets.bottom is already applied via AnimatedPadding below.
             final double bottomInset = media.padding.bottom;
 
             final double listTopPadding = topInset + kToolbarHeight + 12;
@@ -551,6 +809,14 @@ class _ChatPageState extends State<ChatPage> {
                 bottomInset + inputHeight + verticalPadding + 12;
 
             final messages = _messages;
+
+            final insetsBottom = media.viewInsets.bottom;
+            if (_focusNode.hasFocus && _isAtBottom && insetsBottom != _lastViewInsetsBottom) {
+              _lastViewInsetsBottom = insetsBottom;
+              _scheduleScrollToBottom(animated: false);
+            } else {
+              _lastViewInsetsBottom = insetsBottom;
+            }
 
             Widget inputBar() {
               return Padding(
@@ -638,7 +904,12 @@ class _ChatPageState extends State<ChatPage> {
                           blurSigma: 12,
                           width: inputHeight,
                           height: inputHeight,
-                          onTap: _showAttachMenu,
+                          onTap: () => showAttachMenu(
+                            context,
+                            onPickPhotos: () async => await _pickPhotos(),
+                            onPickFiles: () async => await _pickFiles(),
+                            onTakePhoto: () async => await _takePhoto(),
+                          ),
                           child: Center(
                             child: HugeIcon(
                               icon: HugeIcons.strokeRoundedAttachment01,
@@ -657,6 +928,7 @@ class _ChatPageState extends State<ChatPage> {
                                 .withOpacity(isDark ? 0.20 : 0.10),
                             child: TextField(
                               controller: _controller,
+                              focusNode: _focusNode,
                               style: TextStyle(
                                 color: theme.colorScheme.onSurface,
                                 fontSize: 14,
@@ -705,6 +977,7 @@ class _ChatPageState extends State<ChatPage> {
                   child: _loading
                       ? const Center(child: CircularProgressIndicator())
                       : ListView.separated(
+                          controller: _scrollController,
                           padding: EdgeInsets.fromLTRB(
                             horizontalPadding,
                             listTopPadding,
@@ -719,12 +992,40 @@ class _ChatPageState extends State<ChatPage> {
                               alignment: msg.isMe
                                   ? Alignment.centerRight
                                   : Alignment.centerLeft,
-                              child: _MessageBubble(
-                                text: msg.text,
-                                attachments: msg.attachments,
-                                timeLabel: _formatTime(msg.sentAt),
-                                isMe: msg.isMe,
-                                isDark: isDark,
+                              child: GestureDetector(
+                                onTap: () {
+                                  if (_selectionMode) {
+                                    _toggleSelected(msg);
+                                  }
+                                },
+                                onLongPressStart: (d) async {
+                                  HapticFeedback.selectionClick();
+                                  if (_selectionMode) {
+                                    _toggleSelected(msg);
+                                  } else {
+                                    await _showMessageContextMenu(msg, d.globalPosition);
+                                  }
+                                },
+                                child: AnimatedContainer(
+                                  duration: const Duration(milliseconds: 140),
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(16),
+                                    border: _selectionMode && _selectedMessageIds.contains(msg.id)
+                                        ? Border.all(
+                                            color: theme.colorScheme.primary.withOpacity(0.8),
+                                            width: 1.2,
+                                          )
+                                        : null,
+                                  ),
+                                  child: _MessageBubble(
+                                    text: msg.text,
+                                    attachments: msg.attachments,
+                                    timeLabel: _formatTime(msg.sentAt),
+                                    isMe: msg.isMe,
+                                    isDark: isDark,
+                                    onOpenAttachment: (a) => _openAttachmentSheet(a),
+                                  ),
+                                ),
                               ),
                             );
                           },
@@ -734,9 +1035,14 @@ class _ChatPageState extends State<ChatPage> {
                   left: 0,
                   right: 0,
                   bottom: 0,
-                  child: SafeArea(
-                    top: false,
-                    child: inputBar(),
+                  child: AnimatedPadding(
+                    duration: const Duration(milliseconds: 200),
+                    curve: Curves.easeOut,
+                    padding: EdgeInsets.only(bottom: media.viewInsets.bottom),
+                    child: SafeArea(
+                      top: false,
+                      child: inputBar(),
+                    ),
                   ),
                 ),
               ],
@@ -752,6 +1058,478 @@ class _ChatPageState extends State<ChatPage> {
     final m = dt.minute.toString().padLeft(2, '0');
     return '$h:$m';
   }
+
+  List<ChatAttachment> _allChatAttachments() {
+    final out = <ChatAttachment>[];
+    for (final m in _messages) {
+      if (m.attachments.isEmpty) continue;
+      out.addAll(m.attachments);
+    }
+    return out;
+  }
+
+  Future<void> _openAttachmentSheet(ChatAttachment tapped) async {
+    final items = _allChatAttachments();
+    if (items.isEmpty) return;
+
+    final initial = items.indexWhere((a) => a.localPath == tapped.localPath);
+    final initialIndex = (initial >= 0) ? initial : 0;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return _AttachmentViewerSheet(
+          items: items,
+          initialIndex: initialIndex,
+        );
+      },
+    );
+  }
+
+
+  void _enterSelectionMode({ChatMessage? initial}) {
+    if (!mounted) return;
+    setState(() {
+      _selectionMode = true;
+      if (initial != null) {
+        _selectedMessageIds.add(initial.id);
+      }
+    });
+  }
+
+  void _exitSelectionMode() {
+    if (!mounted) return;
+    setState(() {
+      _selectionMode = false;
+      _selectedMessageIds.clear();
+    });
+  }
+
+  void _toggleSelected(ChatMessage msg) {
+    if (!mounted) return;
+    setState(() {
+      if (_selectedMessageIds.contains(msg.id)) {
+        _selectedMessageIds.remove(msg.id);
+      } else {
+        _selectedMessageIds.add(msg.id);
+      }
+      if (_selectedMessageIds.isEmpty) {
+        _selectionMode = false;
+      }
+    });
+  }
+
+  void _deleteByIds(Set<String> ids) {
+    if (!mounted) return;
+    setState(() {
+      _messages.removeWhere((m) => ids.contains(m.id));
+      _selectedMessageIds.removeWhere((id) => !_messages.any((m) => m.id == id));
+      if (_selectedMessageIds.isEmpty) {
+        _selectionMode = false;
+      }
+    });
+  }
+
+  Future<void> _forwardSelected() async {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Пересылка: выбери чат (пока не реализовано)')),
+    );
+  }
+
+  Future<void> _showMessageContextMenu(ChatMessage msg, Offset globalPosition) async {
+    Future<void> doCopy() async {
+      final t = msg.text.trim();
+      if (t.isEmpty) return;
+      await Clipboard.setData(ClipboardData(text: t));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Скопировано')),
+      );
+    }
+
+    Future<void> doShare() async {
+      try {
+        final files = msg.attachments
+            .where((a) => a.localPath.isNotEmpty)
+            .map((a) => XFile(a.localPath, name: a.filename))
+            .toList();
+
+        if (files.isNotEmpty) {
+          await Share.shareXFiles(
+            files,
+            text: msg.text.trim().isEmpty ? null : msg.text.trim(),
+          );
+        } else {
+          final t = msg.text.trim();
+          if (t.isEmpty) return;
+          await Share.share(t);
+        }
+      } catch (e) {
+        debugPrint('Failed to share message: $e');
+      }
+    }
+
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    final size = overlay.size;
+
+    const menuWidth = 220.0;
+    const itemHeight = 44.0;
+    final itemCount = 4;
+    final menuHeight = itemHeight * itemCount;
+
+    final left = (globalPosition.dx).clamp(12.0, size.width - menuWidth - 12.0);
+    final top = (globalPosition.dy).clamp(12.0, size.height - menuHeight - 12.0);
+
+    final selected = await showGeneralDialog<String>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'context_menu',
+      barrierColor: Colors.black.withOpacity(0.08),
+      pageBuilder: (ctx, a1, a2) {
+        return Material(
+          type: MaterialType.transparency,
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => Navigator.of(ctx).pop(),
+                ),
+              ),
+              Positioned(
+                left: left,
+                top: top,
+                child: GlassSurface(
+                  width: menuWidth,
+                  blurSigma: 18,
+                  borderRadius: 16,
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _ContextMenuItem(
+                        icon: HugeIcon(icon: HugeIcons.strokeRoundedArrowTurnBackward),
+                        label: 'Ответить',
+                        onTap: () => Navigator.of(ctx).pop('reply'),
+                      ),
+                      _ContextMenuItem(
+                        icon: HugeIcon(icon: HugeIcons.strokeRoundedCopy01),
+                        label: 'Копировать',
+                        onTap: () => Navigator.of(ctx).pop('copy'),
+                      ),
+                      _ContextMenuItem(
+                        icon: HugeIcon(icon: HugeIcons.strokeRoundedShare08),
+                        label: msg.attachments.isNotEmpty ? 'Переслать (с файлами)' : 'Переслать',
+                        onTap: () => Navigator.of(ctx).pop('share'),
+                      ),
+                      _ContextMenuItem(
+                        icon: HugeIcon(icon: HugeIcons.strokeRoundedTickDouble03),
+                        label: 'Выбрать',
+                        onTap: () => Navigator.of(ctx).pop('select'),
+                      ),
+                      _ContextMenuItem(
+                        icon: HugeIcon(icon: HugeIcons.strokeRoundedDelete02),
+                        label: 'Удалить',
+                        danger: true,
+                        onTap: () => Navigator.of(ctx).pop('delete'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+
+    if (!mounted) return;
+    switch (selected) {
+      case 'copy':
+        await doCopy();
+        break;
+      case 'share':
+        await doShare();
+        break;
+      case 'select':
+        _enterSelectionMode(initial: msg);
+        break;
+      case 'delete':
+        _deleteByIds({msg.id});
+        break;
+      default:
+        break;
+    }
+  }
+}
+
+class _AttachmentViewerSheet extends StatefulWidget {
+  final List<ChatAttachment> items;
+  final int initialIndex;
+
+  const _AttachmentViewerSheet({
+    required this.items,
+    required this.initialIndex,
+  });
+
+  @override
+  State<_AttachmentViewerSheet> createState() => _AttachmentViewerSheetState();
+}
+
+class _AttachmentViewerSheetState extends State<_AttachmentViewerSheet> {
+  late final PageController _pageController;
+  int _index = 0;
+
+  final Map<int, VideoPlayerController> _videoControllers = {};
+  final Map<int, Future<void>> _videoInits = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _index = widget.initialIndex;
+    _pageController = PageController(initialPage: _index);
+  }
+
+  @override
+  void dispose() {
+    for (final c in _videoControllers.values) {
+      c.dispose();
+    }
+    _videoControllers.clear();
+    _videoInits.clear();
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  ChatAttachment get _current => widget.items[_index];
+
+  String _prettyType(ChatAttachment a) {
+    final mt = a.mimetype.toLowerCase();
+    if (mt.startsWith('image/')) return 'Фото';
+    if (mt.startsWith('video/')) return 'Видео';
+    if (mt.startsWith('audio/')) return 'Аудио';
+    if (mt.contains('pdf')) return 'PDF';
+    return 'Файл';
+  }
+
+  Future<void> _saveCurrent() async {
+    final a = _current;
+    final path = a.localPath;
+    if (path.isEmpty) return;
+
+    try {
+      final box = context.findRenderObject() as RenderBox?;
+      final origin = (box != null)
+          ? (box.localToGlobal(Offset.zero) & box.size)
+          : const Rect.fromLTWH(0, 0, 1, 1);
+
+      await Share.shareXFiles(
+        [XFile(path, name: a.filename)],
+        text: a.filename,
+        sharePositionOrigin: origin,
+      );
+    } catch (error) {
+      if (!mounted) return;
+      debugPrint('Failed to share file: $error');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Не удалось сохранить файл')),
+      );
+    }
+  }
+
+  Future<void> _openCurrent() async {
+    final a = _current;
+    final path = a.localPath;
+    if (path.isEmpty) return;
+    try {
+      await OpenFilex.open(path);
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Не удалось открыть файл')),
+      );
+    }
+  }
+
+  VideoPlayerController _getVideoController(int i, String path) {
+    final existing = _videoControllers[i];
+    if (existing != null) return existing;
+    final c = VideoPlayerController.file(File(path));
+    _videoControllers[i] = c;
+    _videoInits[i] = c.initialize();
+    return c;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return DraggableScrollableSheet(
+      initialChildSize: 0.92,
+      minChildSize: 0.45,
+      maxChildSize: 0.98,
+      builder: (ctx, scrollController) {
+        return GlassSurface(
+          child: ClipRRect(
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          _current.filename.isNotEmpty
+                              ? _current.filename
+                              : _prettyType(_current),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.titleMedium,
+                        ),
+                      ),
+                      TextButton.icon(
+                        onPressed: _saveCurrent,
+                        icon: HugeIcon(
+                          icon: HugeIcons.strokeRoundedDownload01,
+                          color: theme.colorScheme.onSurface.withOpacity(0.9),
+                          size: 18,
+                        ),
+                        label: const Text('Скачать'),
+                      ),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: PageView.builder(
+                    controller: _pageController,
+                    onPageChanged: (i) {
+                      setState(() {
+                        _index = i;
+                      });
+                    },
+                    itemCount: widget.items.length,
+                    itemBuilder: (context, i) {
+                      final a = widget.items[i];
+                      final path = a.localPath;
+
+                      if (a.isImage) {
+                        return Center(
+                          child: InteractiveViewer(
+                            minScale: 0.8,
+                            maxScale: 4,
+                            child: Image.file(
+                              File(path),
+                              errorBuilder: (context, error, stack) {
+                                return const Text('Не удалось загрузить изображение');
+                              },
+                            ),
+                          ),
+                        );
+                      }
+
+                      if (a.isVideo) {
+                        final c = _getVideoController(i, path);
+                        final init = _videoInits[i];
+                        return Center(
+                          child: FutureBuilder<void>(
+                            future: init,
+                            builder: (context, snap) {
+                              if (snap.connectionState != ConnectionState.done) {
+                                return const CircularProgressIndicator();
+                              }
+                              if (!c.value.isInitialized) {
+                                return const Text('Не удалось открыть видео');
+                              }
+
+                              return GestureDetector(
+                                onTap: () {
+                                  setState(() {
+                                    if (c.value.isPlaying) {
+                                      c.pause();
+                                    } else {
+                                      c.play();
+                                    }
+                                  });
+                                },
+                                child: Stack(
+                                  alignment: Alignment.center,
+                                  children: [
+                                    AspectRatio(
+                                      aspectRatio: c.value.aspectRatio,
+                                      child: VideoPlayer(c),
+                                    ),
+                                    if (!c.value.isPlaying)
+                                      Icon(
+                                        Icons.play_circle_fill,
+                                        size: 72,
+                                        color: Colors.white.withOpacity(0.8),
+                                      ),
+                                  ],
+                                ),
+                              );
+                            },
+                          ),
+                        );
+                      }
+
+                      final icon = a.mimetype.startsWith('audio/')
+                          ? Icons.audiotrack
+                          : Icons.insert_drive_file;
+
+                      return Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(18),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                icon,
+                                size: 64,
+                                color: theme.colorScheme.onSurface.withOpacity(0.75),
+                              ),
+                              const SizedBox(height: 12),
+                              Text(
+                                a.filename.isNotEmpty ? a.filename : 'Файл',
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                textAlign: TextAlign.center,
+                                style: theme.textTheme.titleSmall,
+                              ),
+                              const SizedBox(height: 14),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  ElevatedButton.icon(
+                                    onPressed: _openCurrent,
+                                    icon: const Icon(Icons.open_in_new),
+                                    label: const Text('Открыть'),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  OutlinedButton.icon(
+                                    onPressed: _saveCurrent,
+                                    icon: const Icon(Icons.download_outlined),
+                                    label: const Text('Скачать'),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
 }
 
 class _MessageBubble extends StatelessWidget {
@@ -760,6 +1538,7 @@ class _MessageBubble extends StatelessWidget {
   final String timeLabel;
   final bool isMe;
   final bool isDark;
+  final void Function(ChatAttachment a)? onOpenAttachment;
 
   const _MessageBubble({
     required this.text,
@@ -767,6 +1546,7 @@ class _MessageBubble extends StatelessWidget {
     required this.timeLabel,
     required this.isMe,
     required this.isDark,
+    this.onOpenAttachment,
   });
 
   @override
@@ -775,9 +1555,13 @@ class _MessageBubble extends StatelessWidget {
     final baseInk = isDark ? Colors.white : Colors.black;
     final isMeColor = isMe
         ? (isDark
-            ? AppColors.primary.withOpacity(0.35)
-            : AppColors.primary.withOpacity(0.22))
+            ? theme.colorScheme.primary.withOpacity(0.35)
+            : theme.colorScheme.primary.withOpacity(0.22))
         : null;
+
+    void onTapAttachment(ChatAttachment a) {
+      onOpenAttachment?.call(a);
+    }
 
     return GlassSurface(
       borderRadius: 16,
@@ -793,27 +1577,100 @@ class _MessageBubble extends StatelessWidget {
             children: [
               for (final a in attachments) ...[
                 if (a.isImage)
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: Image.file(
-                      File(a.localPath),
-                      fit: BoxFit.cover,
-                      errorBuilder: (context, error, stack) {
-                        return Container(
-                          width: 220,
-                          height: 160,
-                          color: Theme.of(context).colorScheme.surface,
-                        );
-                      },
+                  Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: () => onTapAttachment(a),
+                      borderRadius: BorderRadius.circular(12),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: Image.file(
+                          File(a.localPath),
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stack) {
+                            return Container(
+                              width: 220,
+                              height: 160,
+                              color: Theme.of(context).colorScheme.surface,
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                  )
+                else if (a.isVideo)
+                  Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: () => onTapAttachment(a),
+                      borderRadius: BorderRadius.circular(12),
+                      child: Container(
+                        width: 220,
+                        height: 140,
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.surface,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: theme.colorScheme.onSurface.withOpacity(0.12),
+                          ),
+                        ),
+                        child: Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.play_circle_fill,
+                                size: 48,
+                                color: theme.colorScheme.onSurface.withOpacity(0.7),
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                a.filename,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: theme.colorScheme.onSurface.withOpacity(0.85),
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                     ),
                   )
                 else
-                  Text(
-                    a.filename,
-                    style: TextStyle(
-                      color: theme.colorScheme.onSurface.withOpacity(0.85),
-                      fontSize: 12,
-                      height: 1.25,
+                  Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: () => onTapAttachment(a),
+                      borderRadius: BorderRadius.circular(10),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.insert_drive_file,
+                              size: 16,
+                              color: theme.colorScheme.onSurface.withOpacity(0.75),
+                            ),
+                            const SizedBox(width: 8),
+                            Flexible(
+                              child: Text(
+                                a.filename,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: theme.colorScheme.onSurface.withOpacity(0.85),
+                                  fontSize: 12,
+                                  height: 1.25,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
                 const SizedBox(height: 6),
@@ -835,6 +1692,59 @@ class _MessageBubble extends StatelessWidget {
                 ),
               ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ContextMenuItem extends StatelessWidget {
+  final HugeIcon icon;
+  final String label;
+  final bool danger;
+  final VoidCallback onTap;
+
+  const _ContextMenuItem({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.danger = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final c = danger
+        ? theme.colorScheme.error
+        : theme.colorScheme.onSurface.withOpacity(0.9);
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        child: SizedBox(
+          height: 44,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            child: Row(
+              children: [
+                HugeIcon(icon: icon.icon, color: c, size: 18),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: c,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -929,3 +1839,53 @@ class _Avatar extends StatelessWidget {
     );
   }
 }
+
+class _AttachOption extends StatelessWidget {
+    final IconData icon;
+    final String label;
+    final VoidCallback onTap;
+
+    const _AttachOption({
+      Key? key,
+      required this.icon,
+      required this.label,
+      required this.onTap,
+    }) : super(key: key);
+
+    @override
+    Widget build(BuildContext context) {
+      final theme = Theme.of(context);
+
+      return Semantics(
+        button: true,
+        label: label,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(12),
+            onTap: onTap,
+            child: Container(
+              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
+              width: 96,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  CircleAvatar(
+                    radius: 28,
+                    backgroundColor: theme.colorScheme.primary.withOpacity(0.12),
+                    child: Icon(icon, size: 28, color: theme.colorScheme.primary),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    label,
+                    style: theme.textTheme.bodyMedium,
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+  }
