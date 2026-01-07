@@ -27,7 +27,53 @@ class ChatsRepository {
   final ChatsApi api;
   final RenSdk renSdk;
 
+  final Map<int, Uint8List> _ciphertextMemoryCache = <int, Uint8List>{};
+  final Map<int, Future<Uint8List>> _ciphertextInFlight = <int, Future<Uint8List>>{};
+
   ChatsRepository(this.api, this.renSdk);
+
+  Future<Uint8List> _getCiphertextBytes(int fileId) async {
+    final cached = _ciphertextMemoryCache[fileId];
+    if (cached != null) {
+      return cached;
+    }
+
+    final inFlight = _ciphertextInFlight[fileId];
+    if (inFlight != null) {
+      return inFlight;
+    }
+
+    final future = () async {
+      final dir = await getTemporaryDirectory();
+      final cacheDir = Directory('${dir.path}/ren_ciphertext_cache');
+      if (!await cacheDir.exists()) {
+        await cacheDir.create(recursive: true);
+      }
+      final cacheFile = File('${cacheDir.path}/$fileId.bin');
+
+      if (await cacheFile.exists()) {
+        final bytes = await cacheFile.readAsBytes();
+        _ciphertextMemoryCache[fileId] = bytes;
+        return bytes;
+      }
+
+      final bytes = await api.downloadMedia(fileId);
+      _ciphertextMemoryCache[fileId] = bytes;
+      try {
+        await cacheFile.writeAsBytes(bytes, flush: true);
+      } catch (_) {
+        // ignore cache write errors
+      }
+      return bytes;
+    }();
+
+    _ciphertextInFlight[fileId] = future;
+    try {
+      return await future;
+    } finally {
+      _ciphertextInFlight.remove(fileId);
+    }
+  }
 
   Future<List<ChatPreview>> fetchChats() async {
     final raw = await api.listChats();
@@ -76,8 +122,18 @@ class ChatsRepository {
     return out;
   }
 
-  Future<List<ChatMessage>> fetchMessages(int chatId) async {
-    final raw = await api.getMessages(chatId);
+  Future<List<ChatMessage>> fetchMessages(
+    int chatId, {
+    int? limit,
+    int? beforeId,
+    int? afterId,
+  }) async {
+    final raw = await api.getMessages(
+      chatId,
+      limit: limit,
+      beforeId: beforeId,
+      afterId: afterId,
+    );
 
     final myUserIdStr = await SecureStorage.readKey(Keys.UserId);
     final myUserId = int.tryParse(myUserIdStr ?? '') ?? 0;
@@ -169,7 +225,7 @@ class ChatsRepository {
       }
       if (fileId != null && fileId > 0) {
         try {
-          final ciphertextBytes = await api.downloadMedia(fileId);
+          final ciphertextBytes = await _getCiphertextBytes(fileId);
           ciphertextB64 = base64Encode(ciphertextBytes);
         } catch (e) {
           debugPrint('download media failed fileId=$fileId err=$e');

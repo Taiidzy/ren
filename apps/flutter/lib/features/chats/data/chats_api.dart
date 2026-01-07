@@ -45,11 +45,21 @@ class ChatsApi {
     }
   }
 
-  Future<List<dynamic>> getMessages(int chatId) async {
+  Future<List<dynamic>> getMessages(
+    int chatId, {
+    int? limit,
+    int? beforeId,
+    int? afterId,
+  }) async {
     final token = await _requireToken();
     try {
       final resp = await dio.get(
         '${Apiurl.api}/chats/$chatId/messages',
+        queryParameters: {
+          if (limit != null) 'limit': limit,
+          if (beforeId != null) 'before_id': beforeId,
+          if (afterId != null) 'after_id': afterId,
+        },
         options: Options(headers: {'Authorization': 'Bearer $token'}),
       );
       return (resp.data as List<dynamic>?) ?? const [];

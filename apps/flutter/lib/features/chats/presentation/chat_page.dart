@@ -47,6 +47,8 @@ class _ChatPageState extends State<ChatPage> {
   final _focusNode = FocusNode();
   final _scrollController = ScrollController();
   bool _loading = true;
+  bool _loadingMore = false;
+  bool _hasMore = true;
   final List<ChatMessage> _messages = [];
 
   ChatMessage? _replyTo;
@@ -132,6 +134,81 @@ class _ChatPageState extends State<ChatPage> {
         _isAtBottom = atBottom;
       });
     }
+
+    // Pagination: when user scrolls near top, load older messages.
+    if (pos.pixels < 220) {
+      _loadOlder();
+    }
+  }
+
+  Future<void> _loadOlder() async {
+    if (_loading || _loadingMore || !_hasMore) return;
+    if (_messages.isEmpty) return;
+
+    final chatId = int.tryParse(widget.chat.id) ?? 0;
+    if (chatId <= 0) return;
+
+    final beforeId = int.tryParse(_messages.first.id) ?? 0;
+    if (beforeId <= 0) return;
+
+    final repo = context.read<ChatsRepository>();
+
+    final oldPixels = _scrollController.hasClients ? _scrollController.position.pixels : 0.0;
+    final oldMax = _scrollController.hasClients ? _scrollController.position.maxScrollExtent : 0.0;
+
+    setState(() {
+      _loadingMore = true;
+    });
+
+    try {
+      final list = await repo.fetchMessages(chatId, limit: 50, beforeId: beforeId);
+      if (!mounted) return;
+
+      if (list.isEmpty) {
+        setState(() {
+          _hasMore = false;
+          _loadingMore = false;
+        });
+        return;
+      }
+
+      final existingIds = _messages.map((e) => e.id).toSet();
+      final toAdd = <ChatMessage>[];
+      for (final m in list) {
+        if (!existingIds.contains(m.id)) {
+          toAdd.add(m);
+        }
+      }
+
+      if (toAdd.isEmpty) {
+        setState(() {
+          _loadingMore = false;
+        });
+        return;
+      }
+
+      setState(() {
+        _messages.insertAll(0, toAdd);
+        _loadingMore = false;
+      });
+
+      // Preserve scroll position: compensate added content height.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (!_scrollController.hasClients) return;
+        final newMax = _scrollController.position.maxScrollExtent;
+        final delta = newMax - oldMax;
+        final target = oldPixels + delta;
+        if (target.isFinite) {
+          _scrollController.jumpTo(target);
+        }
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loadingMore = false;
+      });
+    }
   }
 
   void _onFocusChanged() {
@@ -190,13 +267,14 @@ class _ChatPageState extends State<ChatPage> {
     final repo = context.read<ChatsRepository>();
 
     try {
-      final list = await repo.fetchMessages(chatId);
+      final list = await repo.fetchMessages(chatId, limit: 50);
       if (!mounted) return;
       setState(() {
         _messages
           ..clear()
           ..addAll(list);
         _loading = false;
+        _hasMore = true;
       });
       _scheduleScrollToBottom(animated: false);
     } catch (_) {
@@ -1197,7 +1275,23 @@ class _ChatPageState extends State<ChatPage> {
               children: [
                 Positioned.fill(
                   child: _loading
-                      ? const Center(child: CircularProgressIndicator())
+                      ? ListView.separated(
+                          padding: EdgeInsets.fromLTRB(
+                            horizontalPadding,
+                            listTopPadding,
+                            horizontalPadding,
+                            listBottomPadding,
+                          ),
+                          itemCount: 10,
+                          separatorBuilder: (_, __) => const SizedBox(height: 10),
+                          itemBuilder: (context, index) {
+                            final alignRight = index.isOdd;
+                            return Align(
+                              alignment: alignRight ? Alignment.centerRight : Alignment.centerLeft,
+                              child: _SkeletonMessageBubble(isMe: alignRight),
+                            );
+                          },
+                        )
                       : ListView.separated(
                           controller: _scrollController,
                           padding: EdgeInsets.fromLTRB(
@@ -2164,6 +2258,108 @@ class _MessageBubble extends StatelessWidget {
   }
 }
 
+class _SkeletonMessageBubble extends StatelessWidget {
+  final bool isMe;
+
+  const _SkeletonMessageBubble({required this.isMe});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final maxW = MediaQuery.of(context).size.width * 0.62;
+    final w = isMe ? maxW : (maxW * 0.82);
+
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxWidth: w),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surface.withOpacity(0.55),
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: const Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _SkeletonBox(width: 180, height: 12, radius: 8),
+            SizedBox(height: 8),
+            _SkeletonBox(width: 140, height: 12, radius: 8),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SkeletonBox extends StatefulWidget {
+  final double width;
+  final double height;
+  final double radius;
+
+  const _SkeletonBox({
+    required this.width,
+    required this.height,
+    required this.radius,
+  });
+
+  @override
+  State<_SkeletonBox> createState() => _SkeletonBoxState();
+}
+
+class _SkeletonBoxState extends State<_SkeletonBox> with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1100),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final base = isDark ? Colors.white : Colors.black;
+
+    final c1 = base.withOpacity(isDark ? 0.10 : 0.06);
+    final c2 = base.withOpacity(isDark ? 0.18 : 0.10);
+
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, _) {
+        final t = _controller.value;
+        final begin = Alignment(-1.0 - 2.0 * t, 0);
+        final end = Alignment(1.0 - 2.0 * t, 0);
+
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(widget.radius),
+          child: Container(
+            width: widget.width,
+            height: widget.height,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: begin,
+                end: end,
+                colors: [c1, c2, c1],
+                stops: const [0.2, 0.5, 0.8],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
 class _ContextMenuItem extends StatelessWidget {
   final HugeIcon icon;
   final String label;
@@ -2306,51 +2502,51 @@ class _Avatar extends StatelessWidget {
 }
 
 class _AttachOption extends StatelessWidget {
-    final IconData icon;
-    final String label;
-    final VoidCallback onTap;
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
 
-    const _AttachOption({
-      Key? key,
-      required this.icon,
-      required this.label,
-      required this.onTap,
-    }) : super(key: key);
+  const _AttachOption({
+    Key? key,
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  }) : super(key: key);
 
-    @override
-    Widget build(BuildContext context) {
-      final theme = Theme.of(context);
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
 
-      return Semantics(
-        button: true,
-        label: label,
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            borderRadius: BorderRadius.circular(12),
-            onTap: onTap,
-            child: Container(
-              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
-              width: 96,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  CircleAvatar(
-                    radius: 28,
-                    backgroundColor: theme.colorScheme.primary.withOpacity(0.12),
-                    child: Icon(icon, size: 28, color: theme.colorScheme.primary),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    label,
-                    style: theme.textTheme.bodyMedium,
-                    textAlign: TextAlign.center,
-                  ),
-                ],
-              ),
+    return Semantics(
+      button: true,
+      label: label,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
+            width: 96,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircleAvatar(
+                  radius: 28,
+                  backgroundColor: theme.colorScheme.primary.withOpacity(0.12),
+                  child: Icon(icon, size: 28, color: theme.colorScheme.primary),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  label,
+                  style: theme.textTheme.bodyMedium,
+                  textAlign: TextAlign.center,
+                ),
+              ],
             ),
           ),
         ),
-      );
-    }
+      ),
+    );
   }
+}

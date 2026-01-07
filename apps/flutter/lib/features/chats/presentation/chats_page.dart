@@ -168,6 +168,8 @@ class _HomePageState extends State<ChatsPage> {
             builder: (context, snapshot) {
               final chats = snapshot.data ?? const <ChatPreview>[];
 
+              final isLoading = snapshot.connectionState == ConnectionState.waiting;
+
               if (snapshot.hasData) {
                 Future.microtask(() => _ensureRealtime(chats));
               }
@@ -190,8 +192,7 @@ class _HomePageState extends State<ChatsPage> {
                   )
                   .toList();
 
-              final favorites =
-                  decoratedChats.take(8).map((c) => c.user).toList();
+              final favorites = decoratedChats.take(8).map((c) => c.user).toList();
 
               return Padding(
                 padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
@@ -228,24 +229,29 @@ class _HomePageState extends State<ChatsPage> {
                                     child: Row(
                                       mainAxisAlignment: MainAxisAlignment.center,
                                       children: [
-                                        for (int i = 0;
-                                            i < favorites.length;
-                                            i++) ...[
-                                          if (i != 0) const SizedBox(width: 12),
-                                          _FavoriteItem(
-                                            user: favorites[i],
-                                            onTap: () {
-                                              final user = favorites[i];
-                                              final chat = chats.firstWhere(
-                                                (c) => c.user.id == user.id,
-                                              );
-                                              Navigator.of(context).push(
-                                                adaptivePageRoute(
-                                                  (_) => ChatPage(chat: chat),
-                                                ),
-                                              );
-                                            },
-                                          ),
+                                        if (isLoading) ...[
+                                          for (int i = 0; i < 8; i++) ...[
+                                            if (i != 0) const SizedBox(width: 12),
+                                            const _SkeletonFavoriteItem(),
+                                          ]
+                                        ] else ...[
+                                          for (int i = 0; i < favorites.length; i++) ...[
+                                            if (i != 0) const SizedBox(width: 12),
+                                            _FavoriteItem(
+                                              user: favorites[i],
+                                              onTap: () {
+                                                final user = favorites[i];
+                                                final chat = chats.firstWhere(
+                                                  (c) => c.user.id == user.id,
+                                                );
+                                                Navigator.of(context).push(
+                                                  adaptivePageRoute(
+                                                    (_) => ChatPage(chat: chat),
+                                                  ),
+                                                );
+                                              },
+                                            ),
+                                          ],
                                         ],
                                       ],
                                     ),
@@ -259,8 +265,15 @@ class _HomePageState extends State<ChatsPage> {
                     ),
                     const SizedBox(height: 14),
                     Expanded(
-                      child: snapshot.connectionState == ConnectionState.waiting
-                          ? const Center(child: CircularProgressIndicator())
+                      child: isLoading
+                          ? ListView.separated(
+                              padding: const EdgeInsets.only(bottom: 16),
+                              itemCount: 10,
+                              separatorBuilder: (_, __) => const SizedBox(height: 10),
+                              itemBuilder: (context, index) {
+                                return const _SkeletonChatTile();
+                              },
+                            )
                           : ListView.separated(
                               padding: const EdgeInsets.only(bottom: 16),
                               itemCount: decoratedChats.length,
@@ -285,6 +298,131 @@ class _HomePageState extends State<ChatsPage> {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _SkeletonFavoriteItem extends StatelessWidget {
+  const _SkeletonFavoriteItem();
+
+  @override
+  Widget build(BuildContext context) {
+    return const SizedBox(
+      width: 60,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _SkeletonBox(width: 52, height: 52, radius: 16),
+          SizedBox(height: 6),
+          _SkeletonBox(width: 46, height: 10, radius: 6),
+        ],
+      ),
+    );
+  }
+}
+
+class _SkeletonChatTile extends StatelessWidget {
+  const _SkeletonChatTile();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final baseInk = isDark ? Colors.white : Colors.black;
+
+    return GlassSurface(
+      borderRadius: 18,
+      blurSigma: 14,
+      borderColor: baseInk.withOpacity(isDark ? 0.18 : 0.10),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      child: Row(
+        children: [
+          const _SkeletonBox(width: 46, height: 46, radius: 16),
+          const SizedBox(width: 12),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _SkeletonBox(width: 140, height: 14, radius: 8),
+                SizedBox(height: 8),
+                _SkeletonBox(width: 200, height: 12, radius: 8),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          const _SkeletonBox(width: 32, height: 12, radius: 8),
+        ],
+      ),
+    );
+  }
+}
+
+class _SkeletonBox extends StatefulWidget {
+  final double width;
+  final double height;
+  final double radius;
+
+  const _SkeletonBox({
+    required this.width,
+    required this.height,
+    required this.radius,
+  });
+
+  @override
+  State<_SkeletonBox> createState() => _SkeletonBoxState();
+}
+
+class _SkeletonBoxState extends State<_SkeletonBox> with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1100),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final base = isDark ? Colors.white : Colors.black;
+
+    final c1 = base.withOpacity(isDark ? 0.10 : 0.06);
+    final c2 = base.withOpacity(isDark ? 0.18 : 0.10);
+
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, _) {
+        final t = _controller.value;
+        final begin = Alignment(-1.0 - 2.0 * t, 0);
+        final end = Alignment(1.0 - 2.0 * t, 0);
+
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(widget.radius),
+          child: Container(
+            width: widget.width,
+            height: widget.height,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: begin,
+                end: end,
+                colors: [c1, c2, c1],
+                stops: const [0.2, 0.5, 0.8],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }

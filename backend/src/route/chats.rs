@@ -27,6 +27,13 @@ pub fn router() -> Router<AppState> {
         .route("/chats/:id", delete(delete_or_leave_chat))
 }
 
+#[derive(Deserialize)]
+struct GetMessagesQuery {
+    limit: Option<i64>,
+    before_id: Option<i64>,
+    after_id: Option<i64>,
+}
+
 // ---------------------------
 // POST /chats — создать чат
 // ---------------------------
@@ -307,36 +314,50 @@ async fn get_messages(
     State(state): State<AppState>,
     CurrentUser { id: current_user_id }: CurrentUser,
     Path(chat_id): Path<i32>,
+    Query(q): Query<GetMessagesQuery>,
 ) -> Result<Json<Vec<Message>>, (StatusCode, String)> {
     // Проверяем, что пользователь — участник чата (общая утилита)
     ensure_member(&state, chat_id, current_user_id).await?;
 
+    let limit = q.limit.unwrap_or(50).clamp(1, 200);
+    let before_id = q.before_id;
+    let after_id = q.after_id;
+
     let rows = sqlx::query(
-        r#"
-        SELECT 
-            id::INT8 AS id, 
-            chat_id::INT8 AS chat_id, 
-            sender_id::INT8 AS sender_id, 
-            COALESCE(message, body) AS message,
-            COALESCE(message_type, 'text') AS message_type,
-            created_at,
-            edited_at,
-            reply_to_message_id::INT8 AS reply_to_message_id,
-            forwarded_from_message_id::INT8 AS forwarded_from_message_id,
-            forwarded_from_chat_id::INT8 AS forwarded_from_chat_id,
-            forwarded_from_sender_id::INT8 AS forwarded_from_sender_id,
-            deleted_at,
-            deleted_by::INT8 AS deleted_by,
-            COALESCE(is_read, false) AS is_read,
-            envelopes,
-            metadata
-        FROM messages
-        WHERE chat_id = $1
-          AND deleted_at IS NULL
+        r#
+        SELECT * FROM (
+            SELECT 
+                id::INT8 AS id, 
+                chat_id::INT8 AS chat_id, 
+                sender_id::INT8 AS sender_id, 
+                COALESCE(message, body) AS message,
+                COALESCE(message_type, 'text') AS message_type,
+                created_at,
+                edited_at,
+                reply_to_message_id::INT8 AS reply_to_message_id,
+                forwarded_from_message_id::INT8 AS forwarded_from_message_id,
+                forwarded_from_chat_id::INT8 AS forwarded_from_chat_id,
+                forwarded_from_sender_id::INT8 AS forwarded_from_sender_id,
+                deleted_at,
+                deleted_by::INT8 AS deleted_by,
+                COALESCE(is_read, false) AS is_read,
+                envelopes,
+                metadata
+            FROM messages
+            WHERE chat_id = $1
+              AND deleted_at IS NULL
+              AND ($2::INT8 IS NULL OR id::INT8 < $2::INT8)
+              AND ($3::INT8 IS NULL OR id::INT8 > $3::INT8)
+            ORDER BY created_at DESC
+            LIMIT $4
+        ) t
         ORDER BY created_at ASC
         "#,
     )
     .bind(chat_id)
+    .bind(before_id)
+    .bind(after_id)
+    .bind(limit)
     .fetch_all(&state.pool)
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
