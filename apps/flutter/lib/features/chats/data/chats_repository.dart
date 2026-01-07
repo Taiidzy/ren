@@ -93,6 +93,11 @@ class ChatsRepository {
           ? m['sender_id'] as int
           : int.tryParse('${m['sender_id']}') ?? 0;
 
+      final replyDyn = m['reply_to_message_id'] ?? m['replyToMessageId'];
+      final replyId = (replyDyn is int)
+          ? replyDyn
+          : int.tryParse('${replyDyn ?? ''}');
+
       final createdAtStr = (m['created_at'] as String?) ?? '';
       final createdAt = DateTime.tryParse(createdAtStr) ?? DateTime.now();
 
@@ -119,6 +124,7 @@ class ChatsRepository {
           text: decrypted.text,
           attachments: attachments,
           sentAt: createdAt,
+          replyToMessageId: (replyId != null && replyId > 0) ? replyId.toString() : null,
         ),
       );
     }

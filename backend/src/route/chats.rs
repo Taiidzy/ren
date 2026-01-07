@@ -332,6 +332,7 @@ async fn get_messages(
             metadata
         FROM messages
         WHERE chat_id = $1
+          AND deleted_at IS NULL
         ORDER BY created_at ASC
         "#,
     )

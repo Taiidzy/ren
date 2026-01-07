@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
@@ -71,6 +70,23 @@ class _ChatPageState extends State<ChatPage> {
 
   RealtimeClient? _rt;
   StreamSubscription? _rtSub;
+
+  Future<void> _ensureWsReady(int chatId) async {
+    _rt ??= context.read<RealtimeClient>();
+    final rt = _rt!;
+    if (!rt.isConnected) {
+      await rt.connect();
+    }
+    rt.joinChat(chatId);
+  }
+
+  ChatMessage? _findMessageById(String? id) {
+    if (id == null || id.isEmpty) return null;
+    for (final m in _messages) {
+      if (m.id == id) return m;
+    }
+    return null;
+  }
 
   @override
   void initState() {
@@ -301,6 +317,11 @@ class _ChatPageState extends State<ChatPage> {
       final createdAtStr = (m['created_at'] as String?) ?? '';
       final createdAt = DateTime.tryParse(createdAtStr) ?? DateTime.now();
 
+      final replyDyn = m['reply_to_message_id'] ?? m['replyToMessageId'];
+      final replyId = (replyDyn is int)
+          ? replyDyn
+          : int.tryParse('${replyDyn ?? ''}');
+
       final myId = _myUserId ?? 0;
       final isMe = (myId > 0) ? senderId == myId : senderId != peerId;
 
@@ -329,6 +350,7 @@ class _ChatPageState extends State<ChatPage> {
             text: decoded.text,
             attachments: decoded.attachments,
             sentAt: createdAt,
+            replyToMessageId: (replyId != null && replyId > 0) ? replyId.toString() : null,
           ),
         );
       });
@@ -351,6 +373,10 @@ class _ChatPageState extends State<ChatPage> {
     final hasAttachments = _pending.isNotEmpty;
     if (text.isEmpty && !hasAttachments) return;
     if (peerId <= 0) return;
+
+    final repo = context.read<ChatsRepository>();
+    _rt ??= context.read<RealtimeClient>();
+    final rt = _rt!;
 
     _typingDebounce?.cancel();
     _sendTyping(false);
@@ -397,13 +423,13 @@ class _ChatPageState extends State<ChatPage> {
           text: text,
           attachments: optimisticAtt,
           sentAt: DateTime.now(),
+          replyToMessageId: replyTo?.id,
         ),
       );
     });
 
     _scheduleScrollToBottom(animated: true);
 
-    final repo = context.read<ChatsRepository>();
     final payload = hasAttachments
         ? await repo.buildEncryptedWsMediaMessage(
             chatId: chatId,
@@ -425,12 +451,10 @@ class _ChatPageState extends State<ChatPage> {
             plaintext: text,
           );
 
-    _rt ??= context.read<RealtimeClient>();
-    final rt = _rt!;
     if (!rt.isConnected) {
       await rt.connect();
-      rt.joinChat(chatId);
     }
+    rt.joinChat(chatId);
 
     rt.sendMessage(
       chatId: chatId,
@@ -1055,6 +1079,8 @@ class _ChatPageState extends State<ChatPage> {
                           separatorBuilder: (_, __) => const SizedBox(height: 10),
                           itemBuilder: (context, index) {
                             final msg = messages[index];
+                            final replied = _findMessageById(msg.replyToMessageId);
+                            final replyPreview = replied?.text.trim();
                             return Align(
                               alignment: msg.isMe
                                   ? Alignment.centerRight
@@ -1085,6 +1111,9 @@ class _ChatPageState extends State<ChatPage> {
                                         : null,
                                   ),
                                   child: _MessageBubble(
+                                    replyPreview: (replyPreview != null && replyPreview.isNotEmpty)
+                                        ? replyPreview
+                                        : null,
                                     text: msg.text,
                                     attachments: msg.attachments,
                                     timeLabel: _formatTime(msg.sentAt),
@@ -1205,13 +1234,15 @@ class _ChatPageState extends State<ChatPage> {
   void _deleteRemote(Set<String> ids) {
     final chatId = int.tryParse(widget.chat.id) ?? 0;
     if (chatId <= 0) return;
-    _rt ??= context.read<RealtimeClient>();
-    final rt = _rt!;
-    for (final id in ids) {
-      final mid = int.tryParse(id);
-      if (mid == null || mid <= 0) continue;
-      rt.deleteMessage(chatId: chatId, messageId: mid);
-    }
+    () async {
+      await _ensureWsReady(chatId);
+      final rt = _rt!;
+      for (final id in ids) {
+        final mid = int.tryParse(id);
+        if (mid == null || mid <= 0) continue;
+        rt.deleteMessage(chatId: chatId, messageId: mid);
+      }
+    }();
   }
 
   Future<void> _forwardSelected() async {
@@ -1220,6 +1251,9 @@ class _ChatPageState extends State<ChatPage> {
     if (chatId <= 0) return;
 
     final repo = context.read<ChatsRepository>();
+
+    await _ensureWsReady(chatId);
+
     final chats = await repo.fetchChats();
     if (!mounted) return;
 
@@ -1307,26 +1341,9 @@ class _ChatPageState extends State<ChatPage> {
       );
     }
 
-    Future<void> doShare() async {
-      try {
-        final files = msg.attachments
-            .where((a) => a.localPath.isNotEmpty)
-            .map((a) => XFile(a.localPath, name: a.filename))
-            .toList();
-
-        if (files.isNotEmpty) {
-          await Share.shareXFiles(
-            files,
-            text: msg.text.trim().isEmpty ? null : msg.text.trim(),
-          );
-        } else {
-          final t = msg.text.trim();
-          if (t.isEmpty) return;
-          await Share.share(t);
-        }
-      } catch (e) {
-        debugPrint('Failed to share message: $e');
-      }
+    Future<void> doForward() async {
+      _enterSelectionMode(initial: msg);
+      await _forwardSelected();
     }
 
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
@@ -1379,7 +1396,7 @@ class _ChatPageState extends State<ChatPage> {
                       ),
                       _ContextMenuItem(
                         icon: HugeIcon(icon: HugeIcons.strokeRoundedShare08),
-                        label: msg.attachments.isNotEmpty ? 'Переслать (с файлами)' : 'Переслать',
+                        label: msg.attachments.isNotEmpty ? 'Переслать (без файлов)' : 'Переслать',
                         onTap: () => Navigator.of(ctx).pop('share'),
                       ),
                       _ContextMenuItem(
@@ -1415,7 +1432,7 @@ class _ChatPageState extends State<ChatPage> {
         await doCopy();
         break;
       case 'share':
-        await doShare();
+        await doForward();
         break;
       case 'select':
         _enterSelectionMode(initial: msg);
@@ -1697,6 +1714,7 @@ class _AttachmentViewerSheetState extends State<_AttachmentViewerSheet> {
 }
 
 class _MessageBubble extends StatelessWidget {
+  final String? replyPreview;
   final String text;
   final List<ChatAttachment> attachments;
   final String timeLabel;
@@ -1705,6 +1723,7 @@ class _MessageBubble extends StatelessWidget {
   final void Function(ChatAttachment a)? onOpenAttachment;
 
   const _MessageBubble({
+    this.replyPreview,
     required this.text,
     this.attachments = const [],
     required this.timeLabel,
@@ -1739,6 +1758,30 @@ class _MessageBubble extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
+              if (replyPreview != null && replyPreview!.trim().isNotEmpty) ...[
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.onSurface.withOpacity(0.06),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: theme.colorScheme.onSurface.withOpacity(0.08),
+                    ),
+                  ),
+                  child: Text(
+                    replyPreview!.trim(),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: theme.colorScheme.onSurface.withOpacity(0.75),
+                      fontSize: 12,
+                      height: 1.25,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 6),
+              ],
               for (final a in attachments) ...[
                 if (a.isImage)
                   Material(
