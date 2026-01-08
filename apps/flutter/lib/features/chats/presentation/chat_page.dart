@@ -435,7 +435,7 @@ class _ChatPageState extends State<ChatPage> {
           ? m['sender_id'] as int
           : int.tryParse('${m['sender_id']}') ?? 0;
       final createdAtStr = (m['created_at'] as String?) ?? '';
-      final createdAt = DateTime.tryParse(createdAtStr) ?? DateTime.now();
+      final createdAt = (DateTime.tryParse(createdAtStr) ?? DateTime.now()).toLocal();
 
       final replyDyn = m['reply_to_message_id'] ?? m['replyToMessageId'];
       final replyId = (replyDyn is int)
@@ -1470,8 +1470,9 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   String _formatTime(DateTime dt) {
-    final h = dt.hour.toString().padLeft(2, '0');
-    final m = dt.minute.toString().padLeft(2, '0');
+    final local = dt.toLocal();
+    final h = local.hour.toString().padLeft(2, '0');
+    final m = local.minute.toString().padLeft(2, '0');
     return '$h:$m';
   }
 

@@ -155,7 +155,7 @@ class ChatsRepository {
           : int.tryParse('${replyDyn ?? ''}');
 
       final createdAtStr = (m['created_at'] as String?) ?? '';
-      final createdAt = DateTime.tryParse(createdAtStr) ?? DateTime.now();
+      final createdAt = (DateTime.tryParse(createdAtStr) ?? DateTime.now()).toLocal();
 
       final encrypted = (m['message'] as String?) ?? '';
 

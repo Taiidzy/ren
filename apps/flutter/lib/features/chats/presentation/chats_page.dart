@@ -627,8 +627,9 @@ class _ChatTile extends StatelessWidget {
   }
 
   String _formatTime(DateTime dt) {
-    final h = dt.hour.toString().padLeft(2, '0');
-    final m = dt.minute.toString().padLeft(2, '0');
+    final local = dt.toLocal();
+    final h = local.hour.toString().padLeft(2, '0');
+    final m = local.minute.toString().padLeft(2, '0');
     return '$h:$m';
   }
 }
