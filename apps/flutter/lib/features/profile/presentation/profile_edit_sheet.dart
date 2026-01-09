@@ -9,15 +9,14 @@ import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
 import 'package:ren/features/profile/presentation/profile_store.dart';
+import 'package:ren/shared/widgets/glass_overlays.dart';
 import 'package:ren/shared/widgets/glass_surface.dart';
+import 'package:ren/shared/widgets/glass_snackbar.dart';
 
 class ProfileEditSheet {
   static Future<void> show(BuildContext context) async {
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      barrierColor: Colors.black.withOpacity(0.35),
+    await GlassOverlays.showGlassBottomSheet<void>(
+      context,
       builder: (context) {
         return const _ProfileEditSheetBody();
       },
@@ -69,9 +68,7 @@ class _ProfileEditPageState extends State<ProfileEditPage> {
 
     final store = context.read<ProfileStore>();
     if (!ok && store.error != null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(store.error!)),
-      );
+      showGlassSnack(context, store.error!, kind: GlassSnackKind.error);
     }
   }
 
@@ -210,9 +207,7 @@ class _ProfileEditContentState extends State<_ProfileEditContent> {
 
     final store = context.read<ProfileStore>();
     if (!ok && store.error != null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(store.error!)),
-      );
+      showGlassSnack(context, store.error!, kind: GlassSnackKind.error);
     } else if (ok) {
       // Удаляем временный файл после успешной загрузки
       try {
@@ -230,9 +225,7 @@ class _ProfileEditContentState extends State<_ProfileEditContent> {
 
     final store = context.read<ProfileStore>();
     if (!ok && store.error != null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(store.error!)),
-      );
+      showGlassSnack(context, store.error!, kind: GlassSnackKind.error);
     }
   }
 
@@ -376,9 +369,7 @@ class _ProfileEditContentState extends State<_ProfileEditContent> {
                                     if (!context.mounted) return;
                                     final st = context.read<ProfileStore>();
                                     if (!ok && st.error != null) {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        SnackBar(content: Text(st.error!)),
-                                      );
+                                      showGlassSnack(context, st.error!, kind: GlassSnackKind.error);
                                     }
                                   },
                             child: Center(
@@ -623,9 +614,7 @@ class _AvatarCropEditorState extends State<AvatarCropEditor> {
       widget.onCropComplete(tempFile);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Ошибка обработки: $e')),
-        );
+        showGlassSnack(context, 'Ошибка обработки: $e', kind: GlassSnackKind.error);
       }
     } finally {
       if (mounted) {

@@ -45,11 +45,77 @@ class ChatsApi {
     }
   }
 
-  Future<List<dynamic>> getMessages(int chatId) async {
+  Future<List<dynamic>> searchUsers(String query, {int limit = 15}) async {
+    final token = await _requireToken();
+    try {
+      final resp = await dio.get(
+        '${Apiurl.api}/users/search',
+        queryParameters: {
+          'q': query,
+          'limit': limit,
+        },
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+      return (resp.data as List<dynamic>?) ?? const [];
+    } on DioException catch (e) {
+      throw ApiException(
+        (e.response?.data is String)
+            ? e.response?.data as String
+            : 'Ошибка поиска пользователей',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
+  Future<void> addFavorite(int chatId) async {
+    final token = await _requireToken();
+    try {
+      await dio.post(
+        '${Apiurl.api}/chats/$chatId/favorite',
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+    } on DioException catch (e) {
+      throw ApiException(
+        (e.response?.data is String)
+            ? e.response?.data as String
+            : 'Ошибка добавления в избранное',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
+  Future<void> removeFavorite(int chatId) async {
+    final token = await _requireToken();
+    try {
+      await dio.delete(
+        '${Apiurl.api}/chats/$chatId/favorite',
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+    } on DioException catch (e) {
+      throw ApiException(
+        (e.response?.data is String)
+            ? e.response?.data as String
+            : 'Ошибка удаления из избранного',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
+  Future<List<dynamic>> getMessages(
+    int chatId, {
+    int? limit,
+    int? beforeId,
+    int? afterId,
+  }) async {
     final token = await _requireToken();
     try {
       final resp = await dio.get(
         '${Apiurl.api}/chats/$chatId/messages',
+        queryParameters: {
+          if (limit != null) 'limit': limit,
+          if (beforeId != null) 'before_id': beforeId,
+          if (afterId != null) 'after_id': afterId,
+        },
         options: Options(headers: {'Authorization': 'Bearer $token'}),
       );
       return (resp.data as List<dynamic>?) ?? const [];

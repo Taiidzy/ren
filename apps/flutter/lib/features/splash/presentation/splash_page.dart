@@ -3,7 +3,6 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:ren/core/sdk/ren_sdk.dart';
 import 'package:ren/features/auth/presentation/auth_page.dart';
 import 'package:ren/features/chats/presentation/chats_page.dart';
 
@@ -81,8 +80,7 @@ class _SplashPageState extends State<SplashPage>
   void _initSDK() async {
     try {
       final minSplashDelay = Future.delayed(const Duration(seconds: 3));
-      final sdkInit = RenSdk.instance.initialize();
-      await Future.wait([minSplashDelay, sdkInit]);
+      await minSplashDelay;
 
       // small delay to let animation finish nicely
       await Future.delayed(const Duration(milliseconds: 300));

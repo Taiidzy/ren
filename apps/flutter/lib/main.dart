@@ -31,8 +31,10 @@ import 'package:ren/core/realtime/realtime_client.dart';
 
 Future<void> main() async {
   runZonedGuarded(
-    () {
+    () async {
       WidgetsFlutterBinding.ensureInitialized();
+
+      await RenSdk.instance.initialize();
 
       FlutterError.onError = (FlutterErrorDetails details) {
         FlutterError.dumpErrorToConsole(details);

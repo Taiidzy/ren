@@ -54,6 +54,7 @@ class ChatPreview {
   final int? peerId;
   final String kind;
   final ChatUser user;
+  final bool isFavorite;
   final String lastMessage;
   final DateTime lastMessageAt;
 
@@ -62,6 +63,7 @@ class ChatPreview {
     required this.peerId,
     required this.kind,
     required this.user,
+    this.isFavorite = false,
     required this.lastMessage,
     required this.lastMessageAt,
   });

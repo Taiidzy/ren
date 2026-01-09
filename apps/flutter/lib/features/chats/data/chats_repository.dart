@@ -27,7 +27,53 @@ class ChatsRepository {
   final ChatsApi api;
   final RenSdk renSdk;
 
+  final Map<int, Uint8List> _ciphertextMemoryCache = <int, Uint8List>{};
+  final Map<int, Future<Uint8List>> _ciphertextInFlight = <int, Future<Uint8List>>{};
+
   ChatsRepository(this.api, this.renSdk);
+
+  Future<Uint8List> _getCiphertextBytes(int fileId) async {
+    final cached = _ciphertextMemoryCache[fileId];
+    if (cached != null) {
+      return cached;
+    }
+
+    final inFlight = _ciphertextInFlight[fileId];
+    if (inFlight != null) {
+      return inFlight;
+    }
+
+    final future = () async {
+      final dir = await getTemporaryDirectory();
+      final cacheDir = Directory('${dir.path}/ren_ciphertext_cache');
+      if (!await cacheDir.exists()) {
+        await cacheDir.create(recursive: true);
+      }
+      final cacheFile = File('${cacheDir.path}/$fileId.bin');
+
+      if (await cacheFile.exists()) {
+        final bytes = await cacheFile.readAsBytes();
+        _ciphertextMemoryCache[fileId] = bytes;
+        return bytes;
+      }
+
+      final bytes = await api.downloadMedia(fileId);
+      _ciphertextMemoryCache[fileId] = bytes;
+      try {
+        await cacheFile.writeAsBytes(bytes, flush: true);
+      } catch (_) {
+        // ignore cache write errors
+      }
+      return bytes;
+    }();
+
+    _ciphertextInFlight[fileId] = future;
+    try {
+      return await future;
+    } finally {
+      _ciphertextInFlight.remove(fileId);
+    }
+  }
 
   Future<List<ChatPreview>> fetchChats() async {
     final raw = await api.listChats();
@@ -41,6 +87,7 @@ class ChatsRepository {
           : int.tryParse('${m['peer_id']}');
       final peerUsername = (m['peer_username'] as String?) ?? '';
       final peerAvatar = (m['peer_avatar'] as String?) ?? '';
+      final isFavorite = (m['is_favorite'] == true) || (m['isFavorite'] == true);
       final updatedAtStr = (m['updated_at'] as String?) ?? '';
 
       final updatedAt = DateTime.tryParse(updatedAtStr) ?? DateTime.now();
@@ -58,6 +105,7 @@ class ChatsRepository {
           peerId: peerId,
           kind: (m['kind'] as String?) ?? 'private',
           user: user,
+          isFavorite: isFavorite,
           lastMessage: '',
           lastMessageAt: updatedAt,
         ),
@@ -67,17 +115,58 @@ class ChatsRepository {
     return items;
   }
 
+  Future<List<ChatUser>> searchUsers(String query, {int limit = 15}) async {
+    final raw = await api.searchUsers(query, limit: limit);
+    final out = <ChatUser>[];
+    for (final it in raw) {
+      if (it is! Map) continue;
+      final m = it.cast<String, dynamic>();
+      final id = (m['id'] is int) ? m['id'] as int : int.tryParse('${m['id']}') ?? 0;
+      final username = (m['username'] as String?) ?? '';
+      final avatar = (m['avatar'] as String?) ?? '';
+      if (id <= 0) continue;
+      out.add(
+        ChatUser(
+          id: id.toString(),
+          name: username.isNotEmpty ? username : 'User',
+          avatarUrl: _avatarUrl(avatar),
+          isOnline: false,
+        ),
+      );
+    }
+    return out;
+  }
+
   Future<List<ChatUser>> favorites() async {
     final chats = await fetchChats();
     final out = <ChatUser>[];
-    for (final c in chats.take(8)) {
+    final favChats = chats.where((c) => c.isFavorite).take(5);
+    for (final c in favChats) {
       out.add(c.user);
     }
     return out;
   }
 
-  Future<List<ChatMessage>> fetchMessages(int chatId) async {
-    final raw = await api.getMessages(chatId);
+  Future<void> setFavorite(int chatId, {required bool favorite}) async {
+    if (favorite) {
+      await api.addFavorite(chatId);
+    } else {
+      await api.removeFavorite(chatId);
+    }
+  }
+
+  Future<List<ChatMessage>> fetchMessages(
+    int chatId, {
+    int? limit,
+    int? beforeId,
+    int? afterId,
+  }) async {
+    final raw = await api.getMessages(
+      chatId,
+      limit: limit,
+      beforeId: beforeId,
+      afterId: afterId,
+    );
 
     final myUserIdStr = await SecureStorage.readKey(Keys.UserId);
     final myUserId = int.tryParse(myUserIdStr ?? '') ?? 0;
@@ -99,7 +188,7 @@ class ChatsRepository {
           : int.tryParse('${replyDyn ?? ''}');
 
       final createdAtStr = (m['created_at'] as String?) ?? '';
-      final createdAt = DateTime.tryParse(createdAtStr) ?? DateTime.now();
+      final createdAt = (DateTime.tryParse(createdAtStr) ?? DateTime.now()).toLocal();
 
       final encrypted = (m['message'] as String?) ?? '';
 
@@ -169,7 +258,7 @@ class ChatsRepository {
       }
       if (fileId != null && fileId > 0) {
         try {
-          final ciphertextBytes = await api.downloadMedia(fileId);
+          final ciphertextBytes = await _getCiphertextBytes(fileId);
           ciphertextB64 = base64Encode(ciphertextBytes);
         } catch (e) {
           debugPrint('download media failed fileId=$fileId err=$e');
@@ -296,6 +385,8 @@ class ChatsRepository {
 
     final id = (json['id'] is int) ? json['id'] as int : int.tryParse('${json['id']}') ?? 0;
 
+    final isFavorite = (json['is_favorite'] == true) || (json['isFavorite'] == true);
+
     return ChatPreview(
       id: id.toString(),
       peerId: peerId,
@@ -306,6 +397,7 @@ class ChatsRepository {
         avatarUrl: _avatarUrl((json['peer_avatar'] as String?) ?? ''),
         isOnline: false,
       ),
+      isFavorite: isFavorite,
       lastMessage: '',
       lastMessageAt: DateTime.now(),
     );

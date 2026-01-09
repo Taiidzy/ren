@@ -18,7 +18,12 @@ import 'package:ren/features/chats/data/chats_repository.dart';
 import 'package:ren/features/chats/domain/chat_models.dart';
 import 'package:ren/core/realtime/realtime_client.dart';
 import 'package:ren/shared/widgets/background.dart';
+import 'package:ren/shared/widgets/avatar.dart';
+import 'package:ren/shared/widgets/skeleton.dart';
+import 'package:ren/shared/widgets/glass_overlays.dart';
 import 'package:ren/shared/widgets/glass_surface.dart';
+import 'package:ren/shared/widgets/glass_snackbar.dart';
+import 'package:ren/shared/widgets/context_menu.dart';
 import 'package:path_provider/path_provider.dart';
 
 class ChatPage extends StatefulWidget {
@@ -47,6 +52,8 @@ class _ChatPageState extends State<ChatPage> {
   final _focusNode = FocusNode();
   final _scrollController = ScrollController();
   bool _loading = true;
+  bool _loadingMore = false;
+  bool _hasMore = true;
   final List<ChatMessage> _messages = [];
 
   ChatMessage? _replyTo;
@@ -132,6 +139,81 @@ class _ChatPageState extends State<ChatPage> {
         _isAtBottom = atBottom;
       });
     }
+
+    // Pagination: when user scrolls near top, load older messages.
+    if (pos.pixels < 220) {
+      _loadOlder();
+    }
+  }
+
+  Future<void> _loadOlder() async {
+    if (_loading || _loadingMore || !_hasMore) return;
+    if (_messages.isEmpty) return;
+
+    final chatId = int.tryParse(widget.chat.id) ?? 0;
+    if (chatId <= 0) return;
+
+    final beforeId = int.tryParse(_messages.first.id) ?? 0;
+    if (beforeId <= 0) return;
+
+    final repo = context.read<ChatsRepository>();
+
+    final oldPixels = _scrollController.hasClients ? _scrollController.position.pixels : 0.0;
+    final oldMax = _scrollController.hasClients ? _scrollController.position.maxScrollExtent : 0.0;
+
+    setState(() {
+      _loadingMore = true;
+    });
+
+    try {
+      final list = await repo.fetchMessages(chatId, limit: 50, beforeId: beforeId);
+      if (!mounted) return;
+
+      if (list.isEmpty) {
+        setState(() {
+          _hasMore = false;
+          _loadingMore = false;
+        });
+        return;
+      }
+
+      final existingIds = _messages.map((e) => e.id).toSet();
+      final toAdd = <ChatMessage>[];
+      for (final m in list) {
+        if (!existingIds.contains(m.id)) {
+          toAdd.add(m);
+        }
+      }
+
+      if (toAdd.isEmpty) {
+        setState(() {
+          _loadingMore = false;
+        });
+        return;
+      }
+
+      setState(() {
+        _messages.insertAll(0, toAdd);
+        _loadingMore = false;
+      });
+
+      // Preserve scroll position: compensate added content height.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (!_scrollController.hasClients) return;
+        final newMax = _scrollController.position.maxScrollExtent;
+        final delta = newMax - oldMax;
+        final target = oldPixels + delta;
+        if (target.isFinite) {
+          _scrollController.jumpTo(target);
+        }
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loadingMore = false;
+      });
+    }
   }
 
   void _onFocusChanged() {
@@ -190,13 +272,14 @@ class _ChatPageState extends State<ChatPage> {
     final repo = context.read<ChatsRepository>();
 
     try {
-      final list = await repo.fetchMessages(chatId);
+      final list = await repo.fetchMessages(chatId, limit: 50);
       if (!mounted) return;
       setState(() {
         _messages
           ..clear()
           ..addAll(list);
         _loading = false;
+        _hasMore = true;
       });
       _scheduleScrollToBottom(animated: false);
     } catch (_) {
@@ -357,7 +440,7 @@ class _ChatPageState extends State<ChatPage> {
           ? m['sender_id'] as int
           : int.tryParse('${m['sender_id']}') ?? 0;
       final createdAtStr = (m['created_at'] as String?) ?? '';
-      final createdAt = DateTime.tryParse(createdAtStr) ?? DateTime.now();
+      final createdAt = (DateTime.tryParse(createdAtStr) ?? DateTime.now()).toLocal();
 
       final replyDyn = m['reply_to_message_id'] ?? m['replyToMessageId'];
       final replyId = (replyDyn is int)
@@ -667,10 +750,8 @@ class _ChatPageState extends State<ChatPage> {
   }) async {
     final theme = Theme.of(context);
 
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
+    await GlassOverlays.showGlassBottomSheet<void>(
+      context,
       builder: (ctx) {
         return GlassSurface(
           child: Padding(
@@ -857,7 +938,7 @@ class _ChatPageState extends State<ChatPage> {
                             ),
                           )
                         else ...[
-                          _Avatar(
+                          RenAvatar(
                             url: widget.chat.user.avatarUrl,
                             name: widget.chat.user.name,
                             isOnline: _peerOnline,
@@ -1197,7 +1278,23 @@ class _ChatPageState extends State<ChatPage> {
               children: [
                 Positioned.fill(
                   child: _loading
-                      ? const Center(child: CircularProgressIndicator())
+                      ? ListView.separated(
+                          padding: EdgeInsets.fromLTRB(
+                            horizontalPadding,
+                            listTopPadding,
+                            horizontalPadding,
+                            listBottomPadding,
+                          ),
+                          itemCount: 10,
+                          separatorBuilder: (_, __) => const SizedBox(height: 10),
+                          itemBuilder: (context, index) {
+                            final alignRight = index.isOdd;
+                            return Align(
+                              alignment: alignRight ? Alignment.centerRight : Alignment.centerLeft,
+                              child: _SkeletonMessageBubble(isMe: alignRight),
+                            );
+                          },
+                        )
                       : ListView.separated(
                           controller: _scrollController,
                           padding: EdgeInsets.fromLTRB(
@@ -1376,8 +1473,9 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   String _formatTime(DateTime dt) {
-    final h = dt.hour.toString().padLeft(2, '0');
-    final m = dt.minute.toString().padLeft(2, '0');
+    final local = dt.toLocal();
+    final h = local.hour.toString().padLeft(2, '0');
+    final m = local.minute.toString().padLeft(2, '0');
     return '$h:$m';
   }
 
@@ -1397,10 +1495,8 @@ class _ChatPageState extends State<ChatPage> {
     final initial = items.indexWhere((a) => a.localPath == tapped.localPath);
     final initialIndex = (initial >= 0) ? initial : 0;
 
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
+    await GlassOverlays.showGlassBottomSheet<void>(
+      context,
       builder: (ctx) {
         return _AttachmentViewerSheet(
           items: items,
@@ -1483,10 +1579,8 @@ class _ChatPageState extends State<ChatPage> {
     final chats = await repo.fetchChats();
     if (!mounted) return;
 
-    final selectedChat = await showModalBottomSheet<ChatPreview>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
+    final selectedChat = await GlassOverlays.showGlassBottomSheet<ChatPreview>(
+      context,
       builder: (ctx) {
         return GlassSurface(
           child: SafeArea(
@@ -1516,8 +1610,10 @@ class _ChatPageState extends State<ChatPage> {
     final toChatId = int.tryParse(selectedChat.id) ?? 0;
     final toPeerId = selectedChat.peerId ?? 0;
     if (toChatId <= 0 || toPeerId <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Пересылка поддерживается только для private чатов')),
+      showGlassSnack(
+        context,
+        'Пересылка поддерживается только для private чатов',
+        kind: GlassSnackKind.info,
       );
       return;
     }
@@ -1562,9 +1658,7 @@ class _ChatPageState extends State<ChatPage> {
       if (t.isEmpty) return;
       await Clipboard.setData(ClipboardData(text: t));
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Скопировано')),
-      );
+      showGlassSnack(context, 'Скопировано', kind: GlassSnackKind.success);
     }
 
     Future<void> doForward() async {
@@ -1584,95 +1678,56 @@ class _ChatPageState extends State<ChatPage> {
       _focusNode.requestFocus();
     }
 
-    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
-    final size = overlay.size;
-
-    final media = MediaQuery.of(context);
-    final safe = media.padding;
-
-    const menuWidth = 220.0;
-    const itemHeight = 44.0;
-
     final canEdit = msg.isMe && msg.attachments.isEmpty;
-    final itemCount = canEdit ? 6 : 5;
-    final menuHeight = itemHeight * itemCount + 16;
-
-    final minLeft = 12.0 + safe.left;
-    final maxLeft = size.width - menuWidth - 12.0 - safe.right;
-
-    final minTop = 12.0 + safe.top;
-    final maxTop = size.height - menuHeight - 12.0 - safe.bottom;
-
-    final left = (globalPosition.dx).clamp(minLeft, maxLeft < minLeft ? minLeft : maxLeft);
-    final top = (globalPosition.dy).clamp(minTop, maxTop < minTop ? minTop : maxTop);
-
-    final selected = await showGeneralDialog<String>(
-      context: context,
-      barrierDismissible: true,
-      barrierLabel: 'context_menu',
-      barrierColor: Colors.black.withOpacity(0.08),
-      pageBuilder: (ctx, a1, a2) {
-        return Material(
-          type: MaterialType.transparency,
-          child: Stack(
-            children: [
-              Positioned.fill(
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: () => Navigator.of(ctx).pop(),
-                ),
-              ),
-              Positioned(
-                left: left,
-                top: top,
-                child: GlassSurface(
-                  width: menuWidth,
-                  blurSigma: 18,
-                  borderRadius: 16,
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (canEdit)
-                        _ContextMenuItem(
-                          icon: HugeIcon(icon: HugeIcons.strokeRoundedEdit02),
-                          label: 'Редактировать',
-                          onTap: () => Navigator.of(ctx).pop('edit'),
-                        ),
-                      _ContextMenuItem(
-                        icon: HugeIcon(icon: HugeIcons.strokeRoundedArrowTurnBackward),
-                        label: 'Ответить',
-                        onTap: () => Navigator.of(ctx).pop('reply'),
-                      ),
-                      _ContextMenuItem(
-                        icon: HugeIcon(icon: HugeIcons.strokeRoundedCopy01),
-                        label: 'Копировать',
-                        onTap: () => Navigator.of(ctx).pop('copy'),
-                      ),
-                      _ContextMenuItem(
-                        icon: HugeIcon(icon: HugeIcons.strokeRoundedShare08),
-                        label: msg.attachments.isNotEmpty ? 'Переслать (без файлов)' : 'Переслать',
-                        onTap: () => Navigator.of(ctx).pop('share'),
-                      ),
-                      _ContextMenuItem(
-                        icon: HugeIcon(icon: HugeIcons.strokeRoundedTickDouble03),
-                        label: 'Выбрать',
-                        onTap: () => Navigator.of(ctx).pop('select'),
-                      ),
-                      _ContextMenuItem(
-                        icon: HugeIcon(icon: HugeIcons.strokeRoundedDelete02),
-                        label: 'Удалить',
-                        danger: true,
-                        onTap: () => Navigator.of(ctx).pop('delete'),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
+    final selected = await RenContextMenu.show<String>(
+      context,
+      globalPosition: globalPosition,
+      entries: [
+        if (canEdit)
+          RenContextMenuEntry.action(
+            RenContextMenuAction<String>(
+              icon: HugeIcon(icon: HugeIcons.strokeRoundedEdit02),
+              label: 'Редактировать',
+              value: 'edit',
+            ),
           ),
-        );
-      },
+        RenContextMenuEntry.action(
+          RenContextMenuAction<String>(
+            icon: HugeIcon(icon: HugeIcons.strokeRoundedArrowTurnBackward),
+            label: 'Ответить',
+            value: 'reply',
+          ),
+        ),
+        RenContextMenuEntry.action(
+          RenContextMenuAction<String>(
+            icon: HugeIcon(icon: HugeIcons.strokeRoundedCopy01),
+            label: 'Копировать',
+            value: 'copy',
+          ),
+        ),
+        RenContextMenuEntry.action(
+          RenContextMenuAction<String>(
+            icon: HugeIcon(icon: HugeIcons.strokeRoundedShare08),
+            label: msg.attachments.isNotEmpty ? 'Переслать (без файлов)' : 'Переслать',
+            value: 'share',
+          ),
+        ),
+        RenContextMenuEntry.action(
+          RenContextMenuAction<String>(
+            icon: HugeIcon(icon: HugeIcons.strokeRoundedTickDouble03),
+            label: 'Выбрать',
+            value: 'select',
+          ),
+        ),
+        RenContextMenuEntry.action(
+          RenContextMenuAction<String>(
+            icon: HugeIcon(icon: HugeIcons.strokeRoundedDelete02),
+            label: 'Удалить',
+            danger: true,
+            value: 'delete',
+          ),
+        ),
+      ],
     );
 
     if (!mounted) return;
@@ -1773,9 +1828,7 @@ class _AttachmentViewerSheetState extends State<_AttachmentViewerSheet> {
     } catch (error) {
       if (!mounted) return;
       debugPrint('Failed to share file: $error');
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Не удалось сохранить файл')),
-      );
+      showGlassSnack(context, 'Не удалось сохранить файл', kind: GlassSnackKind.error);
     }
   }
 
@@ -1787,9 +1840,7 @@ class _AttachmentViewerSheetState extends State<_AttachmentViewerSheet> {
       await OpenFilex.open(path);
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Не удалось открыть файл')),
-      );
+      showGlassSnack(context, 'Не удалось открыть файл', kind: GlassSnackKind.error);
     }
   }
 
@@ -2164,49 +2215,79 @@ class _MessageBubble extends StatelessWidget {
   }
 }
 
-class _ContextMenuItem extends StatelessWidget {
-  final HugeIcon icon;
-  final String label;
-  final bool danger;
-  final VoidCallback onTap;
+class _SkeletonMessageBubble extends StatelessWidget {
+  final bool isMe;
 
-  const _ContextMenuItem({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-    this.danger = false,
-  });
+  const _SkeletonMessageBubble({required this.isMe});
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final c = danger
-        ? theme.colorScheme.error
-        : theme.colorScheme.onSurface.withOpacity(0.9);
+    final maxW = MediaQuery.of(context).size.width * 0.62;
+    final w = isMe ? maxW : (maxW * 0.82);
 
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        child: SizedBox(
-          height: 44,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14),
-            child: Row(
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxWidth: w),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surface.withOpacity(0.55),
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: const Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            RenSkeletonBox(width: 180, height: 12, radius: 8),
+            SizedBox(height: 8),
+            RenSkeletonBox(width: 140, height: 12, radius: 8),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AttachOption extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  const _AttachOption({
+    Key? key,
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Semantics(
+      button: true,
+      label: label,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
+            width: 96,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                HugeIcon(icon: icon.icon, color: c, size: 18),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: c,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
+                CircleAvatar(
+                  radius: 28,
+                  backgroundColor: theme.colorScheme.primary.withOpacity(0.12),
+                  child: Icon(icon, size: 28, color: theme.colorScheme.primary),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  label,
+                  style: theme.textTheme.bodyMedium,
+                  textAlign: TextAlign.center,
                 ),
               ],
             ),
@@ -2216,141 +2297,3 @@ class _ContextMenuItem extends StatelessWidget {
     );
   }
 }
-
-class _Avatar extends StatelessWidget {
-  final String url;
-  final String name;
-  final bool isOnline;
-  final double size;
-
-  const _Avatar({
-    required this.url,
-    required this.name,
-    required this.isOnline,
-    required this.size,
-  });
-
-  String _initials(String s) {
-    final parts = s.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty);
-    final letters = parts.map((p) => p.characters.first).take(2).join();
-    return letters.isEmpty ? '?' : letters.toUpperCase();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: size,
-      height: size,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(size / 2),
-            child: url.isEmpty
-                ? Container(
-                    width: size,
-                    height: size,
-                    color: Theme.of(context).colorScheme.surface,
-                    child: Center(
-                      child: Text(
-                        _initials(name),
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.onSurface,
-                          fontWeight: FontWeight.w700,
-                          fontSize: size * 0.34,
-                        ),
-                      ),
-                    ),
-                  )
-                : Image.network(
-                    url,
-                    width: size,
-                    height: size,
-                    fit: BoxFit.cover,
-                    errorBuilder: (context, error, stack) {
-                      return Container(
-                        width: size,
-                        height: size,
-                        color: Theme.of(context).colorScheme.surface,
-                        child: Center(
-                          child: Text(
-                            _initials(name),
-                            style: TextStyle(
-                              color: Theme.of(context).colorScheme.onSurface,
-                              fontWeight: FontWeight.w700,
-                              fontSize: size * 0.34,
-                            ),
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-          ),
-          Positioned(
-            right: -1,
-            bottom: -1,
-            child: Container(
-              width: 12,
-              height: 12,
-              decoration: BoxDecoration(
-                color: isOnline ? const Color(0xFF22C55E) : const Color(0xFF9CA3AF),
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.black.withOpacity(0.25), width: 1),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _AttachOption extends StatelessWidget {
-    final IconData icon;
-    final String label;
-    final VoidCallback onTap;
-
-    const _AttachOption({
-      Key? key,
-      required this.icon,
-      required this.label,
-      required this.onTap,
-    }) : super(key: key);
-
-    @override
-    Widget build(BuildContext context) {
-      final theme = Theme.of(context);
-
-      return Semantics(
-        button: true,
-        label: label,
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            borderRadius: BorderRadius.circular(12),
-            onTap: onTap,
-            child: Container(
-              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
-              width: 96,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  CircleAvatar(
-                    radius: 28,
-                    backgroundColor: theme.colorScheme.primary.withOpacity(0.12),
-                    child: Icon(icon, size: 28, color: theme.colorScheme.primary),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    label,
-                    style: theme.textTheme.bodyMedium,
-                    textAlign: TextAlign.center,
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      );
-    }
-  }
