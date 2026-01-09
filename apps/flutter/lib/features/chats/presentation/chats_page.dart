@@ -23,11 +23,97 @@ class ChatsPage extends StatefulWidget {
   State<ChatsPage> createState() => _HomePageState();
 }
 
+class _UserSearchTile extends StatelessWidget {
+  final ChatUser user;
+  final VoidCallback onTap;
+
+  const _UserSearchTile({
+    required this.user,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final baseInk = isDark ? Colors.white : Colors.black;
+    return GlassSurface(
+      borderRadius: 18,
+      blurSigma: 14,
+      borderColor: baseInk.withOpacity(isDark ? 0.18 : 0.10),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: onTap,
+        child: Row(
+          children: [
+            CircleAvatar(
+              radius: 22,
+              backgroundColor: theme.colorScheme.primary.withOpacity(0.08),
+              backgroundImage:
+                  (user.avatarUrl.isNotEmpty) ? NetworkImage(user.avatarUrl) : null,
+              child: (user.avatarUrl.isEmpty)
+                  ? Text(
+                      user.name.isNotEmpty ? user.name[0].toUpperCase() : '?',
+                      style: TextStyle(
+                        color: theme.colorScheme.onSurface,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    )
+                  : null,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    user.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                      color: theme.colorScheme.onSurface,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'ID: ${user.id}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurface.withOpacity(0.6),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            HugeIcon(
+              icon: HugeIcons.strokeRoundedArrowRight01,
+              color: theme.colorScheme.onSurface.withOpacity(0.65),
+              size: 18.0,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _HomePageState extends State<ChatsPage> {
   late Future<List<ChatPreview>> _chatsFuture;
   final Map<String, bool> _online = {};
   RealtimeClient? _rt;
   StreamSubscription? _rtSub;
+  final TextEditingController _searchCtrl = TextEditingController();
+  Timer? _searchDebounce;
+  String _query = '';
+  List<ChatUser> _userResults = const [];
+  bool _isSearchingUsers = false;
+  String? _userSearchError;
+  int _userSearchSeq = 0;
 
   Future<void> _reloadChats() async {
     setState(() {
@@ -39,13 +125,131 @@ class _HomePageState extends State<ChatsPage> {
   void initState() {
     super.initState();
     _chatsFuture = context.read<ChatsRepository>().fetchChats();
+    _searchCtrl.addListener(() {
+      _searchDebounce?.cancel();
+      _searchDebounce = Timer(const Duration(milliseconds: 250), () {
+        final next = _searchCtrl.text.trim();
+        if (next == _query) return;
+        setState(() {
+          _query = next;
+        });
+        _runUserSearch(next);
+      });
+    });
   }
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
+    _searchDebounce = null;
+    _searchCtrl.dispose();
     _rtSub?.cancel();
     _rtSub = null;
     super.dispose();
+  }
+
+  void _runUserSearch(String query) {
+    final q = query.trim();
+    final seq = ++_userSearchSeq;
+
+    if (q.isEmpty) {
+      setState(() {
+        _isSearchingUsers = false;
+        _userSearchError = null;
+        _userResults = const [];
+      });
+      return;
+    }
+
+    setState(() {
+      _isSearchingUsers = true;
+      _userSearchError = null;
+    });
+
+    final repo = context.read<ChatsRepository>();
+    repo.searchUsers(q).then((users) {
+      if (!mounted) return;
+      if (seq != _userSearchSeq) return;
+      setState(() {
+        _isSearchingUsers = false;
+        _userSearchError = null;
+        _userResults = users;
+      });
+    }).catchError((e) {
+      if (!mounted) return;
+      if (seq != _userSearchSeq) return;
+      setState(() {
+        _isSearchingUsers = false;
+        _userSearchError = e.toString();
+        _userResults = const [];
+      });
+    });
+  }
+
+  Future<void> _createChatFlow() async {
+    final controller = TextEditingController();
+    final peerId = await showDialog<int>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Новый чат'),
+          content: TextField(
+            controller: controller,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(
+              labelText: 'ID пользователя',
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Отмена'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final id = int.tryParse(controller.text.trim());
+                if (id == null || id <= 0) {
+                  Navigator.of(context).pop(null);
+                  return;
+                }
+                Navigator.of(context).pop(id);
+              },
+              child: const Text('Создать'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (!mounted) return;
+    if (peerId == null) {
+      if (controller.text.trim().isNotEmpty) {
+        showGlassSnack(
+          context,
+          'Укажите корректный ID пользователя',
+          kind: GlassSnackKind.error,
+        );
+      }
+      return;
+    }
+
+    try {
+      final repo = context.read<ChatsRepository>();
+      final chat = await repo.createPrivateChat(peerId);
+      if (!mounted) return;
+      await _reloadChats();
+      if (!mounted) return;
+      Navigator.of(context).push(
+        adaptivePageRoute((_) => ChatPage(chat: chat)),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      showGlassSnack(
+        context,
+        e.toString(),
+        kind: GlassSnackKind.error,
+      );
+    }
   }
 
   Future<void> _ensureRealtime(List<ChatPreview> chats) async {
@@ -152,6 +356,19 @@ class _HomePageState extends State<ChatsPage> {
                       minWidth: 0,
                       minHeight: 0,
                     ),
+                    suffixIcon: (_query.isEmpty)
+                        ? null
+                        : IconButton(
+                            icon: HugeIcon(
+                              icon: HugeIcons.strokeRoundedCancel01,
+                              color: theme.colorScheme.onSurface.withOpacity(0.8),
+                              size: 16.0,
+                            ),
+                            onPressed: () {
+                              _searchCtrl.clear();
+                              FocusScope.of(context).unfocus();
+                            },
+                          ),
                     filled: false,
                     isDense: true,
                     contentPadding: const EdgeInsets.symmetric(
@@ -163,6 +380,7 @@ class _HomePageState extends State<ChatsPage> {
                       borderSide: BorderSide.none,
                     ),
                   ),
+                  controller: _searchCtrl,
                 ),
               ),
             ),
@@ -199,6 +417,20 @@ class _HomePageState extends State<ChatsPage> {
                     ),
                   )
                   .toList();
+
+              final q = _query.toLowerCase();
+              final visibleChats = (q.isEmpty)
+                  ? decoratedChats
+                  : decoratedChats.where((c) {
+                      final name = c.user.name.toLowerCase();
+                      final idStr = c.user.id.toLowerCase();
+                      return name.contains(q) || idStr.contains(q);
+                    }).toList();
+
+              final chatUserIds = decoratedChats.map((c) => c.user.id).toSet();
+              final visibleUsers = _userResults
+                  .where((u) => !chatUserIds.contains(u.id))
+                  .toList(growable: false);
 
               final favoriteChats = decoratedChats.where((c) => c.isFavorite).take(5).toList();
               final favorites = favoriteChats.map((c) => c.user).toList();
@@ -280,39 +512,140 @@ class _HomePageState extends State<ChatsPage> {
                                 return const _SkeletonChatTile();
                               },
                             )
-                          : ListView.separated(
+                          : ListView(
                               padding: const EdgeInsets.only(bottom: 16),
-                              itemCount: decoratedChats.length,
-                              separatorBuilder: (_, __) => const SizedBox(height: 10),
-                              itemBuilder: (context, index) {
-                                final chat = decoratedChats[index];
-                                return _ChatTile(
-                                  chat: chat,
-                                  onToggleFavorite: () async {
-                                    final repo = context.read<ChatsRepository>();
-                                    final chatId = int.tryParse(chat.id) ?? 0;
-                                    if (chatId <= 0) return;
+                              children: [
+                                if (_query.trim().isNotEmpty) ...[
+                                  Text(
+                                    'Чаты',
+                                    style: theme.textTheme.titleSmall?.copyWith(
+                                      fontWeight: FontWeight.w700,
+                                      color: theme.colorScheme.onSurface,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 10),
+                                ],
+                                for (final chat in visibleChats) ...[
+                                  _ChatTile(
+                                    chat: chat,
+                                    onToggleFavorite: () async {
+                                      final repo = context.read<ChatsRepository>();
+                                      final chatId = int.tryParse(chat.id) ?? 0;
+                                      if (chatId <= 0) return;
 
-                                    final newValue = !chat.isFavorite;
-                                    try {
-                                      await repo.setFavorite(chatId, favorite: newValue);
-                                      await _reloadChats();
-                                    } catch (e) {
-                                      if (!context.mounted) return;
-                                      showGlassSnack(
-                                        context,
-                                        e.toString(),
-                                        kind: GlassSnackKind.error,
+                                      final newValue = !chat.isFavorite;
+                                      try {
+                                        await repo.setFavorite(chatId, favorite: newValue);
+                                        await _reloadChats();
+                                      } catch (e) {
+                                        if (!context.mounted) return;
+                                        showGlassSnack(
+                                          context,
+                                          e.toString(),
+                                          kind: GlassSnackKind.error,
+                                        );
+                                      }
+                                    },
+                                    onTap: () {
+                                      Navigator.of(context).push(
+                                        adaptivePageRoute((_) => ChatPage(chat: chat)),
                                       );
-                                    }
-                                  },
-                                  onTap: () {
-                                    Navigator.of(context).push(
-                                      adaptivePageRoute((_) => ChatPage(chat: chat)),
-                                    );
-                                  },
-                                );
-                              },
+                                    },
+                                  ),
+                                  const SizedBox(height: 10),
+                                ],
+                                if (_query.trim().isNotEmpty) ...[
+                                  Divider(
+                                    height: 28,
+                                    color: theme.colorScheme.onSurface.withOpacity(0.18),
+                                  ),
+                                  Text(
+                                    'Пользователи',
+                                    style: theme.textTheme.titleSmall?.copyWith(
+                                      fontWeight: FontWeight.w700,
+                                      color: theme.colorScheme.onSurface,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 10),
+                                  if (_isSearchingUsers) ...[
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(vertical: 10),
+                                      child: Center(
+                                        child: SizedBox(
+                                          width: 20,
+                                          height: 20,
+                                          child: CircularProgressIndicator(strokeWidth: 2),
+                                        ),
+                                      ),
+                                    ),
+                                  ] else if (_userSearchError != null) ...[
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(vertical: 10),
+                                      child: Text(
+                                        _userSearchError ?? '',
+                                        style: theme.textTheme.bodySmall?.copyWith(
+                                          color: theme.colorScheme.error,
+                                        ),
+                                      ),
+                                    ),
+                                  ] else if (visibleUsers.isEmpty) ...[
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(vertical: 10),
+                                      child: Text(
+                                        'Ничего не найдено',
+                                        style: theme.textTheme.bodySmall?.copyWith(
+                                          color: theme.colorScheme.onSurface.withOpacity(0.6),
+                                        ),
+                                      ),
+                                    ),
+                                  ] else ...[
+                                    for (final user in visibleUsers) ...[
+                                      _UserSearchTile(
+                                        user: user,
+                                        onTap: () async {
+                                          final peerId = int.tryParse(user.id) ?? 0;
+                                          if (peerId <= 0) return;
+
+                                          final existing = decoratedChats
+                                              .where((c) => c.peerId == peerId)
+                                              .cast<ChatPreview?>()
+                                              .firstWhere(
+                                                (c) => c != null,
+                                                orElse: () => null,
+                                              );
+
+                                          if (existing != null) {
+                                            if (!context.mounted) return;
+                                            Navigator.of(context).push(
+                                              adaptivePageRoute((_) => ChatPage(chat: existing)),
+                                            );
+                                            return;
+                                          }
+
+                                          try {
+                                            final repo = context.read<ChatsRepository>();
+                                            final chat = await repo.createPrivateChat(peerId);
+                                            if (!context.mounted) return;
+                                            await _reloadChats();
+                                            if (!context.mounted) return;
+                                            Navigator.of(context).push(
+                                              adaptivePageRoute((_) => ChatPage(chat: chat)),
+                                            );
+                                          } catch (e) {
+                                            if (!context.mounted) return;
+                                            showGlassSnack(
+                                              context,
+                                              e.toString(),
+                                              kind: GlassSnackKind.error,
+                                            );
+                                          }
+                                        },
+                                      ),
+                                      const SizedBox(height: 10),
+                                    ],
+                                  ],
+                                ],
+                              ],
                             ),
                     ),
                   ],

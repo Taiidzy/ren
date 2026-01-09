@@ -1,5 +1,5 @@
 use axum::{
-    extract::{State, Path as PathExtractor},
+    extract::{Query, State, Path as PathExtractor},
     http::{StatusCode, header},
     response::Response,
     routing::{get, patch},
@@ -29,8 +29,66 @@ pub fn router() -> Router<AppState> {
         .route("/users/me", get(me).delete(delete_me))
         .route("/users/username", patch(update_username))
         .route("/users/avatar", patch(update_avatar).post(update_avatar))
+        .route("/users/search", get(search_users))
         .route("/users/:id/public-key", get(get_public_key))
         .route("/avatars/*path", get(get_avatar))
+}
+
+#[derive(Deserialize)]
+struct SearchUsersQuery {
+    q: String,
+    limit: Option<i64>,
+}
+
+async fn search_users(
+    State(state): State<AppState>,
+    CurrentUser { id: my_id }: CurrentUser,
+    Query(params): Query<SearchUsersQuery>,
+) -> Result<Json<Vec<UserResponse>>, (StatusCode, String)> {
+    let q = params.q.trim();
+    if q.is_empty() {
+        return Ok(Json(vec![]));
+    }
+
+    let limit = params.limit.unwrap_or(15).clamp(1, 50);
+
+    let id_q: Option<i32> = q.parse::<i32>().ok();
+    let like = format!("%{}%", q);
+
+    let rows = sqlx::query(
+        r#"
+        SELECT id, login, username, avatar
+        FROM users
+        WHERE id <> $3
+          AND (
+            ($1::int IS NOT NULL AND id = $1::int)
+            OR username ILIKE $2
+          )
+        ORDER BY
+          CASE WHEN ($1::int IS NOT NULL AND id = $1::int) THEN 0 ELSE 1 END,
+          username ASC
+        LIMIT $4
+        "#,
+    )
+    .bind(id_q)
+    .bind(like)
+    .bind(my_id)
+    .bind(limit)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        out.push(UserResponse {
+            id: row.try_get("id").unwrap_or_default(),
+            login: row.try_get("login").unwrap_or_default(),
+            username: row.try_get("username").unwrap_or_default(),
+            avatar: row.try_get("avatar").ok(),
+        });
+    }
+
+    Ok(Json(out))
 }
 
 // Хендлер GET /me

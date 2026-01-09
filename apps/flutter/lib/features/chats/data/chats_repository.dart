@@ -115,6 +115,28 @@ class ChatsRepository {
     return items;
   }
 
+  Future<List<ChatUser>> searchUsers(String query, {int limit = 15}) async {
+    final raw = await api.searchUsers(query, limit: limit);
+    final out = <ChatUser>[];
+    for (final it in raw) {
+      if (it is! Map) continue;
+      final m = it.cast<String, dynamic>();
+      final id = (m['id'] is int) ? m['id'] as int : int.tryParse('${m['id']}') ?? 0;
+      final username = (m['username'] as String?) ?? '';
+      final avatar = (m['avatar'] as String?) ?? '';
+      if (id <= 0) continue;
+      out.add(
+        ChatUser(
+          id: id.toString(),
+          name: username.isNotEmpty ? username : 'User',
+          avatarUrl: _avatarUrl(avatar),
+          isOnline: false,
+        ),
+      );
+    }
+    return out;
+  }
+
   Future<List<ChatUser>> favorites() async {
     final chats = await fetchChats();
     final out = <ChatUser>[];
