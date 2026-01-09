@@ -11,6 +11,7 @@ import 'package:ren/features/chats/presentation/chat_page.dart';
 import 'package:ren/features/profile/presentation/profile_menu_page.dart';
 
 import 'package:ren/core/realtime/realtime_client.dart';
+import 'package:ren/core/notifications/local_notifications.dart';
 
 import 'package:ren/shared/widgets/background.dart';
 import 'package:ren/shared/widgets/adaptive_page_route.dart';
@@ -106,9 +107,10 @@ class _UserSearchTile extends StatelessWidget {
   }
 }
 
-class _HomePageState extends State<ChatsPage> {
+class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
   late Future<List<ChatPreview>> _chatsFuture;
   final Map<String, bool> _online = {};
+  final Map<int, ChatPreview> _chatIndex = {};
   RealtimeClient? _rt;
   StreamSubscription? _rtSub;
   final TextEditingController _searchCtrl = TextEditingController();
@@ -119,6 +121,8 @@ class _HomePageState extends State<ChatsPage> {
   String? _userSearchError;
   int _userSearchSeq = 0;
 
+  bool _isForeground = true;
+
   Future<void> _reloadChats() async {
     setState(() {
       _chatsFuture = context.read<ChatsRepository>().fetchChats();
@@ -128,6 +132,7 @@ class _HomePageState extends State<ChatsPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _chatsFuture = context.read<ChatsRepository>().fetchChats();
     _searchCtrl.addListener(() {
       _searchDebounce?.cancel();
@@ -144,12 +149,18 @@ class _HomePageState extends State<ChatsPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _searchDebounce?.cancel();
     _searchDebounce = null;
     _searchCtrl.dispose();
     _rtSub?.cancel();
     _rtSub = null;
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _isForeground = state == AppLifecycleState.resumed;
   }
 
   void _runUserSearch(String query) {
@@ -344,6 +355,12 @@ class _HomePageState extends State<ChatsPage> {
     _rt ??= context.read<RealtimeClient>();
     final rt = _rt!;
 
+    _chatIndex
+      ..clear()
+      ..addEntries(
+        chats.map((c) => MapEntry(int.tryParse(c.id) ?? 0, c)).where((e) => e.key > 0),
+      );
+
     if (!rt.isConnected) {
       await rt.connect();
     }
@@ -355,7 +372,7 @@ class _HomePageState extends State<ChatsPage> {
     }
     rt.init(contacts: contacts);
 
-    _rtSub ??= rt.events.listen((evt) {
+    _rtSub ??= rt.events.listen((evt) async {
       if (evt.type == 'presence') {
         final userId = evt.data['user_id'];
         final status = (evt.data['status'] as String?) ?? '';
@@ -366,6 +383,53 @@ class _HomePageState extends State<ChatsPage> {
             _online[idStr] = isOnline;
           });
         }
+      }
+
+      if (evt.type == 'notification_new') {
+        final repo = context.read<ChatsRepository>();
+        final chatIdDyn = evt.data['chat_id'] ?? evt.data['chatId'];
+        final chatId = (chatIdDyn is int) ? chatIdDyn : int.tryParse('$chatIdDyn') ?? 0;
+        if (chatId <= 0) return;
+
+        final msg = evt.data['message'];
+        if (msg is! Map) return;
+
+        final m = (msg is Map<String, dynamic>)
+            ? msg
+            : Map<String, dynamic>.fromEntries(
+                msg.entries.map((e) => MapEntry(e.key.toString(), e.value)),
+              );
+
+        final decoded = await repo.decryptIncomingWsMessageFull(message: m);
+        final hasAttachments = decoded.attachments.isNotEmpty;
+
+        final chat = _chatIndex[chatId];
+        final title = (chat?.user.name ?? '').trim().isNotEmpty
+            ? (chat!.user.name)
+            : 'Новое сообщение';
+
+        final body = decoded.text.trim().isNotEmpty
+            ? decoded.text.trim()
+            : (hasAttachments ? 'Вложение' : 'Сообщение');
+
+        if (!mounted) return;
+
+        if (_isForeground) {
+          showGlassSnack(
+            context,
+            '$title: $body',
+            kind: GlassSnackKind.info,
+            duration: const Duration(seconds: 3),
+          );
+        } else {
+          await LocalNotifications.instance.showMessageNotification(
+            chatId: chatId,
+            title: title,
+            body: body,
+          );
+        }
+
+        return;
       }
     });
   }

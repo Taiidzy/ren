@@ -28,6 +28,7 @@ import 'package:ren/features/profile/data/profile_repository.dart';
 import 'package:ren/features/profile/presentation/profile_store.dart';
 
 import 'package:ren/core/realtime/realtime_client.dart';
+import 'package:ren/core/notifications/local_notifications.dart';
 
 Future<void> main() async {
   runZonedGuarded(
@@ -35,6 +36,8 @@ Future<void> main() async {
       WidgetsFlutterBinding.ensureInitialized();
 
       await RenSdk.instance.initialize();
+
+      await LocalNotifications.instance.initialize();
 
       FlutterError.onError = (FlutterErrorDetails details) {
         FlutterError.dumpErrorToConsole(details);
