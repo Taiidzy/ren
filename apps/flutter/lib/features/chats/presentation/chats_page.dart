@@ -11,6 +11,7 @@ import 'package:ren/features/chats/presentation/chat_page.dart';
 import 'package:ren/features/profile/presentation/profile_menu_page.dart';
 
 import 'package:ren/core/realtime/realtime_client.dart';
+import 'package:ren/core/notifications/local_notifications.dart';
 
 import 'package:ren/shared/widgets/background.dart';
 import 'package:ren/shared/widgets/adaptive_page_route.dart';
@@ -106,9 +107,10 @@ class _UserSearchTile extends StatelessWidget {
   }
 }
 
-class _HomePageState extends State<ChatsPage> {
+class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
   late Future<List<ChatPreview>> _chatsFuture;
   final Map<String, bool> _online = {};
+  final Map<int, ChatPreview> _chatIndex = {};
   RealtimeClient? _rt;
   StreamSubscription? _rtSub;
   final TextEditingController _searchCtrl = TextEditingController();
@@ -119,6 +121,11 @@ class _HomePageState extends State<ChatsPage> {
   String? _userSearchError;
   int _userSearchSeq = 0;
 
+  bool _isForeground = true;
+
+  OverlayEntry? _topBanner;
+  Timer? _topBannerTimer;
+
   Future<void> _reloadChats() async {
     setState(() {
       _chatsFuture = context.read<ChatsRepository>().fetchChats();
@@ -128,6 +135,7 @@ class _HomePageState extends State<ChatsPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _chatsFuture = context.read<ChatsRepository>().fetchChats();
     _searchCtrl.addListener(() {
       _searchDebounce?.cancel();
@@ -144,12 +152,132 @@ class _HomePageState extends State<ChatsPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _topBannerTimer?.cancel();
+    _topBannerTimer = null;
+    _topBanner?.remove();
+    _topBanner = null;
     _searchDebounce?.cancel();
     _searchDebounce = null;
     _searchCtrl.dispose();
     _rtSub?.cancel();
     _rtSub = null;
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _isForeground = state == AppLifecycleState.resumed;
+  }
+
+  void _showTopGlassBanner({
+    required String title,
+    required String body,
+    required String avatarUrl,
+    required String avatarName,
+    required VoidCallback onTap,
+    Duration duration = const Duration(seconds: 3),
+  }) {
+    _topBannerTimer?.cancel();
+    _topBannerTimer = null;
+    _topBanner?.remove();
+    _topBanner = null;
+
+    final overlay = Overlay.of(context);
+
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final baseInk = isDark ? Colors.white : Colors.black;
+
+    late final OverlayEntry entry;
+    entry = OverlayEntry(
+      builder: (ctx) {
+        return SafeArea(
+          child: Align(
+            alignment: Alignment.topCenter,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+              child: Material(
+                color: Colors.transparent,
+                child: GestureDetector(
+                  onTap: () {
+                    entry.remove();
+                    if (_topBanner == entry) {
+                      _topBanner = null;
+                    }
+                    onTap();
+                  },
+                  child: GlassSurface(
+                    borderRadius: 18,
+                    blurSigma: 14,
+                    borderColor: baseInk.withOpacity(isDark ? 0.18 : 0.10),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 520),
+                      child: Row(
+                        children: [
+                          RenAvatar(
+                            url: avatarUrl,
+                            name: avatarName,
+                            isOnline: false,
+                            size: 34,
+                            onlineDotSize: 0,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  title,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: theme.textTheme.titleSmall?.copyWith(
+                                    fontWeight: FontWeight.w800,
+                                    color: theme.colorScheme.onSurface,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  body,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: theme.colorScheme.onSurface.withOpacity(0.85),
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Icon(
+                            Icons.chevron_right,
+                            size: 18,
+                            color: theme.colorScheme.onSurface.withOpacity(0.65),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+
+    _topBanner = entry;
+    overlay.insert(entry);
+
+    _topBannerTimer = Timer(duration, () {
+      entry.remove();
+      if (_topBanner == entry) {
+        _topBanner = null;
+      }
+    });
   }
 
   void _runUserSearch(String query) {
@@ -344,6 +472,12 @@ class _HomePageState extends State<ChatsPage> {
     _rt ??= context.read<RealtimeClient>();
     final rt = _rt!;
 
+    _chatIndex
+      ..clear()
+      ..addEntries(
+        chats.map((c) => MapEntry(int.tryParse(c.id) ?? 0, c)).where((e) => e.key > 0),
+      );
+
     if (!rt.isConnected) {
       await rt.connect();
     }
@@ -355,7 +489,7 @@ class _HomePageState extends State<ChatsPage> {
     }
     rt.init(contacts: contacts);
 
-    _rtSub ??= rt.events.listen((evt) {
+    _rtSub ??= rt.events.listen((evt) async {
       if (evt.type == 'presence') {
         final userId = evt.data['user_id'];
         final status = (evt.data['status'] as String?) ?? '';
@@ -366,6 +500,62 @@ class _HomePageState extends State<ChatsPage> {
             _online[idStr] = isOnline;
           });
         }
+      }
+
+      if (evt.type == 'notification_new') {
+        final repo = context.read<ChatsRepository>();
+        final chatIdDyn = evt.data['chat_id'] ?? evt.data['chatId'];
+        final chatId = (chatIdDyn is int) ? chatIdDyn : int.tryParse('$chatIdDyn') ?? 0;
+        if (chatId <= 0) return;
+
+        final msg = evt.data['message'];
+        if (msg is! Map) return;
+
+        final m = (msg is Map<String, dynamic>)
+            ? msg
+            : Map<String, dynamic>.fromEntries(
+                msg.entries.map((e) => MapEntry(e.key.toString(), e.value)),
+              );
+
+        final decoded = await repo.decryptIncomingWsMessageFull(message: m);
+        final hasAttachments = decoded.attachments.isNotEmpty;
+
+        final chat = _chatIndex[chatId];
+        final title = (chat?.user.name ?? '').trim().isNotEmpty
+            ? (chat!.user.name)
+            : 'Новое сообщение';
+
+        final body = decoded.text.trim().isNotEmpty
+            ? decoded.text.trim()
+            : (hasAttachments ? 'Вложение' : 'Сообщение');
+
+        if (!mounted) return;
+
+        if (_isForeground) {
+          _showTopGlassBanner(
+            title: title,
+            body: body,
+            avatarUrl: chat?.user.avatarUrl ?? '',
+            avatarName: chat?.user.name ?? title,
+            onTap: () {
+              final c = _chatIndex[chatId];
+              if (c == null) return;
+              Navigator.of(context).push(
+                adaptivePageRoute((_) => ChatPage(chat: c)),
+              );
+            },
+          );
+        } else {
+          await LocalNotifications.instance.showMessageNotification(
+            chatId: chatId,
+            title: title,
+            body: body,
+            avatarUrl: chat?.user.avatarUrl,
+            senderName: chat?.user.name,
+          );
+        }
+
+        return;
       }
     });
   }

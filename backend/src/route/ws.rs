@@ -76,6 +76,7 @@ enum ServerEvent<'a> {
     message_deleted { chat_id: i32, message_id: i64, deleted_at: String, deleted_by: i64 },
     typing { chat_id: i32, user_id: i32, is_typing: bool },
     presence { user_id: i32, status: &'a str }, // online/offline (глобальная)
+    notification_new { chat_id: i32, message: OutMessage },
 }
 
 // OutMessage теперь использует структуру Message из models
@@ -106,6 +107,9 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
     });
 
     let mut subs = Subscriptions { joined: HashSet::new(), forwarders: HashMap::new(), user_forwarder: None, contacts: HashSet::new() };
+
+    // Отмечаем, что пользователь онлайн (сразу после апгрейда)
+    state.online_users.insert(user_id);
 
     // Хелпер: публикация события в конкретный чат
     let publish = |state: &AppState, chat_id: i32, payload: String| {
@@ -197,6 +201,8 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                         });
                         subs.joined.insert(chat_id);
                         subs.forwarders.insert(chat_id, handle);
+                        // Отмечаем, что пользователь находится в этом чате
+                        state.in_chat.insert((chat_id, user_id));
                         let ok_msg = serde_json::to_string(&ServerEvent::ok)
                             .unwrap_or_else(|_| "{\"type\":\"ok\"}".to_string());
                         let _ = out_tx.send(WsMessage::Text(ok_msg));
@@ -205,6 +211,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                         if subs.joined.remove(&chat_id) {
                             if let Some(h) = subs.forwarders.remove(&chat_id) { h.abort(); }
                         }
+                        state.in_chat.remove(&(chat_id, user_id));
                         let ok_msg = serde_json::to_string(&ServerEvent::ok)
                             .unwrap_or_else(|_| "{\"type\":\"ok\"}".to_string());
                         let _ = out_tx.send(WsMessage::Text(ok_msg));
@@ -311,8 +318,48 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                             envelopes: envelopes_value,
                             status: Some("sent".to_string()),
                         };
-                        if let Ok(evt) = serde_json::to_string(&ServerEvent::message_new { chat_id, message: msg }) {
-                            publish(&state, chat_id, evt);
+                        // Реальные получатели: участники чата кроме отправителя.
+                        // Если пользователь онлайн и находится в этом чате -> отправляем message_new (через ws_hub).
+                        // Если онлайн, но не в чате -> отправляем notification_new (через user_hub).
+                        let rows = sqlx::query(
+                            r#"SELECT user_id FROM chat_participants WHERE chat_id = $1"#,
+                        )
+                        .bind(chat_id)
+                        .fetch_all(&state.pool)
+                        .await;
+
+                        if let Ok(participants) = rows {
+                            for r in participants {
+                                let uid: i32 = r.try_get("user_id").unwrap_or_default();
+                                if uid <= 0 || uid == user_id { continue; }
+
+                                if !state.online_users.contains(&uid) {
+                                    continue;
+                                }
+
+                                // Обеспечим наличие личного канала, иначе publish_user будет no-op
+                                if state.user_hub.get(&uid).is_none() {
+                                    let (txc, _rx) = broadcast::channel::<String>(200);
+                                    state.user_hub.insert(uid, txc);
+                                }
+
+                                if state.in_chat.contains(&(chat_id, uid)) {
+                                    if let Ok(evt) = serde_json::to_string(&ServerEvent::message_new { chat_id, message: msg.clone() }) {
+                                        publish(&state, chat_id, evt);
+                                    }
+                                } else {
+                                    if let Ok(evt) = serde_json::to_string(&ServerEvent::notification_new { chat_id, message: msg.clone() }) {
+                                        publish_user(&state, uid, evt);
+                                    }
+                                }
+                            }
+                        }
+
+                        // Эхо отправителю: только если он подписан на чат.
+                        if subs.joined.contains(&chat_id) {
+                            if let Ok(evt) = serde_json::to_string(&ServerEvent::message_new { chat_id, message: msg }) {
+                                publish(&state, chat_id, evt);
+                            }
                         }
                     }
                     Ok(ClientEvent::edit_message { chat_id, message_id, message, message_type, envelopes, metadata }) => {
@@ -711,8 +758,13 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
 
     // Закрытие: отписываемся от всех каналов и шлём offline глобально
     for (_chat_id, handle) in subs.forwarders.drain() { handle.abort(); }
-    for chat_id in subs.joined.drain() { let _ = chat_id; }
+    for chat_id in subs.joined.drain() {
+        state.in_chat.remove(&(chat_id, user_id));
+    }
     if let Some(h) = subs.user_forwarder.take() { h.abort(); }
+
+    // Удаляем из онлайна
+    state.online_users.remove(&user_id);
     let presence_evt = match serde_json::to_string(&ServerEvent::presence { user_id, status: "offline" }) {
         Ok(s) => s,
         Err(_) => "{\"type\":\"presence\",\"user_id\":0,\"status\":\"offline\"}".to_string(),

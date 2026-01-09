@@ -15,7 +15,7 @@ use sqlx::{postgres::PgPoolOptions, PgPool};
 use tokio::net::TcpListener;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use dashmap::DashMap;
+use dashmap::{DashMap, DashSet};
 use tokio::sync::broadcast;
 
 // Делаем состояние приложения доступным в остальных модулях (например, в маршрутах)
@@ -30,6 +30,10 @@ pub struct AppState {
     pub ws_hub: Arc<DashMap<i32, broadcast::Sender<String>>>,
     // Хаб пользовательских каналов по user_id: входящие уведомления (presence и т.п.)
     pub user_hub: Arc<DashMap<i32, broadcast::Sender<String>>>,
+    // Онлайн пользователи (наличие активного ws-соединения)
+    pub online_users: Arc<DashSet<i32>>,
+    // Пользователи, находящиеся внутри конкретного чата (join_chat)
+    pub in_chat: Arc<DashSet<(i32, i32)>>,
 }
 
 // Основная асинхронная функция запуска приложения
@@ -63,7 +67,9 @@ async fn async_main() {
     // Инициализируем состояние для передачи в маршруты.
     let ws_hub = Arc::new(DashMap::new());
     let user_hub = Arc::new(DashMap::new());
-    let state = AppState { pool, jwt_secret, ws_hub, user_hub };
+    let online_users = Arc::new(DashSet::new());
+    let in_chat = Arc::new(DashSet::new());
+    let state = AppState { pool, jwt_secret, ws_hub, user_hub, online_users, in_chat };
 
     // Сборка роутера приложения.
     // Добавим простой health-check и подключим роуты авторизации.
@@ -74,9 +80,8 @@ async fn async_main() {
         .layer(from_fn(middleware::logging))
         .with_state(state);
 
-    // Запускаем HTTP-сервер на 0.0.0.0:3000
-    // Запускаем HTTP-сервер на 0.0.0.0:8000
-    let addr = std::net::SocketAddr::from(([0, 0, 0, 0], 8000));
+    // Запускаем HTTP-сервер на 0.0.0.0:8081
+    let addr = std::net::SocketAddr::from(([0, 0, 0, 0], 8081));
     println!("Server running on http://{addr}");
     let listener = TcpListener::bind(addr)
         .await

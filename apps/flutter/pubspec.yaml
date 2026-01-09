@@ -52,6 +52,8 @@ dependencies:
   open_filex: ^4.6.0
   video_player: ^2.9.2
   share_plus: ^10.1.4
+  flutter_local_notifications: ^17.2.3
+  flutter_launcher_icons: ^0.13.1
 
 dev_dependencies:
   flutter_test:
@@ -106,3 +108,9 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+
+
+flutter_icons:
+  android: true
+  ios: true
+  image_path: "assets/icon/app_icon.png"
