@@ -14,8 +14,12 @@ import 'package:ren/core/realtime/realtime_client.dart';
 
 import 'package:ren/shared/widgets/background.dart';
 import 'package:ren/shared/widgets/adaptive_page_route.dart';
+import 'package:ren/shared/widgets/avatar.dart';
+import 'package:ren/shared/widgets/skeleton.dart';
+import 'package:ren/shared/widgets/glass_overlays.dart';
 import 'package:ren/shared/widgets/glass_surface.dart';
 import 'package:ren/shared/widgets/glass_snackbar.dart';
+import 'package:ren/shared/widgets/context_menu.dart';
 
 class ChatsPage extends StatefulWidget {
   const ChatsPage({Key? key}) : super(key: key);
@@ -188,8 +192,8 @@ class _HomePageState extends State<ChatsPage> {
 
   Future<void> _createChatFlow() async {
     final controller = TextEditingController();
-    final peerId = await showDialog<int>(
-      context: context,
+    final peerId = await GlassOverlays.showGlassDialog<int>(
+      context,
       builder: (context) {
         return AlertDialog(
           title: const Text('Новый чат'),
@@ -249,6 +253,90 @@ class _HomePageState extends State<ChatsPage> {
         e.toString(),
         kind: GlassSnackKind.error,
       );
+    }
+  }
+
+  Future<void> _showChatActionsAt(ChatPreview chat, Offset globalPosition) async {
+    final chatId = int.tryParse(chat.id) ?? 0;
+    if (chatId <= 0) return;
+
+    final action = await RenContextMenu.show<String>(
+      context,
+      globalPosition: globalPosition,
+      entries: [
+        RenContextMenuEntry.action(
+          RenContextMenuAction<String>(
+            icon: const Icon(Icons.star_outline_rounded),
+            label: chat.isFavorite ? 'Убрать из избранного' : 'Добавить в избранное',
+            value: 'favorite',
+          ),
+        ),
+        const RenContextMenuEntry.divider(),
+        RenContextMenuEntry.action(
+          RenContextMenuAction<String>(
+            icon: const Icon(Icons.delete_outline_rounded),
+            label: 'Удалить чат',
+            danger: true,
+            value: 'delete',
+          ),
+        ),
+      ],
+    );
+
+    if (!mounted) return;
+    if (action == null) return;
+
+    if (action == 'favorite') {
+      try {
+        final repo = context.read<ChatsRepository>();
+        await repo.setFavorite(chatId, favorite: !chat.isFavorite);
+        await _reloadChats();
+      } catch (e) {
+        if (!mounted) return;
+        showGlassSnack(
+          context,
+          e.toString(),
+          kind: GlassSnackKind.error,
+        );
+      }
+      return;
+    }
+
+    if (action == 'delete') {
+      final confirm = await GlassOverlays.showGlassDialog<bool>(
+        context,
+        builder: (dctx) {
+          return AlertDialog(
+            title: const Text('Удалить чат?'),
+            content: const Text('Чат будет удалён из вашего списка.'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dctx).pop(false),
+                child: const Text('Отмена'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(dctx).pop(true),
+                child: const Text('Удалить'),
+              ),
+            ],
+          );
+        },
+      );
+
+      if (confirm != true) return;
+      if (!mounted) return;
+      try {
+        final repo = context.read<ChatsRepository>();
+        await repo.deleteChat(chatId);
+        await _reloadChats();
+      } catch (e) {
+        if (!mounted) return;
+        showGlassSnack(
+          context,
+          e.toString(),
+          kind: GlassSnackKind.error,
+        );
+      }
     }
   }
 
@@ -439,7 +527,7 @@ class _HomePageState extends State<ChatsPage> {
                 padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
                 child: Column(
                   children: [
-                    GlassSurface(
+                    favoriteChats.isEmpty ? const SizedBox.shrink() : GlassSurface(
                       borderRadius: 22,
                       blurSigma: 14,
                       padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
@@ -528,24 +616,7 @@ class _HomePageState extends State<ChatsPage> {
                                 for (final chat in visibleChats) ...[
                                   _ChatTile(
                                     chat: chat,
-                                    onToggleFavorite: () async {
-                                      final repo = context.read<ChatsRepository>();
-                                      final chatId = int.tryParse(chat.id) ?? 0;
-                                      if (chatId <= 0) return;
-
-                                      final newValue = !chat.isFavorite;
-                                      try {
-                                        await repo.setFavorite(chatId, favorite: newValue);
-                                        await _reloadChats();
-                                      } catch (e) {
-                                        if (!context.mounted) return;
-                                        showGlassSnack(
-                                          context,
-                                          e.toString(),
-                                          kind: GlassSnackKind.error,
-                                        );
-                                      }
-                                    },
+                                    onLongPressAt: (pos) => _showChatActionsAt(chat, pos),
                                     onTap: () {
                                       Navigator.of(context).push(
                                         adaptivePageRoute((_) => ChatPage(chat: chat)),
@@ -669,9 +740,9 @@ class _SkeletonFavoriteItem extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _SkeletonBox(width: 52, height: 52, radius: 16),
+          RenSkeletonBox(width: 52, height: 52, radius: 16),
           SizedBox(height: 6),
-          _SkeletonBox(width: 46, height: 10, radius: 6),
+          RenSkeletonBox(width: 46, height: 10, radius: 6),
         ],
       ),
     );
@@ -694,92 +765,23 @@ class _SkeletonChatTile extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       child: Row(
         children: [
-          const _SkeletonBox(width: 46, height: 46, radius: 16),
+          const RenSkeletonBox(width: 46, height: 46, radius: 16),
           const SizedBox(width: 12),
           const Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                _SkeletonBox(width: 140, height: 14, radius: 8),
+                RenSkeletonBox(width: 140, height: 14, radius: 8),
                 SizedBox(height: 8),
-                _SkeletonBox(width: 200, height: 12, radius: 8),
+                RenSkeletonBox(width: 200, height: 12, radius: 8),
               ],
             ),
           ),
           const SizedBox(width: 12),
-          const _SkeletonBox(width: 32, height: 12, radius: 8),
+          const RenSkeletonBox(width: 32, height: 12, radius: 8),
         ],
       ),
-    );
-  }
-}
-
-class _SkeletonBox extends StatefulWidget {
-  final double width;
-  final double height;
-  final double radius;
-
-  const _SkeletonBox({
-    required this.width,
-    required this.height,
-    required this.radius,
-  });
-
-  @override
-  State<_SkeletonBox> createState() => _SkeletonBoxState();
-}
-
-class _SkeletonBoxState extends State<_SkeletonBox> with SingleTickerProviderStateMixin {
-  late final AnimationController _controller;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1100),
-    )..repeat();
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final base = isDark ? Colors.white : Colors.black;
-
-    final c1 = base.withOpacity(isDark ? 0.10 : 0.06);
-    final c2 = base.withOpacity(isDark ? 0.18 : 0.10);
-
-    return AnimatedBuilder(
-      animation: _controller,
-      builder: (context, _) {
-        final t = _controller.value;
-        final begin = Alignment(-1.0 - 2.0 * t, 0);
-        final end = Alignment(1.0 - 2.0 * t, 0);
-
-        return ClipRRect(
-          borderRadius: BorderRadius.circular(widget.radius),
-          child: Container(
-            width: widget.width,
-            height: widget.height,
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: begin,
-                end: end,
-                colors: [c1, c2, c1],
-                stops: const [0.2, 0.5, 0.8],
-              ),
-            ),
-          ),
-        );
-      },
     );
   }
 }
@@ -804,11 +806,12 @@ class _FavoriteItem extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              _FavoriteAvatar(
+              RenAvatar(
                 url: user.avatarUrl,
                 name: user.name,
                 isOnline: user.isOnline,
                 size: avatarSize,
+                onlineDotSize: 11,
               ),
               const SizedBox(height: 2),
               Text(
@@ -828,99 +831,16 @@ class _FavoriteItem extends StatelessWidget {
   }
 }
 
-class _FavoriteAvatar extends StatelessWidget {
-  final String url;
-  final String name;
-  final bool isOnline;
-  final double size;
-
-  const _FavoriteAvatar({
-    required this.url,
-    required this.name,
-    required this.isOnline,
-    required this.size,
-  });
-
-  String _initials(String s) {
-    final parts = s.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty);
-    final letters = parts.map((p) => p.characters.first).take(2).join();
-    return letters.isEmpty ? '?' : letters.toUpperCase();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: size,
-      height: size,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(size / 2),
-            child: url.isEmpty
-                ? Container(
-                    color: Theme.of(context).colorScheme.surface,
-                    child: Center(
-                      child: Text(
-                        _initials(name),
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.onSurface,
-                          fontWeight: FontWeight.w700,
-                          fontSize: size * 0.34,
-                        ),
-                      ),
-                    ),
-                  )
-                : Image.network(
-                    url,
-                    width: size,
-                    height: size,
-                    fit: BoxFit.cover,
-                    errorBuilder: (context, error, stack) {
-                      return Container(
-                        color: Theme.of(context).colorScheme.surface,
-                        child: Center(
-                          child: Text(
-                            _initials(name),
-                            style: TextStyle(
-                              color: Theme.of(context).colorScheme.onSurface,
-                              fontWeight: FontWeight.w700,
-                              fontSize: size * 0.34,
-                            ),
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-          ),
-          Positioned(
-            right: -1,
-            bottom: -1,
-            child: Container(
-              width: 11,
-              height: 11,
-              decoration: BoxDecoration(
-                color: isOnline
-                    ? const Color(0xFF22C55E)
-                    : const Color(0xFF9CA3AF),
-                shape: BoxShape.circle,
-                border:
-                    Border.all(color: Colors.black.withOpacity(0.25), width: 1),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class _ChatTile extends StatelessWidget {
   final ChatPreview chat;
   final VoidCallback onTap;
-  final VoidCallback onToggleFavorite;
+  final ValueChanged<Offset> onLongPressAt;
 
-  const _ChatTile({required this.chat, required this.onTap, required this.onToggleFavorite});
+  const _ChatTile({
+    required this.chat,
+    required this.onTap,
+    required this.onLongPressAt,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -928,19 +848,22 @@ class _ChatTile extends StatelessWidget {
     final isDark = theme.brightness == Brightness.dark;
     final baseInk = isDark ? Colors.white : Colors.black;
 
-    return GlassSurface(
-      borderRadius: 18,
-      blurSigma: 14,
-      height: 72,
-      padding: const EdgeInsets.symmetric(horizontal: 14),
-      borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.12),
-      onTap: onTap,
-      child: Row(
-        children: [
-          _Avatar(
+    return GestureDetector(
+      onLongPressStart: (d) => onLongPressAt(d.globalPosition),
+      child: GlassSurface(
+        borderRadius: 18,
+        blurSigma: 14,
+        height: 72,
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.12),
+        onTap: onTap,
+        child: Row(
+          children: [
+          RenAvatar(
             url: chat.user.avatarUrl,
             name: chat.user.name,
             isOnline: chat.user.isOnline,
+            size: 44,
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -979,16 +902,8 @@ class _ChatTile extends StatelessWidget {
               color: theme.colorScheme.onSurface.withOpacity(0.60),
             ),
           ),
-          const SizedBox(width: 8),
-          IconButton(
-            onPressed: onToggleFavorite,
-            icon: Icon(
-              chat.isFavorite ? Icons.star : Icons.star_border,
-              color: theme.colorScheme.onSurface.withOpacity(chat.isFavorite ? 0.95 : 0.55),
-              size: 20,
-            ),
-          ),
         ],
+        ),
       ),
     );
   }
@@ -998,90 +913,5 @@ class _ChatTile extends StatelessWidget {
     final h = local.hour.toString().padLeft(2, '0');
     final m = local.minute.toString().padLeft(2, '0');
     return '$h:$m';
-  }
-}
-
-class _Avatar extends StatelessWidget {
-  final String url;
-  final String name;
-  final bool isOnline;
-
-  const _Avatar({required this.url, required this.name, required this.isOnline});
-
-  String _initials(String s) {
-    final parts = s.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty);
-    final letters = parts.map((p) => p.characters.first).take(2).join();
-    return letters.isEmpty ? '?' : letters.toUpperCase();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 44,
-      height: 44,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(24),
-            child: url.isEmpty
-                ? Container(
-                    width: 48,
-                    height: 48,
-                    color: Theme.of(context).colorScheme.surface,
-                    child: Center(
-                      child: Text(
-                        _initials(name),
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.onSurface,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 16,
-                        ),
-                      ),
-                    ),
-                  )
-                : Image.network(
-                    url,
-                    width: 48,
-                    height: 48,
-                    fit: BoxFit.cover,
-                    errorBuilder: (context, error, stack) {
-                      return Container(
-                        width: 48,
-                        height: 48,
-                        color: Theme.of(context).colorScheme.surface,
-                        child: Center(
-                          child: Text(
-                            _initials(name),
-                            style: TextStyle(
-                              color: Theme.of(context).colorScheme.onSurface,
-                              fontWeight: FontWeight.w700,
-                              fontSize: 16,
-                            ),
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-          ),
-          Positioned(
-            right: -1,
-            bottom: -1,
-            child: Container(
-              width: 12,
-              height: 12,
-              decoration: BoxDecoration(
-                color: isOnline
-                    ? const Color(0xFF22C55E)
-                    : const Color(0xFF9CA3AF),
-                shape: BoxShape.circle,
-                border:
-                    Border.all(color: Colors.black.withOpacity(0.25), width: 1),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
   }
 }

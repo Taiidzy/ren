@@ -18,8 +18,12 @@ import 'package:ren/features/chats/data/chats_repository.dart';
 import 'package:ren/features/chats/domain/chat_models.dart';
 import 'package:ren/core/realtime/realtime_client.dart';
 import 'package:ren/shared/widgets/background.dart';
+import 'package:ren/shared/widgets/avatar.dart';
+import 'package:ren/shared/widgets/skeleton.dart';
+import 'package:ren/shared/widgets/glass_overlays.dart';
 import 'package:ren/shared/widgets/glass_surface.dart';
 import 'package:ren/shared/widgets/glass_snackbar.dart';
+import 'package:ren/shared/widgets/context_menu.dart';
 import 'package:path_provider/path_provider.dart';
 
 class ChatPage extends StatefulWidget {
@@ -746,10 +750,8 @@ class _ChatPageState extends State<ChatPage> {
   }) async {
     final theme = Theme.of(context);
 
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
+    await GlassOverlays.showGlassBottomSheet<void>(
+      context,
       builder: (ctx) {
         return GlassSurface(
           child: Padding(
@@ -936,7 +938,7 @@ class _ChatPageState extends State<ChatPage> {
                             ),
                           )
                         else ...[
-                          _Avatar(
+                          RenAvatar(
                             url: widget.chat.user.avatarUrl,
                             name: widget.chat.user.name,
                             isOnline: _peerOnline,
@@ -1493,10 +1495,8 @@ class _ChatPageState extends State<ChatPage> {
     final initial = items.indexWhere((a) => a.localPath == tapped.localPath);
     final initialIndex = (initial >= 0) ? initial : 0;
 
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
+    await GlassOverlays.showGlassBottomSheet<void>(
+      context,
       builder: (ctx) {
         return _AttachmentViewerSheet(
           items: items,
@@ -1579,10 +1579,8 @@ class _ChatPageState extends State<ChatPage> {
     final chats = await repo.fetchChats();
     if (!mounted) return;
 
-    final selectedChat = await showModalBottomSheet<ChatPreview>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
+    final selectedChat = await GlassOverlays.showGlassBottomSheet<ChatPreview>(
+      context,
       builder: (ctx) {
         return GlassSurface(
           child: SafeArea(
@@ -1680,95 +1678,56 @@ class _ChatPageState extends State<ChatPage> {
       _focusNode.requestFocus();
     }
 
-    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
-    final size = overlay.size;
-
-    final media = MediaQuery.of(context);
-    final safe = media.padding;
-
-    const menuWidth = 220.0;
-    const itemHeight = 44.0;
-
     final canEdit = msg.isMe && msg.attachments.isEmpty;
-    final itemCount = canEdit ? 6 : 5;
-    final menuHeight = itemHeight * itemCount + 16;
-
-    final minLeft = 12.0 + safe.left;
-    final maxLeft = size.width - menuWidth - 12.0 - safe.right;
-
-    final minTop = 12.0 + safe.top;
-    final maxTop = size.height - menuHeight - 12.0 - safe.bottom;
-
-    final left = (globalPosition.dx).clamp(minLeft, maxLeft < minLeft ? minLeft : maxLeft);
-    final top = (globalPosition.dy).clamp(minTop, maxTop < minTop ? minTop : maxTop);
-
-    final selected = await showGeneralDialog<String>(
-      context: context,
-      barrierDismissible: true,
-      barrierLabel: 'context_menu',
-      barrierColor: Colors.black.withOpacity(0.08),
-      pageBuilder: (ctx, a1, a2) {
-        return Material(
-          type: MaterialType.transparency,
-          child: Stack(
-            children: [
-              Positioned.fill(
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: () => Navigator.of(ctx).pop(),
-                ),
-              ),
-              Positioned(
-                left: left,
-                top: top,
-                child: GlassSurface(
-                  width: menuWidth,
-                  blurSigma: 18,
-                  borderRadius: 16,
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (canEdit)
-                        _ContextMenuItem(
-                          icon: HugeIcon(icon: HugeIcons.strokeRoundedEdit02),
-                          label: 'Редактировать',
-                          onTap: () => Navigator.of(ctx).pop('edit'),
-                        ),
-                      _ContextMenuItem(
-                        icon: HugeIcon(icon: HugeIcons.strokeRoundedArrowTurnBackward),
-                        label: 'Ответить',
-                        onTap: () => Navigator.of(ctx).pop('reply'),
-                      ),
-                      _ContextMenuItem(
-                        icon: HugeIcon(icon: HugeIcons.strokeRoundedCopy01),
-                        label: 'Копировать',
-                        onTap: () => Navigator.of(ctx).pop('copy'),
-                      ),
-                      _ContextMenuItem(
-                        icon: HugeIcon(icon: HugeIcons.strokeRoundedShare08),
-                        label: msg.attachments.isNotEmpty ? 'Переслать (без файлов)' : 'Переслать',
-                        onTap: () => Navigator.of(ctx).pop('share'),
-                      ),
-                      _ContextMenuItem(
-                        icon: HugeIcon(icon: HugeIcons.strokeRoundedTickDouble03),
-                        label: 'Выбрать',
-                        onTap: () => Navigator.of(ctx).pop('select'),
-                      ),
-                      _ContextMenuItem(
-                        icon: HugeIcon(icon: HugeIcons.strokeRoundedDelete02),
-                        label: 'Удалить',
-                        danger: true,
-                        onTap: () => Navigator.of(ctx).pop('delete'),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
+    final selected = await RenContextMenu.show<String>(
+      context,
+      globalPosition: globalPosition,
+      entries: [
+        if (canEdit)
+          RenContextMenuEntry.action(
+            RenContextMenuAction<String>(
+              icon: HugeIcon(icon: HugeIcons.strokeRoundedEdit02),
+              label: 'Редактировать',
+              value: 'edit',
+            ),
           ),
-        );
-      },
+        RenContextMenuEntry.action(
+          RenContextMenuAction<String>(
+            icon: HugeIcon(icon: HugeIcons.strokeRoundedArrowTurnBackward),
+            label: 'Ответить',
+            value: 'reply',
+          ),
+        ),
+        RenContextMenuEntry.action(
+          RenContextMenuAction<String>(
+            icon: HugeIcon(icon: HugeIcons.strokeRoundedCopy01),
+            label: 'Копировать',
+            value: 'copy',
+          ),
+        ),
+        RenContextMenuEntry.action(
+          RenContextMenuAction<String>(
+            icon: HugeIcon(icon: HugeIcons.strokeRoundedShare08),
+            label: msg.attachments.isNotEmpty ? 'Переслать (без файлов)' : 'Переслать',
+            value: 'share',
+          ),
+        ),
+        RenContextMenuEntry.action(
+          RenContextMenuAction<String>(
+            icon: HugeIcon(icon: HugeIcons.strokeRoundedTickDouble03),
+            label: 'Выбрать',
+            value: 'select',
+          ),
+        ),
+        RenContextMenuEntry.action(
+          RenContextMenuAction<String>(
+            icon: HugeIcon(icon: HugeIcons.strokeRoundedDelete02),
+            label: 'Удалить',
+            danger: true,
+            value: 'delete',
+          ),
+        ),
+      ],
     );
 
     if (!mounted) return;
@@ -2279,221 +2238,11 @@ class _SkeletonMessageBubble extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            _SkeletonBox(width: 180, height: 12, radius: 8),
+            RenSkeletonBox(width: 180, height: 12, radius: 8),
             SizedBox(height: 8),
-            _SkeletonBox(width: 140, height: 12, radius: 8),
+            RenSkeletonBox(width: 140, height: 12, radius: 8),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _SkeletonBox extends StatefulWidget {
-  final double width;
-  final double height;
-  final double radius;
-
-  const _SkeletonBox({
-    required this.width,
-    required this.height,
-    required this.radius,
-  });
-
-  @override
-  State<_SkeletonBox> createState() => _SkeletonBoxState();
-}
-
-class _SkeletonBoxState extends State<_SkeletonBox> with SingleTickerProviderStateMixin {
-  late final AnimationController _controller;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1100),
-    )..repeat();
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final base = isDark ? Colors.white : Colors.black;
-
-    final c1 = base.withOpacity(isDark ? 0.10 : 0.06);
-    final c2 = base.withOpacity(isDark ? 0.18 : 0.10);
-
-    return AnimatedBuilder(
-      animation: _controller,
-      builder: (context, _) {
-        final t = _controller.value;
-        final begin = Alignment(-1.0 - 2.0 * t, 0);
-        final end = Alignment(1.0 - 2.0 * t, 0);
-
-        return ClipRRect(
-          borderRadius: BorderRadius.circular(widget.radius),
-          child: Container(
-            width: widget.width,
-            height: widget.height,
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: begin,
-                end: end,
-                colors: [c1, c2, c1],
-                stops: const [0.2, 0.5, 0.8],
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
-class _ContextMenuItem extends StatelessWidget {
-  final HugeIcon icon;
-  final String label;
-  final bool danger;
-  final VoidCallback onTap;
-
-  const _ContextMenuItem({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-    this.danger = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final c = danger
-        ? theme.colorScheme.error
-        : theme.colorScheme.onSurface.withOpacity(0.9);
-
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        child: SizedBox(
-          height: 44,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14),
-            child: Row(
-              children: [
-                HugeIcon(icon: icon.icon, color: c, size: 18),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: c,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _Avatar extends StatelessWidget {
-  final String url;
-  final String name;
-  final bool isOnline;
-  final double size;
-
-  const _Avatar({
-    required this.url,
-    required this.name,
-    required this.isOnline,
-    required this.size,
-  });
-
-  String _initials(String s) {
-    final parts = s.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty);
-    final letters = parts.map((p) => p.characters.first).take(2).join();
-    return letters.isEmpty ? '?' : letters.toUpperCase();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: size,
-      height: size,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(size / 2),
-            child: url.isEmpty
-                ? Container(
-                    width: size,
-                    height: size,
-                    color: Theme.of(context).colorScheme.surface,
-                    child: Center(
-                      child: Text(
-                        _initials(name),
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.onSurface,
-                          fontWeight: FontWeight.w700,
-                          fontSize: size * 0.34,
-                        ),
-                      ),
-                    ),
-                  )
-                : Image.network(
-                    url,
-                    width: size,
-                    height: size,
-                    fit: BoxFit.cover,
-                    errorBuilder: (context, error, stack) {
-                      return Container(
-                        width: size,
-                        height: size,
-                        color: Theme.of(context).colorScheme.surface,
-                        child: Center(
-                          child: Text(
-                            _initials(name),
-                            style: TextStyle(
-                              color: Theme.of(context).colorScheme.onSurface,
-                              fontWeight: FontWeight.w700,
-                              fontSize: size * 0.34,
-                            ),
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-          ),
-          Positioned(
-            right: -1,
-            bottom: -1,
-            child: Container(
-              width: 12,
-              height: 12,
-              decoration: BoxDecoration(
-                color: isOnline ? const Color(0xFF22C55E) : const Color(0xFF9CA3AF),
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.black.withOpacity(0.25), width: 1),
-              ),
-            ),
-          ),
-        ],
       ),
     );
   }

@@ -9,16 +9,14 @@ import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
 import 'package:ren/features/profile/presentation/profile_store.dart';
+import 'package:ren/shared/widgets/glass_overlays.dart';
 import 'package:ren/shared/widgets/glass_surface.dart';
 import 'package:ren/shared/widgets/glass_snackbar.dart';
 
 class ProfileEditSheet {
   static Future<void> show(BuildContext context) async {
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      barrierColor: Colors.black.withOpacity(0.35),
+    await GlassOverlays.showGlassBottomSheet<void>(
+      context,
       builder: (context) {
         return const _ProfileEditSheetBody();
       },

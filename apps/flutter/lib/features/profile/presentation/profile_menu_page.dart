@@ -8,6 +8,7 @@ import 'package:ren/features/profile/presentation/profile_edit_sheet.dart';
 import 'package:ren/features/profile/presentation/profile_store.dart';
 import 'package:ren/shared/widgets/adaptive_page_route.dart';
 import 'package:ren/shared/widgets/background.dart';
+import 'package:ren/shared/widgets/glass_overlays.dart';
 import 'package:ren/shared/widgets/glass_surface.dart';
 
 class ProfileMenuPage extends StatelessWidget {
@@ -24,9 +25,8 @@ class ProfileMenuPage extends StatelessWidget {
     final isDark = theme.brightness == Brightness.dark;
     final baseInk = isDark ? Colors.white : Colors.black;
 
-    final shouldLogout = await showDialog<bool>(
-      context: context,
-      barrierColor: Colors.black.withOpacity(0.35),
+    final shouldLogout = await GlassOverlays.showGlassDialog<bool>(
+      context,
       builder: (dialogContext) {
         return Dialog(
           backgroundColor: Colors.transparent,

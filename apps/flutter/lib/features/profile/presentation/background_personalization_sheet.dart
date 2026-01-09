@@ -6,15 +6,13 @@ import 'package:provider/provider.dart';
 import 'package:ren/core/providers/background_settings.dart';
 import 'package:ren/core/providers/theme_settings.dart';
 import 'package:ren/shared/widgets/animated_gradient.dart';
+import 'package:ren/shared/widgets/glass_overlays.dart';
 import 'package:ren/shared/widgets/glass_surface.dart';
 
 class BackgroundPersonalizationSheet {
   static Future<void> show(BuildContext context) async {
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      barrierColor: Colors.black.withOpacity(0.35),
+    await GlassOverlays.showGlassBottomSheet<void>(
+      context,
       builder: (context) {
         return const _SheetBody();
       },
