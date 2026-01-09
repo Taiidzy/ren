@@ -1707,7 +1707,7 @@ class _ChatPageState extends State<ChatPage> {
         ),
         RenContextMenuEntry.action(
           RenContextMenuAction<String>(
-            icon: HugeIcon(icon: HugeIcons.strokeRoundedShare08),
+            icon: HugeIcon(icon: HugeIcons.strokeRoundedArrowTurnForward),
             label: msg.attachments.isNotEmpty ? 'Переслать (без файлов)' : 'Переслать',
             value: 'share',
           ),

@@ -34,7 +34,7 @@ class LocalNotifications {
   Future<void> initialize() async {
     if (_initialized) return;
 
-    const androidInit = AndroidInitializationSettings('ic_launcher');
+    const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
     const iosInit = DarwinInitializationSettings();
 
     const initSettings = InitializationSettings(
@@ -155,6 +155,7 @@ class LocalNotifications {
         styleInformation: androidStyle,
         enableVibration: true,
         playSound: true,
+        icon: '@mipmap/ic_launcher',
       ),
       iOS: DarwinNotificationDetails(
         presentAlert: true,
