@@ -45,6 +45,40 @@ class ChatsApi {
     }
   }
 
+  Future<void> addFavorite(int chatId) async {
+    final token = await _requireToken();
+    try {
+      await dio.post(
+        '${Apiurl.api}/chats/$chatId/favorite',
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+    } on DioException catch (e) {
+      throw ApiException(
+        (e.response?.data is String)
+            ? e.response?.data as String
+            : 'Ошибка добавления в избранное',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
+  Future<void> removeFavorite(int chatId) async {
+    final token = await _requireToken();
+    try {
+      await dio.delete(
+        '${Apiurl.api}/chats/$chatId/favorite',
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+    } on DioException catch (e) {
+      throw ApiException(
+        (e.response?.data is String)
+            ? e.response?.data as String
+            : 'Ошибка удаления из избранного',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
   Future<List<dynamic>> getMessages(
     int chatId, {
     int? limit,

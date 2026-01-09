@@ -24,6 +24,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/chats", post(create_chat).get(list_chats))
         .route("/chats/:chat_id/messages", get(get_messages))
+        .route("/chats/:id/favorite", post(add_favorite).delete(remove_favorite))
         .route("/chats/:id", delete(delete_or_leave_chat))
 }
 
@@ -80,6 +81,7 @@ async fn create_chat(
                 created_at: row.try_get::<chrono::DateTime<chrono::Utc>,_>("created_at").map(|t| t.to_rfc3339()).unwrap_or_default(),
                 updated_at: row.try_get::<chrono::DateTime<chrono::Utc>,_>("updated_at").map(|t| t.to_rfc3339()).unwrap_or_default(),
                 is_archived: row.try_get("is_archived").ok(),
+                is_favorite: Some(false),
                 peer_id: None,
                 peer_username: None,
                 peer_avatar: None,
@@ -143,6 +145,7 @@ async fn create_chat(
                 created_at: row.try_get::<chrono::DateTime<chrono::Utc>,_>("created_at").map(|t| t.to_rfc3339()).unwrap_or_default(),
                 updated_at: row.try_get::<chrono::DateTime<chrono::Utc>,_>("updated_at").map(|t| t.to_rfc3339()).unwrap_or_default(),
                 is_archived: row.try_get("is_archived").ok(),
+                is_favorite: Some(false),
                 peer_id: None,
                 peer_username: None,
                 peer_avatar: None,
@@ -226,6 +229,7 @@ async fn create_chat(
         created_at: row.try_get::<chrono::DateTime<chrono::Utc>,_>("created_at").map(|t| t.to_rfc3339()).unwrap_or_default(),
         updated_at: row.try_get::<chrono::DateTime<chrono::Utc>,_>("updated_at").map(|t| t.to_rfc3339()).unwrap_or_default(),
         is_archived: row.try_get("is_archived").ok(),
+        is_favorite: Some(false),
         peer_id: None,
         peer_username: None,
         peer_avatar: None,
@@ -250,6 +254,11 @@ async fn list_chats(
             c.created_at,
             c.updated_at,
             c.is_archived,
+            EXISTS(
+                SELECT 1
+                FROM chat_favorites cf
+                WHERE cf.user_id = $1 AND cf.chat_id = c.id
+            ) AS is_favorite,
             COALESCE(
                 CASE
                     WHEN c.kind = 'private' AND c.user_a = $1 THEN c.user_b
@@ -298,6 +307,7 @@ async fn list_chats(
             created_at: row.try_get::<chrono::DateTime<chrono::Utc>,_>("created_at").map(|t| t.to_rfc3339()).unwrap_or_default(),
             updated_at: row.try_get::<chrono::DateTime<chrono::Utc>,_>("updated_at").map(|t| t.to_rfc3339()).unwrap_or_default(),
             is_archived: row.try_get("is_archived").ok(),
+            is_favorite: row.try_get::<bool,_>("is_favorite").ok().map(Some).unwrap_or(Some(false)),
             peer_id: row.try_get("peer_id").ok(),
             peer_username: row.try_get("peer_username").ok(),
             peer_avatar: row.try_get("peer_avatar").ok(),
@@ -479,6 +489,62 @@ async fn delete_or_leave_chat(
 
         return Ok(StatusCode::NO_CONTENT);
     }
+}
+
+// ---------------------------
+// POST /chats/{id}/favorite — добавить чат в избранное (макс 5 на пользователя)
+// ---------------------------
+async fn add_favorite(
+    State(state): State<AppState>,
+    CurrentUser { id: current_user_id }: CurrentUser,
+    Path(id): Path<i32>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    // Только участник чата может добавлять в избранное
+    ensure_member(&state, id, current_user_id).await?;
+
+    let cnt: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)::INT8 FROM chat_favorites WHERE user_id = $1",
+    )
+    .bind(current_user_id)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+
+    if cnt >= 5 {
+        return Err((StatusCode::BAD_REQUEST, "Лимит избранных чатов: 5".into()));
+    }
+
+    sqlx::query(
+        "INSERT INTO chat_favorites (user_id, chat_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+    )
+    .bind(current_user_id)
+    .bind(id)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ---------------------------
+// DELETE /chats/{id}/favorite — убрать чат из избранного
+// ---------------------------
+async fn remove_favorite(
+    State(state): State<AppState>,
+    CurrentUser { id: current_user_id }: CurrentUser,
+    Path(id): Path<i32>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    // Только участник чата может менять избранное
+    ensure_member(&state, id, current_user_id).await?;
+
+    sqlx::query("DELETE FROM chat_favorites WHERE user_id = $1 AND chat_id = $2")
+        .bind(current_user_id)
+        .bind(id)
+        .execute(&state.pool)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // Параметры удаления чата через query string

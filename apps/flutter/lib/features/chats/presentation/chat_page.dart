@@ -19,6 +19,7 @@ import 'package:ren/features/chats/domain/chat_models.dart';
 import 'package:ren/core/realtime/realtime_client.dart';
 import 'package:ren/shared/widgets/background.dart';
 import 'package:ren/shared/widgets/glass_surface.dart';
+import 'package:ren/shared/widgets/glass_snackbar.dart';
 import 'package:path_provider/path_provider.dart';
 
 class ChatPage extends StatefulWidget {
@@ -1611,8 +1612,10 @@ class _ChatPageState extends State<ChatPage> {
     final toChatId = int.tryParse(selectedChat.id) ?? 0;
     final toPeerId = selectedChat.peerId ?? 0;
     if (toChatId <= 0 || toPeerId <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Пересылка поддерживается только для private чатов')),
+      showGlassSnack(
+        context,
+        'Пересылка поддерживается только для private чатов',
+        kind: GlassSnackKind.info,
       );
       return;
     }
@@ -1657,9 +1660,7 @@ class _ChatPageState extends State<ChatPage> {
       if (t.isEmpty) return;
       await Clipboard.setData(ClipboardData(text: t));
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Скопировано')),
-      );
+      showGlassSnack(context, 'Скопировано', kind: GlassSnackKind.success);
     }
 
     Future<void> doForward() async {
@@ -1868,9 +1869,7 @@ class _AttachmentViewerSheetState extends State<_AttachmentViewerSheet> {
     } catch (error) {
       if (!mounted) return;
       debugPrint('Failed to share file: $error');
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Не удалось сохранить файл')),
-      );
+      showGlassSnack(context, 'Не удалось сохранить файл', kind: GlassSnackKind.error);
     }
   }
 
@@ -1882,9 +1881,7 @@ class _AttachmentViewerSheetState extends State<_AttachmentViewerSheet> {
       await OpenFilex.open(path);
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Не удалось открыть файл')),
-      );
+      showGlassSnack(context, 'Не удалось открыть файл', kind: GlassSnackKind.error);
     }
   }
 

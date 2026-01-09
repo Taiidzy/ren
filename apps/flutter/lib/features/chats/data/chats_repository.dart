@@ -87,6 +87,7 @@ class ChatsRepository {
           : int.tryParse('${m['peer_id']}');
       final peerUsername = (m['peer_username'] as String?) ?? '';
       final peerAvatar = (m['peer_avatar'] as String?) ?? '';
+      final isFavorite = (m['is_favorite'] == true) || (m['isFavorite'] == true);
       final updatedAtStr = (m['updated_at'] as String?) ?? '';
 
       final updatedAt = DateTime.tryParse(updatedAtStr) ?? DateTime.now();
@@ -104,6 +105,7 @@ class ChatsRepository {
           peerId: peerId,
           kind: (m['kind'] as String?) ?? 'private',
           user: user,
+          isFavorite: isFavorite,
           lastMessage: '',
           lastMessageAt: updatedAt,
         ),
@@ -116,10 +118,19 @@ class ChatsRepository {
   Future<List<ChatUser>> favorites() async {
     final chats = await fetchChats();
     final out = <ChatUser>[];
-    for (final c in chats.take(8)) {
+    final favChats = chats.where((c) => c.isFavorite).take(5);
+    for (final c in favChats) {
       out.add(c.user);
     }
     return out;
+  }
+
+  Future<void> setFavorite(int chatId, {required bool favorite}) async {
+    if (favorite) {
+      await api.addFavorite(chatId);
+    } else {
+      await api.removeFavorite(chatId);
+    }
   }
 
   Future<List<ChatMessage>> fetchMessages(
@@ -352,6 +363,8 @@ class ChatsRepository {
 
     final id = (json['id'] is int) ? json['id'] as int : int.tryParse('${json['id']}') ?? 0;
 
+    final isFavorite = (json['is_favorite'] == true) || (json['isFavorite'] == true);
+
     return ChatPreview(
       id: id.toString(),
       peerId: peerId,
@@ -362,6 +375,7 @@ class ChatsRepository {
         avatarUrl: _avatarUrl((json['peer_avatar'] as String?) ?? ''),
         isOnline: false,
       ),
+      isFavorite: isFavorite,
       lastMessage: '',
       lastMessageAt: DateTime.now(),
     );

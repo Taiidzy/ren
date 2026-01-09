@@ -15,6 +15,7 @@ import 'package:ren/core/realtime/realtime_client.dart';
 import 'package:ren/shared/widgets/background.dart';
 import 'package:ren/shared/widgets/adaptive_page_route.dart';
 import 'package:ren/shared/widgets/glass_surface.dart';
+import 'package:ren/shared/widgets/glass_snackbar.dart';
 
 class ChatsPage extends StatefulWidget {
   const ChatsPage({Key? key}) : super(key: key);
@@ -23,10 +24,16 @@ class ChatsPage extends StatefulWidget {
 }
 
 class _HomePageState extends State<ChatsPage> {
-  late final Future<List<ChatPreview>> _chatsFuture;
+  late Future<List<ChatPreview>> _chatsFuture;
   final Map<String, bool> _online = {};
   RealtimeClient? _rt;
   StreamSubscription? _rtSub;
+
+  Future<void> _reloadChats() async {
+    setState(() {
+      _chatsFuture = context.read<ChatsRepository>().fetchChats();
+    });
+  }
 
   @override
   void initState() {
@@ -186,13 +193,15 @@ class _HomePageState extends State<ChatsPage> {
                         avatarUrl: c.user.avatarUrl,
                         isOnline: _online[c.user.id] ?? c.user.isOnline,
                       ),
+                      isFavorite: c.isFavorite,
                       lastMessage: c.lastMessage,
                       lastMessageAt: c.lastMessageAt,
                     ),
                   )
                   .toList();
 
-              final favorites = decoratedChats.take(8).map((c) => c.user).toList();
+              final favoriteChats = decoratedChats.where((c) => c.isFavorite).take(5).toList();
+              final favorites = favoriteChats.map((c) => c.user).toList();
 
               return Padding(
                 padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
@@ -230,7 +239,7 @@ class _HomePageState extends State<ChatsPage> {
                                       mainAxisAlignment: MainAxisAlignment.center,
                                       children: [
                                         if (isLoading) ...[
-                                          for (int i = 0; i < 8; i++) ...[
+                                          for (int i = 0; i < 5; i++) ...[
                                             if (i != 0) const SizedBox(width: 12),
                                             const _SkeletonFavoriteItem(),
                                           ]
@@ -240,10 +249,7 @@ class _HomePageState extends State<ChatsPage> {
                                             _FavoriteItem(
                                               user: favorites[i],
                                               onTap: () {
-                                                final user = favorites[i];
-                                                final chat = chats.firstWhere(
-                                                  (c) => c.user.id == user.id,
-                                                );
+                                                final chat = favoriteChats[i];
                                                 Navigator.of(context).push(
                                                   adaptivePageRoute(
                                                     (_) => ChatPage(chat: chat),
@@ -282,6 +288,24 @@ class _HomePageState extends State<ChatsPage> {
                                 final chat = decoratedChats[index];
                                 return _ChatTile(
                                   chat: chat,
+                                  onToggleFavorite: () async {
+                                    final repo = context.read<ChatsRepository>();
+                                    final chatId = int.tryParse(chat.id) ?? 0;
+                                    if (chatId <= 0) return;
+
+                                    final newValue = !chat.isFavorite;
+                                    try {
+                                      await repo.setFavorite(chatId, favorite: newValue);
+                                      await _reloadChats();
+                                    } catch (e) {
+                                      if (!context.mounted) return;
+                                      showGlassSnack(
+                                        context,
+                                        e.toString(),
+                                        kind: GlassSnackKind.error,
+                                      );
+                                    }
+                                  },
                                   onTap: () {
                                     Navigator.of(context).push(
                                       adaptivePageRoute((_) => ChatPage(chat: chat)),
@@ -561,8 +585,9 @@ class _FavoriteAvatar extends StatelessWidget {
 class _ChatTile extends StatelessWidget {
   final ChatPreview chat;
   final VoidCallback onTap;
+  final VoidCallback onToggleFavorite;
 
-  const _ChatTile({required this.chat, required this.onTap});
+  const _ChatTile({required this.chat, required this.onTap, required this.onToggleFavorite});
 
   @override
   Widget build(BuildContext context) {
@@ -619,6 +644,15 @@ class _ChatTile extends StatelessWidget {
             style: TextStyle(
               fontSize: 11,
               color: theme.colorScheme.onSurface.withOpacity(0.60),
+            ),
+          ),
+          const SizedBox(width: 8),
+          IconButton(
+            onPressed: onToggleFavorite,
+            icon: Icon(
+              chat.isFavorite ? Icons.star : Icons.star_border,
+              color: theme.colorScheme.onSurface.withOpacity(chat.isFavorite ? 0.95 : 0.55),
+              size: 20,
             ),
           ),
         ],
