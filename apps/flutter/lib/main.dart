@@ -22,6 +22,7 @@ import 'package:ren/features/splash/data/spalsh_repository.dart';
 
 import 'package:ren/features/chats/data/chats_api.dart';
 import 'package:ren/features/chats/data/chats_repository.dart';
+import 'package:ren/features/chats/presentation/chat_page.dart';
 
 import 'package:ren/features/profile/data/profile_api.dart';
 import 'package:ren/features/profile/data/profile_repository.dart';
@@ -29,6 +30,8 @@ import 'package:ren/features/profile/presentation/profile_store.dart';
 
 import 'package:ren/core/realtime/realtime_client.dart';
 import 'package:ren/core/notifications/local_notifications.dart';
+
+final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
 
 Future<void> main() async {
   runZonedGuarded(
@@ -119,8 +122,32 @@ class MyApp extends StatelessWidget {
       ],
       child: Consumer<ThemeSettings>(
         builder: (context, settings, _) {
+          LocalNotifications.instance.setOnOpenChat((chatId) async {
+            // Ensure tree is ready
+            for (var i = 0; i < 20; i++) {
+              final ctx = rootNavigatorKey.currentContext;
+              if (ctx == null) {
+                await Future<void>.delayed(const Duration(milliseconds: 50));
+                continue;
+              }
+
+              final repo = Provider.of<ChatsRepository>(ctx, listen: false);
+              final chats = await repo.fetchChats();
+              final chat = chats.firstWhere(
+                (c) => (int.tryParse(c.id) ?? 0) == chatId,
+                orElse: () => throw Exception('chat not found'),
+              );
+
+              rootNavigatorKey.currentState?.push(
+                MaterialPageRoute(builder: (_) => ChatPage(chat: chat)),
+              );
+              return;
+            }
+          });
+
           return MaterialApp(
             debugShowCheckedModeBanner: false,
+            navigatorKey: rootNavigatorKey,
             theme: AppTheme.lightThemeFor(settings.colorScheme),
             darkTheme: AppTheme.darkThemeFor(settings.colorScheme),
             themeMode: settings.themeMode,

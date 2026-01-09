@@ -80,9 +80,8 @@ async fn async_main() {
         .layer(from_fn(middleware::logging))
         .with_state(state);
 
-    // Запускаем HTTP-сервер на 0.0.0.0:3000
-    // Запускаем HTTP-сервер на 0.0.0.0:8000
-    let addr = std::net::SocketAddr::from(([0, 0, 0, 0], 8000));
+    // Запускаем HTTP-сервер на 0.0.0.0:8081
+    let addr = std::net::SocketAddr::from(([0, 0, 0, 0], 8081));
     println!("Server running on http://{addr}");
     let listener = TcpListener::bind(addr)
         .await

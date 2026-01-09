@@ -1,8 +1,12 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:convert';
+import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:path_provider/path_provider.dart';
 
 import 'package:ren/core/constants/keys.dart';
 import 'package:ren/core/providers/theme_settings.dart';
@@ -21,6 +25,12 @@ class LocalNotifications {
 
   bool _initialized = false;
 
+  Future<void> Function(int chatId)? _onOpenChat;
+
+  void setOnOpenChat(Future<void> Function(int chatId)? handler) {
+    _onOpenChat = handler;
+  }
+
   Future<void> initialize() async {
     if (_initialized) return;
 
@@ -32,7 +42,28 @@ class LocalNotifications {
       iOS: iosInit,
     );
 
-    await _plugin.initialize(initSettings);
+    await _plugin.initialize(
+      initSettings,
+      onDidReceiveNotificationResponse: (response) async {
+        final payload = response.payload;
+        if (payload == null || payload.isEmpty) return;
+        try {
+          final decoded = jsonDecode(payload);
+          if (decoded is Map) {
+            final chatIdDyn = decoded['chat_id'] ?? decoded['chatId'];
+            final chatId = (chatIdDyn is int) ? chatIdDyn : int.tryParse('$chatIdDyn') ?? 0;
+            if (chatId > 0) {
+              final cb = _onOpenChat;
+              if (cb != null) {
+                await cb(chatId);
+              }
+            }
+          }
+        } catch (_) {
+          // ignore
+        }
+      },
+    );
 
     await _ensureChannel();
     await _requestPermissions();
@@ -77,10 +108,40 @@ class LocalNotifications {
     required int chatId,
     required String title,
     required String body,
+    String? avatarUrl,
+    String? senderName,
   }) async {
     await initialize();
 
     final color = await _readAccentColor();
+
+    final avatar = await _tryDownloadAvatar(
+      avatarUrl: avatarUrl,
+      senderName: senderName,
+      chatId: chatId,
+    );
+
+    final avatarPath = avatar?.path;
+    final avatarBytes = avatar?.bytes;
+
+    final attachments = <DarwinNotificationAttachment>[];
+    if (avatarPath != null && avatarPath.isNotEmpty) {
+      final a = DarwinNotificationAttachment(avatarPath);
+      attachments.add(a);
+    }
+
+    final AndroidBitmap<Object>? avatarBitmap = (avatarBytes != null && avatarBytes.isNotEmpty)
+        ? ByteArrayAndroidBitmap(avatarBytes)
+        : ((avatarPath != null && avatarPath.isNotEmpty) ? FilePathAndroidBitmap(avatarPath) : null);
+
+    final StyleInformation? androidStyle = (avatarBitmap != null)
+        ? BigPictureStyleInformation(
+            avatarBitmap,
+            largeIcon: avatarBitmap,
+            contentTitle: title,
+            summaryText: body,
+          )
+        : null;
 
     final details = NotificationDetails(
       android: AndroidNotificationDetails(
@@ -90,25 +151,64 @@ class LocalNotifications {
         importance: Importance.high,
         priority: Priority.high,
         color: color,
+        largeIcon: avatarBitmap,
+        styleInformation: androidStyle,
         enableVibration: true,
         playSound: true,
       ),
-      iOS: const DarwinNotificationDetails(
+      iOS: DarwinNotificationDetails(
         presentAlert: true,
         presentBadge: true,
         presentSound: true,
+        attachments: attachments,
       ),
     );
 
     // keep id stable per chat to collapse notifications
     final id = chatId.abs();
 
+    final payload = jsonEncode({'chat_id': chatId});
+
     await _plugin.show(
       id,
       title,
       body,
       details,
+      payload: payload,
     );
+  }
+
+  Future<({String path, Uint8List bytes})?> _tryDownloadAvatar({
+    required String? avatarUrl,
+    required String? senderName,
+    required int chatId,
+  }) async {
+    final url = avatarUrl?.trim();
+    if (url == null || url.isEmpty) return null;
+
+    try {
+      final uri = Uri.tryParse(url);
+      if (uri == null) return null;
+
+      final client = HttpClient();
+      final req = await client.getUrl(uri);
+      final res = await req.close();
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        return null;
+      }
+
+      final bytes = await consolidateHttpClientResponseBytes(res);
+      if (bytes.isEmpty) return null;
+
+      final dir = await getTemporaryDirectory();
+      final safe = (senderName ?? 'user').replaceAll(RegExp(r'[^a-zA-Z0-9_\-]'), '_');
+      final path = '${dir.path}/notif_avatar_${chatId}_${safe}.png';
+      final f = File(path);
+      await f.writeAsBytes(bytes, flush: true);
+      return (path: path, bytes: bytes);
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<Color?> _readAccentColor() async {
