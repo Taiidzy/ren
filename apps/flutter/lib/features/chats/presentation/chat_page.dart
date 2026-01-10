@@ -81,6 +81,19 @@ class _ChatPageState extends State<ChatPage> {
   RealtimeClient? _rt;
   StreamSubscription? _rtSub;
 
+  String _messageSummary(ChatMessage m) {
+    final t = m.text.trim();
+    if (t.isNotEmpty) return t;
+    if (m.attachments.isNotEmpty) {
+      final a = m.attachments.first;
+      if (a.isImage) return 'Фото';
+      if (a.isVideo) return 'Видео';
+      final name = a.filename.trim();
+      return name.isNotEmpty ? name : 'Файл';
+    }
+    return '';
+  }
+
   Future<void> _ensureWsReady(int chatId) async {
     _rt ??= context.read<RealtimeClient>();
     final rt = _rt!;
@@ -1096,42 +1109,68 @@ class _ChatPageState extends State<ChatPage> {
                         ),
                       ),
                     if (_replyTo != null)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 10),
-                        child: GlassSurface(
-                          borderRadius: 16,
-                          blurSigma: 12,
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  _replyTo!.text,
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    color: theme.colorScheme.onSurface.withOpacity(0.9),
-                                    fontSize: 13,
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              GestureDetector(
-                                onTap: () {
-                                  setState(() {
-                                    _replyTo = null;
-                                  });
-                                },
-                                child: Icon(
-                                  Icons.close,
-                                  size: 18,
+                      AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 220),
+                        switchInCurve: Curves.easeOut,
+                        switchOutCurve: Curves.easeOut,
+                        transitionBuilder: (child, animation) {
+                          return FadeTransition(
+                            opacity: animation,
+                            child: SizeTransition(
+                              sizeFactor: animation,
+                              axisAlignment: -1,
+                              child: child,
+                            ),
+                          );
+                        },
+                        child: Padding(
+                          key: ValueKey<String>('reply_${_replyTo!.id}'),
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: GlassSurface(
+                            borderRadius: 16,
+                            blurSigma: 12,
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.reply,
+                                  size: 16,
                                   color: theme.colorScheme.onSurface.withOpacity(0.7),
                                 ),
-                              ),
-                            ],
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    _messageSummary(_replyTo!).isNotEmpty
+                                        ? _messageSummary(_replyTo!)
+                                        : 'Сообщение',
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: theme.colorScheme.onSurface.withOpacity(0.9),
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                GestureDetector(
+                                  onTap: () {
+                                    setState(() {
+                                      _replyTo = null;
+                                    });
+                                  },
+                                  child: Icon(
+                                    Icons.close,
+                                    size: 18,
+                                    color: theme.colorScheme.onSurface.withOpacity(0.7),
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
-                      ),
+                      )
+                    else
+                      const SizedBox.shrink(),
                     if (_pending.isNotEmpty)
                       Padding(
                         padding: const EdgeInsets.only(bottom: 10),
@@ -1308,141 +1347,185 @@ class _ChatPageState extends State<ChatPage> {
                           itemBuilder: (context, index) {
                             final msg = messages[index];
                             final replied = _findMessageById(msg.replyToMessageId);
-                            final replyPreview = replied?.text.trim();
+                            final replyPreview = (replied == null) ? null : _messageSummary(replied).trim();
                             final selected = _selectionMode && _selectedMessageIds.contains(msg.id);
                             final pressed = _pressedMessageId == msg.id;
                             return Align(
                               alignment: msg.isMe
                                   ? Alignment.centerRight
                                   : Alignment.centerLeft,
-                              child: GestureDetector(
-                                onTapDown: (_) {
-                                  if (!mounted) return;
-                                  setState(() {
-                                    _pressedMessageId = msg.id;
-                                  });
+                              child: Dismissible(
+                                key: ValueKey('reply_${msg.id}'),
+                                direction: _selectionMode
+                                    ? DismissDirection.none
+                                    : (msg.isMe ? DismissDirection.endToStart : DismissDirection.startToEnd),
+                                movementDuration: const Duration(milliseconds: 260),
+                                dismissThresholds: {
+                                  DismissDirection.startToEnd: 0.22,
+                                  DismissDirection.endToStart: 0.22,
                                 },
-                                onTapCancel: () {
-                                  if (!mounted) return;
-                                  setState(() {
-                                    if (_pressedMessageId == msg.id) {
-                                      _pressedMessageId = null;
-                                    }
-                                  });
-                                },
-                                onTapUp: (_) {
-                                  if (!mounted) return;
-                                  setState(() {
-                                    if (_pressedMessageId == msg.id) {
-                                      _pressedMessageId = null;
-                                    }
-                                  });
-                                },
-                                onTap: () {
-                                  if (_selectionMode) {
-                                    _toggleSelected(msg);
-                                  }
-                                },
-                                onLongPressStart: (d) async {
+                                confirmDismiss: (_) async {
+                                  if (_selectionMode) return false;
                                   HapticFeedback.selectionClick();
-                                  if (mounted) {
+                                  if (!mounted) return false;
+                                  setState(() {
+                                    _replyTo = msg;
+                                    _editing = null;
+                                  });
+                                  _focusNode.requestFocus();
+                                  return false;
+                                },
+                                background: Align(
+                                  alignment: msg.isMe ? Alignment.centerRight : Alignment.centerLeft,
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                                    child: Icon(
+                                      Icons.reply,
+                                      size: 18,
+                                      color: theme.colorScheme.onSurface.withOpacity(0.55),
+                                    ),
+                                  ),
+                                ),
+                                secondaryBackground: Align(
+                                  alignment: msg.isMe ? Alignment.centerRight : Alignment.centerLeft,
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                                    child: Icon(
+                                      Icons.reply,
+                                      size: 18,
+                                      color: theme.colorScheme.onSurface.withOpacity(0.55),
+                                    ),
+                                  ),
+                                ),
+                                child: GestureDetector(
+                                  onTapDown: (_) {
+                                    if (!mounted) return;
                                     setState(() {
                                       _pressedMessageId = msg.id;
                                     });
-                                  }
-                                  if (_selectionMode) {
-                                    _toggleSelected(msg);
-                                  } else {
-                                    await _showMessageContextMenu(msg, d.globalPosition);
-                                  }
-
-                                  if (mounted) {
+                                  },
+                                  onTapCancel: () {
+                                    if (!mounted) return;
                                     setState(() {
                                       if (_pressedMessageId == msg.id) {
                                         _pressedMessageId = null;
                                       }
                                     });
-                                  }
-                                },
-                                onLongPressEnd: (_) {
-                                  if (!mounted) return;
-                                  setState(() {
-                                    if (_pressedMessageId == msg.id) {
-                                      _pressedMessageId = null;
+                                  },
+                                  onTapUp: (_) {
+                                    if (!mounted) return;
+                                    setState(() {
+                                      if (_pressedMessageId == msg.id) {
+                                        _pressedMessageId = null;
+                                      }
+                                    });
+                                  },
+                                  onTap: () {
+                                    if (_selectionMode) {
+                                      _toggleSelected(msg);
                                     }
-                                  });
-                                },
-                                child: AnimatedScale(
-                                  scale: pressed ? 0.985 : (selected ? 1.3 : 1.0),
-                                  duration: const Duration(milliseconds: 110),
-                                  curve: Curves.easeOut,
-                                  child: Stack(
-                                    clipBehavior: Clip.none,
-                                    children: [
-                                      AnimatedContainer(
-                                        duration: const Duration(milliseconds: 110),
-                                        curve: Curves.easeOut,
-                                        decoration: BoxDecoration(
-                                          borderRadius: BorderRadius.circular(16),
-                                          color: pressed
-                                              ? theme.colorScheme.onSurface.withOpacity(isDark ? 0.10 : 0.06)
-                                              : (selected
-                                                  ? theme.colorScheme.primary.withOpacity(isDark ? 0.12 : 0.10)
-                                                  : Colors.transparent),
-                                          border: selected
-                                              ? Border.all(
-                                                  color: theme.colorScheme.primary.withOpacity(0.8),
-                                                  width: 1.2,
-                                                )
-                                              : null,
-                                        ),
-                                        child: Padding(
-                                          padding: const EdgeInsets.all(2),
-                                          child: _MessageBubble(
-                                            replyPreview: (replyPreview != null && replyPreview.isNotEmpty)
-                                                ? replyPreview
+                                  },
+                                  onLongPressStart: (d) async {
+                                    HapticFeedback.selectionClick();
+                                    if (mounted) {
+                                      setState(() {
+                                        _pressedMessageId = msg.id;
+                                      });
+                                    }
+                                    if (_selectionMode) {
+                                      _toggleSelected(msg);
+                                    } else {
+                                      await _showMessageContextMenu(msg, d.globalPosition);
+                                    }
+
+                                    if (mounted) {
+                                      setState(() {
+                                        if (_pressedMessageId == msg.id) {
+                                          _pressedMessageId = null;
+                                        }
+                                      });
+                                    }
+                                  },
+                                  onLongPressEnd: (_) {
+                                    if (!mounted) return;
+                                    setState(() {
+                                      if (_pressedMessageId == msg.id) {
+                                        _pressedMessageId = null;
+                                      }
+                                    });
+                                  },
+                                  child: AnimatedScale(
+                                    scale: pressed ? 0.985 : (selected ? 1.3 : 1.0),
+                                    duration: const Duration(milliseconds: 110),
+                                    curve: Curves.easeOut,
+                                    child: Stack(
+                                      clipBehavior: Clip.none,
+                                      children: [
+                                        AnimatedContainer(
+                                          duration: const Duration(milliseconds: 110),
+                                          curve: Curves.easeOut,
+                                          decoration: BoxDecoration(
+                                            borderRadius: BorderRadius.circular(16),
+                                            color: pressed
+                                                ? theme.colorScheme.onSurface.withOpacity(isDark ? 0.10 : 0.06)
+                                                : (selected
+                                                    ? theme.colorScheme.primary.withOpacity(isDark ? 0.12 : 0.10)
+                                                    : Colors.transparent),
+                                            border: selected
+                                                ? Border.all(
+                                                    color: theme.colorScheme.primary.withOpacity(0.8),
+                                                    width: 1.2,
+                                                  )
                                                 : null,
-                                            text: msg.text,
-                                            attachments: msg.attachments,
-                                            timeLabel: _formatTime(msg.sentAt),
-                                            isMe: msg.isMe,
-                                            isDark: isDark,
-                                            onOpenAttachment: (a) => _openAttachmentSheet(a),
+                                          ),
+                                          child: Padding(
+                                            padding: const EdgeInsets.all(2),
+                                            child: _MessageBubble(
+                                              replyPreview: (replyPreview != null && replyPreview.isNotEmpty)
+                                                  ? replyPreview
+                                                  : null,
+                                              text: msg.text,
+                                              attachments: msg.attachments,
+                                              timeLabel: _formatTime(msg.sentAt),
+                                              isMe: msg.isMe,
+                                              isDark: isDark,
+                                              onOpenAttachment: (a) => _openAttachmentSheet(a),
+                                            ),
                                           ),
                                         ),
-                                      ),
-                                      Positioned(
-                                        right: -6,
-                                        top: -6,
-                                        child: AnimatedOpacity(
-                                          opacity: selected ? 1 : 0,
-                                          duration: const Duration(milliseconds: 120),
-                                          curve: Curves.easeOut,
-                                          child: AnimatedScale(
-                                            scale: selected ? 1 : 0.9,
+                                        Positioned(
+                                          right: -6,
+                                          top: -6,
+                                          child: AnimatedOpacity(
+                                            opacity: selected ? 1 : 0,
                                             duration: const Duration(milliseconds: 120),
                                             curve: Curves.easeOut,
-                                            child: Container(
-                                              width: 20,
-                                              height: 20,
-                                              decoration: BoxDecoration(
-                                                color: theme.colorScheme.primary,
-                                                shape: BoxShape.circle,
-                                                border: Border.all(
-                                                  color: theme.colorScheme.surface.withOpacity(0.9),
-                                                  width: 1,
+                                            child: AnimatedScale(
+                                              scale: selected ? 1 : 0.9,
+                                              duration: const Duration(milliseconds: 120),
+                                              curve: Curves.easeOut,
+                                              child: Container(
+                                                width: 20,
+                                                height: 20,
+                                                decoration: BoxDecoration(
+                                                  color: theme.colorScheme.primary,
+                                                  shape: BoxShape.circle,
+                                                  border: Border.all(
+                                                    color: theme.colorScheme.surface.withOpacity(0.9),
+                                                    width: 1,
+                                                  ),
                                                 ),
-                                              ),
-                                              child: Icon(
-                                                Icons.check,
-                                                size: 14,
-                                                color: theme.colorScheme.onPrimary,
+                                                child: Icon(
+                                                  Icons.check,
+                                                  size: 14,
+                                                  color: theme.colorScheme.onPrimary,
+                                                ),
                                               ),
                                             ),
                                           ),
                                         ),
-                                      ),
-                                    ],
+                                      ],
+                                    ),
                                   ),
                                 ),
                               ),
