@@ -118,10 +118,10 @@ build_macos() {
     rustup target add x86_64-apple-darwin aarch64-apple-darwin
 
     # Собираем для Intel
-    cargo build --release --target x86_64-apple-darwin --features ffi,crypto
+    cargo build --release --target x86_64-apple-darwin --features ffi,crypto --no-default-features
 
     # Собираем для Apple Silicon
-    cargo build --release --target aarch64-apple-darwin --features ffi,crypto
+    cargo build --release --target aarch64-apple-darwin --features ffi,crypto --no-default-features
 
     # Создаём universal dylib
     mkdir -p target/macos

@@ -73,6 +73,7 @@ class _SignInFormState extends State<SignInForm>
         );
       }
     } catch (error) {
+      debugPrint(error.toString());
       setState(() {
         _isLoading = false;
         _loginError = error.toString();

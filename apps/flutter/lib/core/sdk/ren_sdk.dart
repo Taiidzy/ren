@@ -26,9 +26,24 @@ DynamicLibrary _openLibrary() {
       _logger.i("iOS SDK Loaded");
       return lib;
     } else if (Platform.isMacOS) {
-      final lib = DynamicLibrary.open('libren_sdk.dylib');
-      _logger.i("macOS SDK Loaded");
-      return lib;
+      final exeDir = File(Platform.resolvedExecutable).parent.path;
+      final cwd = Directory.current.path;
+      final candidates = <String>[
+        'libren_sdk.dylib',
+        '$exeDir/libren_sdk.dylib',
+        '$cwd/libren_sdk.dylib',
+        '$exeDir/../Resources/libren_sdk.dylib',
+        '$exeDir/../Frameworks/libren_sdk.dylib',
+        '$exeDir/Frameworks/libren_sdk.dylib',
+      ];
+      for (final c in candidates) {
+        try {
+          final lib = DynamicLibrary.open(c);
+          _logger.i("macOS SDK Loaded");
+          return lib;
+        } catch (_) {}
+      }
+      throw ArgumentError('libren_sdk.dylib not found');
     } else if (Platform.isLinux) {
       final lib = DynamicLibrary.open('libren_sdk.so');
       _logger.i("Linux SDK Loaded");
