@@ -5,12 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:hugeicons/hugeicons.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:open_filex/open_filex.dart';
 import 'package:provider/provider.dart';
 import 'package:mime/mime.dart';
 import 'package:flutter/services.dart';
-import 'package:share_plus/share_plus.dart';
-import 'package:video_player/video_player.dart';
 
 import 'package:ren/core/constants/keys.dart';
 import 'package:ren/core/secure/secure_storage.dart';
@@ -18,13 +15,18 @@ import 'package:ren/features/chats/data/chats_repository.dart';
 import 'package:ren/features/chats/domain/chat_models.dart';
 import 'package:ren/core/realtime/realtime_client.dart';
 import 'package:ren/shared/widgets/background.dart';
-import 'package:ren/shared/widgets/avatar.dart';
-import 'package:ren/shared/widgets/skeleton.dart';
 import 'package:ren/shared/widgets/glass_overlays.dart';
 import 'package:ren/shared/widgets/glass_surface.dart';
 import 'package:ren/shared/widgets/glass_snackbar.dart';
 import 'package:ren/shared/widgets/context_menu.dart';
 import 'package:path_provider/path_provider.dart';
+
+import 'package:ren/features/chats/presentation/widgets/chat_attachment_viewer_sheet.dart';
+import 'package:ren/features/chats/presentation/widgets/chat_input_bar.dart';
+import 'package:ren/features/chats/presentation/widgets/chat_message_bubble.dart';
+import 'package:ren/features/chats/presentation/widgets/chat_page_app_bar.dart';
+import 'package:ren/features/chats/presentation/widgets/chat_pending_attachment.dart';
+import 'package:ren/features/chats/presentation/widgets/chat_skeleton_message_bubble.dart';
 
 class ChatPage extends StatefulWidget {
   final ChatPreview chat;
@@ -35,18 +37,6 @@ class ChatPage extends StatefulWidget {
   State<ChatPage> createState() => _ChatPageState();
 }
 
-class _PendingAttachment {
-  final Uint8List bytes;
-  final String filename;
-  final String mimetype;
-
-  const _PendingAttachment({
-    required this.bytes,
-    required this.filename,
-    required this.mimetype,
-  });
-}
-
 class _ChatPageState extends State<ChatPage> {
   final _controller = TextEditingController();
   final _focusNode = FocusNode();
@@ -55,6 +45,7 @@ class _ChatPageState extends State<ChatPage> {
   bool _loadingMore = false;
   bool _hasMore = true;
   final List<ChatMessage> _messages = [];
+  final Map<String, ChatMessage> _messageById = {};
 
   ChatMessage? _replyTo;
   ChatMessage? _editing;
@@ -66,7 +57,7 @@ class _ChatPageState extends State<ChatPage> {
 
   final _picker = ImagePicker();
 
-  final List<_PendingAttachment> _pending = [];
+  final List<PendingChatAttachment> _pending = [];
 
   int? _myUserId;
 
@@ -80,6 +71,14 @@ class _ChatPageState extends State<ChatPage> {
 
   RealtimeClient? _rt;
   StreamSubscription? _rtSub;
+
+  Timer? _loadOlderDebounce;
+
+  void _reindexMessages() {
+    _messageById
+      ..clear()
+      ..addEntries(_messages.map((m) => MapEntry(m.id, m)));
+  }
 
   String _messageSummary(ChatMessage m) {
     final t = m.text.trim();
@@ -105,10 +104,7 @@ class _ChatPageState extends State<ChatPage> {
 
   ChatMessage? _findMessageById(String? id) {
     if (id == null || id.isEmpty) return null;
-    for (final m in _messages) {
-      if (m.id == id) return m;
-    }
-    return null;
+    return _messageById[id];
   }
 
   @override
@@ -155,7 +151,11 @@ class _ChatPageState extends State<ChatPage> {
 
     // Pagination: when user scrolls near top, load older messages.
     if (pos.pixels < 220) {
-      _loadOlder();
+      _loadOlderDebounce?.cancel();
+      _loadOlderDebounce = Timer(const Duration(milliseconds: 160), () {
+        if (!mounted) return;
+        _loadOlder();
+      });
     }
   }
 
@@ -207,6 +207,7 @@ class _ChatPageState extends State<ChatPage> {
 
       setState(() {
         _messages.insertAll(0, toAdd);
+        _reindexMessages();
         _loadingMore = false;
       });
 
@@ -291,6 +292,7 @@ class _ChatPageState extends State<ChatPage> {
         _messages
           ..clear()
           ..addAll(list);
+        _reindexMessages();
         _loading = false;
         _hasMore = true;
       });
@@ -380,6 +382,8 @@ class _ChatPageState extends State<ChatPage> {
             replyToMessageId: old.replyToMessageId,
           );
 
+          _reindexMessages();
+
           if (_editing?.id == incomingId) {
             _editing = null;
           }
@@ -398,6 +402,7 @@ class _ChatPageState extends State<ChatPage> {
         if (!mounted) return;
         setState(() {
           _messages.removeWhere((m) => m.id == messageId.toString());
+          _reindexMessages();
           _selectedMessageIds.removeWhere((id) => id == messageId.toString());
           if (_selectedMessageIds.isEmpty) {
             _selectionMode = false;
@@ -491,6 +496,8 @@ class _ChatPageState extends State<ChatPage> {
             replyToMessageId: (replyId != null && replyId > 0) ? replyId.toString() : null,
           ),
         );
+
+        _reindexMessages();
       });
 
       if (isMe || _isAtBottom) {
@@ -519,7 +526,7 @@ class _ChatPageState extends State<ChatPage> {
     _typingDebounce?.cancel();
     _sendTyping(false);
 
-    final pendingCopy = List<_PendingAttachment>.from(_pending);
+    final pendingCopy = List<PendingChatAttachment>.from(_pending);
 
     final replyTo = _replyTo;
     final editing = _editing;
@@ -550,6 +557,8 @@ class _ChatPageState extends State<ChatPage> {
             sentAt: old.sentAt,
             replyToMessageId: old.replyToMessageId,
           );
+
+          _reindexMessages();
         }
       });
 
@@ -614,6 +623,8 @@ class _ChatPageState extends State<ChatPage> {
           replyToMessageId: replyTo?.id,
         ),
       );
+
+      _reindexMessages();
     });
 
     _scheduleScrollToBottom(animated: true);
@@ -667,14 +678,14 @@ class _ChatPageState extends State<ChatPage> {
         return 'image/jpeg';
       }
 
-      final added = <_PendingAttachment>[];
+      final added = <PendingChatAttachment>[];
       for (final f in files) {
         final bytes = await f.readAsBytes();
         final name = f.name.isNotEmpty
             ? f.name
             : 'image_${DateTime.now().millisecondsSinceEpoch}.jpg';
         added.add(
-          _PendingAttachment(
+          PendingChatAttachment(
             bytes: bytes,
             filename: name,
             mimetype: mimetypeFromName(name),
@@ -708,7 +719,7 @@ class _ChatPageState extends State<ChatPage> {
       if (!mounted) return;
       setState(() {
         _pending.add(
-          _PendingAttachment(
+          PendingChatAttachment(
             bytes: bytes,
             filename: name,
             mimetype: 'image/jpeg',
@@ -728,7 +739,7 @@ class _ChatPageState extends State<ChatPage> {
       );
       if (res == null) return;
 
-      final added = <_PendingAttachment>[];
+      final added = <PendingChatAttachment>[];
       for (final f in res.files) {
         final bytes = f.bytes;
         if (bytes == null || bytes.isEmpty) continue;
@@ -738,7 +749,7 @@ class _ChatPageState extends State<ChatPage> {
         final mime = lookupMimeType(f.path ?? '') ?? 'application/octet-stream';
 
         added.add(
-          _PendingAttachment(
+          PendingChatAttachment(
             bytes: bytes,
             filename: name,
             mimetype: mime,
@@ -755,131 +766,14 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
-  Future<void> showAttachMenu(
-    BuildContext context, {
-    required Future<void> Function()? onPickPhotos,
-    required Future<void> Function()? onPickFiles,
-    required Future<void> Function()? onTakePhoto,
-  }) async {
-    final theme = Theme.of(context);
-
-    await GlassOverlays.showGlassBottomSheet<void>(
-      context,
-      builder: (ctx) {
-        return GlassSurface(
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Container(
-              padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
-              decoration: BoxDecoration(
-                color: Colors.transparent,
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // Drag handle
-                  Container(
-                    height: 4,
-                    width: 48,
-                    decoration: BoxDecoration(
-                      color: theme.colorScheme.onSurface.withOpacity(0.12),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-
-                  // Title / optional subtitle
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          'Добавить',
-                          style: theme.textTheme.titleMedium,
-                        ),
-                      ),
-                    ],
-                  ),
-
-                  const SizedBox(height: 8),
-
-                  // Options row
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      _AttachOption(
-                        icon: Icons.photo_library_outlined,
-                        label: 'Фото',
-                        onTap: () async {
-                          Navigator.of(ctx).pop();
-                          HapticFeedback.selectionClick();
-                          if (onPickPhotos != null) await onPickPhotos();
-                        },
-                      ),
-
-                      _AttachOption(
-                        icon: Icons.insert_drive_file_outlined,
-                        label: 'Файл',
-                        onTap: () async {
-                          Navigator.of(ctx).pop();
-                          HapticFeedback.selectionClick();
-                          if (onPickFiles != null) await onPickFiles();
-                        },
-                      ),
-
-                      // Example: add a third quick action (camera)
-                      _AttachOption(
-                        icon: Icons.camera_alt_outlined,
-                        label: 'Камера',
-                        onTap: () async {
-                          Navigator.of(ctx).pop();
-                          HapticFeedback.selectionClick();
-                          if (onTakePhoto != null) await onTakePhoto();
-                        },
-                      ),
-                    ],
-                  ),
-
-                  const SizedBox(height: 12),
-
-                  // Optional explanatory text
-                  Text(
-                    'Выберите источник, чтобы прикрепить файл или фото',
-                    style: theme.textTheme.bodySmall,
-                    textAlign: TextAlign.center,
-                  ),
-
-                  const SizedBox(height: 8),
-
-                  // Cancel button
-                  SizedBox(
-                    width: double.infinity,
-                    child: TextButton(
-                      onPressed: () => Navigator.of(ctx).pop(),
-                      style: TextButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                      ),
-                      child: const Text('Отмена'),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
 
   @override
   void dispose() {
     final chatId = int.tryParse(widget.chat.id) ?? 0;
     _typingDebounce?.cancel();
     _typingDebounce = null;
+    _loadOlderDebounce?.cancel();
+    _loadOlderDebounce = null;
     _rt?.typing(chatId, false);
     _rt?.leaveChat(chatId);
     _rtSub?.cancel();
@@ -897,7 +791,6 @@ class _ChatPageState extends State<ChatPage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final baseInk = isDark ? Colors.white : Colors.black;
 
     return AppBackground(
       imageOpacity: 1,
@@ -908,130 +801,28 @@ class _ChatPageState extends State<ChatPage> {
       child: Scaffold(
         resizeToAvoidBottomInset: false,
         extendBodyBehindAppBar: true,
-        appBar: AppBar(
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          flexibleSpace: const GlassAppBarBackground(),
-          centerTitle: true,
-          titleSpacing: 0,
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back_ios_new_rounded),
-            onPressed: () {
-              if (_selectionMode) {
-                _exitSelectionMode();
-              } else {
-                Navigator.of(context).maybePop();
-              }
-            },
-          ),
-          title: Stack(
-            alignment: Alignment.center,
-            children: [
-              SizedBox(
-                width: double.infinity,
-                child: Center(
-                  child: GlassSurface(
-                    borderRadius: 18,
-                    blurSigma: 12,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 6,
-                    ),
-                    borderColor: baseInk.withOpacity(isDark ? 0.18 : 0.10),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (_selectionMode)
-                          Text(
-                            'Выбрано: ${_selectedMessageIds.length}',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                              color: theme.colorScheme.onSurface,
-                            ),
-                          )
-                        else ...[
-                          RenAvatar(
-                            url: widget.chat.user.avatarUrl,
-                            name: widget.chat.user.name,
-                            isOnline: _peerOnline,
-                            size: 36,
-                          ),
-                          const SizedBox(width: 10),
-                          ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 200),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  widget.chat.user.name,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w600,
-                                    color: theme.colorScheme.onSurface,
-                                  ),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  _peerTyping
-                                      ? 'Печатает...'
-                                      : (_peerOnline ? 'Online' : 'Offline'),
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: theme.colorScheme.onSurface
-                                        .withOpacity(0.65),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            if (_selectionMode) ...[
-              IconButton(
-                icon: Icon(
-                  Icons.share_outlined,
-                  color: theme.colorScheme.onSurface,
-                ),
-                onPressed: _selectedMessageIds.isEmpty
-                    ? null
-                    : () async {
-                        await _forwardSelected();
-                      },
-              ),
-              IconButton(
-                icon: Icon(
-                  Icons.delete_outline,
-                  color: theme.colorScheme.onSurface,
-                ),
-                onPressed: _selectedMessageIds.isEmpty
-                    ? null
-                    : () {
-                        final ids = Set<String>.from(_selectedMessageIds);
-                        _deleteByIds(ids);
-                        _deleteRemote(ids);
-                      },
-              ),
-            ] else
-              IconButton(
-                icon: HugeIcon(
-                  icon: HugeIcons.strokeRoundedMenu01,
-                  color: theme.colorScheme.onSurface,
-                  size: 24.0,
-                ),
-                onPressed: () {},
-              ),
-          ],
+        appBar: ChatPageAppBar(
+          chat: widget.chat,
+          selectionMode: _selectionMode,
+          selectedCount: _selectedMessageIds.length,
+          peerOnline: _peerOnline,
+          peerTyping: _peerTyping,
+          onBack: () {
+            if (_selectionMode) {
+              _exitSelectionMode();
+            } else {
+              Navigator.of(context).maybePop();
+            }
+          },
+          onShareSelected: () async {
+            await _forwardSelected();
+          },
+          onDeleteSelected: () {
+            final ids = Set<String>.from(_selectedMessageIds);
+            _deleteByIds(ids);
+            _deleteRemote(ids);
+          },
+          onMenu: () {},
         ),
         body: Builder(
           builder: (context) {
@@ -1058,260 +849,7 @@ class _ChatPageState extends State<ChatPage> {
               _lastViewInsetsBottom = insetsBottom;
             }
 
-            Widget inputBar() {
-              return Padding(
-                padding: const EdgeInsets.fromLTRB(
-                  horizontalPadding,
-                  10,
-                  horizontalPadding,
-                  10,
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (_editing != null)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 10),
-                        child: GlassSurface(
-                          borderRadius: 16,
-                          blurSigma: 10,
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  'Редактирование',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    color: theme.colorScheme.onSurface.withOpacity(0.9),
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 10),
-                              GestureDetector(
-                                onTap: () {
-                                  setState(() {
-                                    _editing = null;
-                                  });
-                                  _controller.clear();
-                                },
-                                child: Icon(
-                                  Icons.close,
-                                  size: 18,
-                                  color: theme.colorScheme.onSurface.withOpacity(0.8),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    if (_replyTo != null)
-                      AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 220),
-                        switchInCurve: Curves.easeOut,
-                        switchOutCurve: Curves.easeOut,
-                        transitionBuilder: (child, animation) {
-                          return FadeTransition(
-                            opacity: animation,
-                            child: SizeTransition(
-                              sizeFactor: animation,
-                              axisAlignment: -1,
-                              child: child,
-                            ),
-                          );
-                        },
-                        child: Padding(
-                          key: ValueKey<String>('reply_${_replyTo!.id}'),
-                          padding: const EdgeInsets.only(bottom: 10),
-                          child: GlassSurface(
-                            borderRadius: 16,
-                            blurSigma: 12,
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                            child: Row(
-                              children: [
-                                Icon(
-                                  Icons.reply,
-                                  size: 16,
-                                  color: theme.colorScheme.onSurface.withOpacity(0.7),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Text(
-                                    _messageSummary(_replyTo!).isNotEmpty
-                                        ? _messageSummary(_replyTo!)
-                                        : 'Сообщение',
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      color: theme.colorScheme.onSurface.withOpacity(0.9),
-                                      fontSize: 13,
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                GestureDetector(
-                                  onTap: () {
-                                    setState(() {
-                                      _replyTo = null;
-                                    });
-                                  },
-                                  child: Icon(
-                                    Icons.close,
-                                    size: 18,
-                                    color: theme.colorScheme.onSurface.withOpacity(0.7),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      )
-                    else
-                      const SizedBox.shrink(),
-                    if (_pending.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 10),
-                        child: SizedBox(
-                          height: 64,
-                          child: ListView.separated(
-                            scrollDirection: Axis.horizontal,
-                            itemCount: _pending.length,
-                            separatorBuilder: (_, __) => const SizedBox(width: 10),
-                            itemBuilder: (context, index) {
-                              final p = _pending[index];
-                              final isImg = p.mimetype.startsWith('image/');
-                              return Stack(
-                                clipBehavior: Clip.none,
-                                children: [
-                                  ClipRRect(
-                                    borderRadius: BorderRadius.circular(12),
-                                    child: Container(
-                                      width: 64,
-                                      height: 64,
-                                      color: theme.colorScheme.surface,
-                                      child: isImg
-                                          ? Image.memory(
-                                              p.bytes,
-                                              fit: BoxFit.cover,
-                                              errorBuilder: (c, e, s) => const SizedBox(),
-                                            )
-                                          : Center(
-                                              child: Icon(
-                                                Icons.insert_drive_file,
-                                                color: theme.colorScheme.onSurface.withOpacity(0.65),
-                                              ),
-                                            ),
-                                    ),
-                                  ),
-                                  Positioned(
-                                    right: -6,
-                                    top: -6,
-                                    child: GestureDetector(
-                                      onTap: () {
-                                        setState(() {
-                                          _pending.removeAt(index);
-                                        });
-                                      },
-                                      child: Container(
-                                        width: 20,
-                                        height: 20,
-                                        decoration: BoxDecoration(
-                                          color: theme.colorScheme.surface,
-                                          shape: BoxShape.circle,
-                                          border: Border.all(
-                                            color: theme.colorScheme.onSurface.withOpacity(0.25),
-                                          ),
-                                        ),
-                                        child: Icon(
-                                          Icons.close,
-                                          size: 14,
-                                          color: theme.colorScheme.onSurface.withOpacity(0.8),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              );
-                            },
-                          ),
-                        ),
-                      ),
-                    Row(
-                      children: [
-                        GlassSurface(
-                          borderRadius: 18,
-                          blurSigma: 12,
-                          width: inputHeight,
-                          height: inputHeight,
-                          onTap: () => showAttachMenu(
-                            context,
-                            onPickPhotos: () async => await _pickPhotos(),
-                            onPickFiles: () async => await _pickFiles(),
-                            onTakePhoto: () async => await _takePhoto(),
-                          ),
-                          child: Center(
-                            child: HugeIcon(
-                              icon: HugeIcons.strokeRoundedAttachment01,
-                              color: theme.colorScheme.onSurface.withOpacity(0.9),
-                              size: 18,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: GlassSurface(
-                            borderRadius: 18,
-                            blurSigma: 12,
-                            height: inputHeight,
-                            borderColor: theme.colorScheme.onSurface
-                                .withOpacity(isDark ? 0.20 : 0.10),
-                            child: TextField(
-                              controller: _controller,
-                              focusNode: _focusNode,
-                              style: TextStyle(
-                                color: theme.colorScheme.onSurface,
-                                fontSize: 14,
-                              ),
-                              cursorColor: theme.colorScheme.primary,
-                              decoration: InputDecoration(
-                                hintText: 'Введите сообщение...',
-                                hintStyle: TextStyle(
-                                  color: theme.colorScheme.onSurface
-                                      .withOpacity(0.55),
-                                ),
-                                filled: false,
-                                fillColor: Colors.transparent,
-                                border: InputBorder.none,
-                                contentPadding:
-                                    const EdgeInsets.symmetric(horizontal: 14),
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        GlassSurface(
-                          borderRadius: 18,
-                          blurSigma: 12,
-                          width: inputHeight,
-                          height: inputHeight,
-                          onTap: _send,
-                          child: Center(
-                            child: HugeIcon(
-                              icon: HugeIcons.strokeRoundedSent,
-                              color: theme.colorScheme.onSurface.withOpacity(0.9),
-                              size: 18,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              );
-            }
+            final replyText = _replyTo == null ? '' : _messageSummary(_replyTo!);
 
             return Stack(
               children: [
@@ -1330,7 +868,7 @@ class _ChatPageState extends State<ChatPage> {
                             final alignRight = index.isOdd;
                             return Align(
                               alignment: alignRight ? Alignment.centerRight : Alignment.centerLeft,
-                              child: _SkeletonMessageBubble(isMe: alignRight),
+                              child: ChatSkeletonMessageBubble(isMe: alignRight),
                             );
                           },
                         )
@@ -1480,16 +1018,18 @@ class _ChatPageState extends State<ChatPage> {
                                           ),
                                           child: Padding(
                                             padding: const EdgeInsets.all(2),
-                                            child: _MessageBubble(
-                                              replyPreview: (replyPreview != null && replyPreview.isNotEmpty)
-                                                  ? replyPreview
-                                                  : null,
-                                              text: msg.text,
-                                              attachments: msg.attachments,
-                                              timeLabel: _formatTime(msg.sentAt),
-                                              isMe: msg.isMe,
-                                              isDark: isDark,
-                                              onOpenAttachment: (a) => _openAttachmentSheet(a),
+                                            child: RepaintBoundary(
+                                              child: ChatMessageBubble(
+                                                replyPreview: (replyPreview != null && replyPreview.isNotEmpty)
+                                                    ? replyPreview
+                                                    : null,
+                                                text: msg.text,
+                                                attachments: msg.attachments,
+                                                timeLabel: _formatTime(msg.sentAt),
+                                                isMe: msg.isMe,
+                                                isDark: isDark,
+                                                onOpenAttachment: (a) => _openAttachmentSheet(a),
+                                              ),
                                             ),
                                           ),
                                         ),
@@ -1543,7 +1083,35 @@ class _ChatPageState extends State<ChatPage> {
                     padding: EdgeInsets.only(bottom: media.viewInsets.bottom),
                     child: SafeArea(
                       top: false,
-                      child: inputBar(),
+                      child: ChatInputBar(
+                        controller: _controller,
+                        focusNode: _focusNode,
+                        isDark: isDark,
+                        isEditing: _editing != null,
+                        onCancelEditing: () {
+                          setState(() {
+                            _editing = null;
+                          });
+                          _controller.clear();
+                        },
+                        hasReply: _replyTo != null,
+                        replyText: replyText,
+                        onCancelReply: () {
+                          setState(() {
+                            _replyTo = null;
+                          });
+                        },
+                        pending: _pending,
+                        onRemovePending: (index) {
+                          setState(() {
+                            _pending.removeAt(index);
+                          });
+                        },
+                        onPickPhotos: () async => await _pickPhotos(),
+                        onPickFiles: () async => await _pickFiles(),
+                        onTakePhoto: () async => await _takePhoto(),
+                        onSend: _send,
+                      ),
                     ),
                   ),
                 ),
@@ -1581,7 +1149,7 @@ class _ChatPageState extends State<ChatPage> {
     await GlassOverlays.showGlassBottomSheet<void>(
       context,
       builder: (ctx) {
-        return _AttachmentViewerSheet(
+        return ChatAttachmentViewerSheet(
           items: items,
           initialIndex: initialIndex,
         );
@@ -1840,543 +1408,5 @@ class _ChatPageState extends State<ChatPage> {
       default:
         break;
     }
-  }
-}
-
-class _AttachmentViewerSheet extends StatefulWidget {
-  final List<ChatAttachment> items;
-  final int initialIndex;
-
-  const _AttachmentViewerSheet({
-    required this.items,
-    required this.initialIndex,
-  });
-
-  @override
-  State<_AttachmentViewerSheet> createState() => _AttachmentViewerSheetState();
-}
-
-class _AttachmentViewerSheetState extends State<_AttachmentViewerSheet> {
-  late final PageController _pageController;
-  int _index = 0;
-
-  final Map<int, VideoPlayerController> _videoControllers = {};
-  final Map<int, Future<void>> _videoInits = {};
-
-  @override
-  void initState() {
-    super.initState();
-    _index = widget.initialIndex;
-    _pageController = PageController(initialPage: _index);
-  }
-
-  @override
-  void dispose() {
-    for (final c in _videoControllers.values) {
-      c.dispose();
-    }
-    _videoControllers.clear();
-    _videoInits.clear();
-    _pageController.dispose();
-    super.dispose();
-  }
-
-  ChatAttachment get _current => widget.items[_index];
-
-  String _prettyType(ChatAttachment a) {
-    final mt = a.mimetype.toLowerCase();
-    if (mt.startsWith('image/')) return 'Фото';
-    if (mt.startsWith('video/')) return 'Видео';
-    if (mt.startsWith('audio/')) return 'Аудио';
-    if (mt.contains('pdf')) return 'PDF';
-    return 'Файл';
-  }
-
-  Future<void> _saveCurrent() async {
-    final a = _current;
-    final path = a.localPath;
-    if (path.isEmpty) return;
-
-    try {
-      final box = context.findRenderObject() as RenderBox?;
-      final origin = (box != null)
-          ? (box.localToGlobal(Offset.zero) & box.size)
-          : const Rect.fromLTWH(0, 0, 1, 1);
-
-      await Share.shareXFiles(
-        [XFile(path, name: a.filename)],
-        text: a.filename,
-        sharePositionOrigin: origin,
-      );
-    } catch (error) {
-      if (!mounted) return;
-      debugPrint('Failed to share file: $error');
-      showGlassSnack(context, 'Не удалось сохранить файл', kind: GlassSnackKind.error);
-    }
-  }
-
-  Future<void> _openCurrent() async {
-    final a = _current;
-    final path = a.localPath;
-    if (path.isEmpty) return;
-    try {
-      await OpenFilex.open(path);
-    } catch (_) {
-      if (!mounted) return;
-      showGlassSnack(context, 'Не удалось открыть файл', kind: GlassSnackKind.error);
-    }
-  }
-
-  VideoPlayerController _getVideoController(int i, String path) {
-    final existing = _videoControllers[i];
-    if (existing != null) return existing;
-    final c = VideoPlayerController.file(File(path));
-    _videoControllers[i] = c;
-    _videoInits[i] = c.initialize();
-    return c;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return DraggableScrollableSheet(
-      initialChildSize: 0.92,
-      minChildSize: 0.45,
-      maxChildSize: 0.98,
-      builder: (ctx, scrollController) {
-        return GlassSurface(
-          child: ClipRRect(
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
-            child: Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          _current.filename.isNotEmpty
-                              ? _current.filename
-                              : _prettyType(_current),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.titleMedium,
-                        ),
-                      ),
-                      TextButton.icon(
-                        onPressed: _saveCurrent,
-                        icon: HugeIcon(
-                          icon: HugeIcons.strokeRoundedDownload01,
-                          color: theme.colorScheme.onSurface.withOpacity(0.9),
-                          size: 18,
-                        ),
-                        label: const Text('Скачать'),
-                      ),
-                    ],
-                  ),
-                ),
-                Expanded(
-                  child: PageView.builder(
-                    controller: _pageController,
-                    onPageChanged: (i) {
-                      setState(() {
-                        _index = i;
-                      });
-                    },
-                    itemCount: widget.items.length,
-                    itemBuilder: (context, i) {
-                      final a = widget.items[i];
-                      final path = a.localPath;
-
-                      if (a.isImage) {
-                        return Center(
-                          child: InteractiveViewer(
-                            minScale: 0.8,
-                            maxScale: 4,
-                            child: Image.file(
-                              File(path),
-                              errorBuilder: (context, error, stack) {
-                                return const Text('Не удалось загрузить изображение');
-                              },
-                            ),
-                          ),
-                        );
-                      }
-
-                      if (a.isVideo) {
-                        final c = _getVideoController(i, path);
-                        final init = _videoInits[i];
-                        return Center(
-                          child: FutureBuilder<void>(
-                            future: init,
-                            builder: (context, snap) {
-                              if (snap.connectionState != ConnectionState.done) {
-                                return const CircularProgressIndicator();
-                              }
-                              if (!c.value.isInitialized) {
-                                return const Text('Не удалось открыть видео');
-                              }
-
-                              return GestureDetector(
-                                onTap: () {
-                                  setState(() {
-                                    if (c.value.isPlaying) {
-                                      c.pause();
-                                    } else {
-                                      c.play();
-                                    }
-                                  });
-                                },
-                                child: Stack(
-                                  alignment: Alignment.center,
-                                  children: [
-                                    AspectRatio(
-                                      aspectRatio: c.value.aspectRatio,
-                                      child: VideoPlayer(c),
-                                    ),
-                                    if (!c.value.isPlaying)
-                                      Icon(
-                                        Icons.play_circle_fill,
-                                        size: 72,
-                                        color: Colors.white.withOpacity(0.8),
-                                      ),
-                                  ],
-                                ),
-                              );
-                            },
-                          ),
-                        );
-                      }
-
-                      final icon = a.mimetype.startsWith('audio/')
-                          ? Icons.audiotrack
-                          : Icons.insert_drive_file;
-
-                      return Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(18),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                icon,
-                                size: 64,
-                                color: theme.colorScheme.onSurface.withOpacity(0.75),
-                              ),
-                              const SizedBox(height: 12),
-                              Text(
-                                a.filename.isNotEmpty ? a.filename : 'Файл',
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                textAlign: TextAlign.center,
-                                style: theme.textTheme.titleSmall,
-                              ),
-                              const SizedBox(height: 14),
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  ElevatedButton.icon(
-                                    onPressed: _openCurrent,
-                                    icon: const Icon(Icons.open_in_new),
-                                    label: const Text('Открыть'),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  OutlinedButton.icon(
-                                    onPressed: _saveCurrent,
-                                    icon: const Icon(Icons.download_outlined),
-                                    label: const Text('Скачать'),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
-class _MessageBubble extends StatelessWidget {
-  final String? replyPreview;
-  final String text;
-  final List<ChatAttachment> attachments;
-  final String timeLabel;
-  final bool isMe;
-  final bool isDark;
-  final void Function(ChatAttachment a)? onOpenAttachment;
-
-  const _MessageBubble({
-    this.replyPreview,
-    required this.text,
-    this.attachments = const [],
-    required this.timeLabel,
-    required this.isMe,
-    required this.isDark,
-    this.onOpenAttachment,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final baseInk = isDark ? Colors.white : Colors.black;
-    final isMeColor = isMe
-        ? (isDark
-            ? theme.colorScheme.primary.withOpacity(0.35)
-            : theme.colorScheme.primary.withOpacity(0.22))
-        : null;
-
-    void onTapAttachment(ChatAttachment a) {
-      onOpenAttachment?.call(a);
-    }
-
-    return GlassSurface(
-      borderRadius: 16,
-      blurSigma: 12,
-      color: isMeColor,
-      borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.10),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 260),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              if (replyPreview != null && replyPreview!.trim().isNotEmpty) ...[
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.onSurface.withOpacity(0.06),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: theme.colorScheme.onSurface.withOpacity(0.08),
-                    ),
-                  ),
-                  child: Text(
-                    replyPreview!.trim(),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: theme.colorScheme.onSurface.withOpacity(0.75),
-                      fontSize: 12,
-                      height: 1.25,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 6),
-              ],
-              for (final a in attachments) ...[
-                if (a.isImage)
-                  Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      onTap: () => onTapAttachment(a),
-                      borderRadius: BorderRadius.circular(12),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(12),
-                        child: Image.file(
-                          File(a.localPath),
-                          fit: BoxFit.cover,
-                          errorBuilder: (context, error, stack) {
-                            return Container(
-                              width: 220,
-                              height: 160,
-                              color: Theme.of(context).colorScheme.surface,
-                            );
-                          },
-                        ),
-                      ),
-                    ),
-                  )
-                else if (a.isVideo)
-                  Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      onTap: () => onTapAttachment(a),
-                      borderRadius: BorderRadius.circular(12),
-                      child: Container(
-                        width: 220,
-                        height: 140,
-                        decoration: BoxDecoration(
-                          color: theme.colorScheme.surface,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: theme.colorScheme.onSurface.withOpacity(0.12),
-                          ),
-                        ),
-                        child: Center(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                Icons.play_circle_fill,
-                                size: 48,
-                                color: theme.colorScheme.onSurface.withOpacity(0.7),
-                              ),
-                              const SizedBox(height: 6),
-                              Text(
-                                a.filename,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  color: theme.colorScheme.onSurface.withOpacity(0.85),
-                                  fontSize: 12,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  )
-                else
-                  Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      onTap: () => onTapAttachment(a),
-                      borderRadius: BorderRadius.circular(10),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              Icons.insert_drive_file,
-                              size: 16,
-                              color: theme.colorScheme.onSurface.withOpacity(0.75),
-                            ),
-                            const SizedBox(width: 8),
-                            Flexible(
-                              child: Text(
-                                a.filename,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  color: theme.colorScheme.onSurface.withOpacity(0.85),
-                                  fontSize: 12,
-                                  height: 1.25,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                const SizedBox(height: 6),
-              ],
-              Text(
-                text,
-                style: TextStyle(
-                  color: theme.colorScheme.onSurface,
-                  fontSize: 13,
-                  height: 1.25,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                timeLabel,
-                style: TextStyle(
-                  fontSize: 10,
-                  color: theme.colorScheme.onSurface.withOpacity(0.55),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _SkeletonMessageBubble extends StatelessWidget {
-  final bool isMe;
-
-  const _SkeletonMessageBubble({required this.isMe});
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final maxW = MediaQuery.of(context).size.width * 0.62;
-    final w = isMe ? maxW : (maxW * 0.82);
-
-    return ConstrainedBox(
-      constraints: BoxConstraints(maxWidth: w),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        decoration: BoxDecoration(
-          color: theme.colorScheme.surface.withOpacity(0.55),
-          borderRadius: BorderRadius.circular(18),
-        ),
-        child: const Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            RenSkeletonBox(width: 180, height: 12, radius: 8),
-            SizedBox(height: 8),
-            RenSkeletonBox(width: 140, height: 12, radius: 8),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _AttachOption extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-
-  const _AttachOption({
-    Key? key,
-    required this.icon,
-    required this.label,
-    required this.onTap,
-  }) : super(key: key);
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
-    return Semantics(
-      button: true,
-      label: label,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(12),
-          onTap: onTap,
-          child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
-            width: 96,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                CircleAvatar(
-                  radius: 28,
-                  backgroundColor: theme.colorScheme.primary.withOpacity(0.12),
-                  child: Icon(icon, size: 28, color: theme.colorScheme.primary),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  label,
-                  style: theme.textTheme.bodyMedium,
-                  textAlign: TextAlign.center,
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
   }
 }
