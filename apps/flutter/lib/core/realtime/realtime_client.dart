@@ -122,6 +122,7 @@ class RealtimeClient {
     required int chatId,
     required String message,
     required Map<String, dynamic>? envelopes,
+    String? clientMessageId,
     String? messageType,
     List<dynamic>? metadata,
     int? replyToMessageId,
@@ -129,6 +130,7 @@ class RealtimeClient {
     _send({
       'type': 'send_message',
       'chat_id': chatId,
+      'client_message_id': clientMessageId,
       'message': message,
       'message_type': messageType,
       'envelopes': envelopes,

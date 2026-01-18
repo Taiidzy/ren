@@ -15,11 +15,13 @@ class OutgoingAttachment {
   final List<int> bytes;
   final String filename;
   final String mimetype;
+  final int? durationMs;
 
   const OutgoingAttachment({
     required this.bytes,
     required this.filename,
     required this.mimetype,
+    this.durationMs,
   });
 }
 
@@ -242,6 +244,10 @@ class ChatsRepository {
       final size = (m['size'] is int)
           ? m['size'] as int
           : int.tryParse('${m['size']}') ?? 0;
+      final durationDyn = m['duration_ms'] ?? m['durationMs'] ?? m['duration'];
+      final durationMs = (durationDyn is int)
+          ? durationDyn
+          : int.tryParse('${durationDyn ?? ''}');
 
       if (nonce == null || nonce.isEmpty) {
         continue;
@@ -290,6 +296,7 @@ class ChatsRepository {
           filename: filename,
           mimetype: mimetype,
           size: size,
+          durationMs: (durationMs != null && durationMs > 0) ? durationMs : null,
         ),
       );
     }
@@ -676,6 +683,7 @@ class ChatsRepository {
         'enc_file': null,
         'nonce': encFile['nonce'],
         'file_creation_date': null,
+        if (att.durationMs != null && att.durationMs! > 0) 'duration_ms': att.durationMs,
       });
     }
 

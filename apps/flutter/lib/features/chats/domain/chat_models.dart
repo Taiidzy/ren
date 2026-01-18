@@ -37,16 +37,19 @@ class ChatAttachment {
   final String filename;
   final String mimetype;
   final int size;
+  final int? durationMs;
 
   const ChatAttachment({
     required this.localPath,
     required this.filename,
     required this.mimetype,
     required this.size,
+    this.durationMs,
   });
 
   bool get isImage => mimetype.startsWith('image/');
   bool get isVideo => mimetype.startsWith('video/');
+  bool get isAudio => mimetype.startsWith('audio/');
 }
 
 class ChatPreview {

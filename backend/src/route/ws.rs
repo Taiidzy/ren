@@ -36,6 +36,7 @@ enum ClientEvent {
     leave_chat { chat_id: i32 },
     send_message { 
         chat_id: i32, 
+        client_message_id: Option<String>,
         message: String,              // зашифрованное сообщение
         message_type: Option<String>, // 'text' | 'file' | 'image' и т.д.
         envelopes: Option<Value>,      // JSON объект с конвертами для каждого участника
@@ -223,7 +224,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                             }
                         }
                     }
-                    Ok(ClientEvent::send_message { chat_id, message, message_type, envelopes, metadata, reply_to_message_id }) => {
+                    Ok(ClientEvent::send_message { chat_id, client_message_id, message, message_type, envelopes, metadata, reply_to_message_id }) => {
                         if !subs.joined.contains(&chat_id) {
                             // safety: проверка членства
                             if let Err(e) = ensure_member(&state, chat_id, user_id).await {
@@ -233,23 +234,33 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                                 continue;
                             }
                         }
-                        
+
                         let msg_type = message_type.unwrap_or_else(|| "text".to_string());
                         let has_files = metadata.as_ref().map(|m| !m.is_empty());
-                        
+
                         // Сериализуем envelopes и metadata в JSON
                         let envelopes_json = envelopes.map(|v| serde_json::to_value(v).ok()).flatten();
                         let metadata_json = metadata.as_ref().map(|m| serde_json::to_value(m).ok()).flatten();
-                        
+
                         // Сохраняем сообщение в БД
                         let row = match sqlx::query(
                             r#"
-                            INSERT INTO messages (chat_id, sender_id, message, message_type, envelopes, metadata, reply_to_message_id)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7)
+                            INSERT INTO messages (
+                                chat_id,
+                                sender_id,
+                                client_message_id,
+                                message,
+                                message_type,
+                                envelopes,
+                                metadata,
+                                reply_to_message_id
+                            )
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                             RETURNING
                                 id::INT8 AS id,
                                 chat_id::INT8 AS chat_id,
                                 sender_id::INT8 AS sender_id,
+                                client_message_id,
                                 message,
                                 message_type,
                                 created_at,
@@ -267,6 +278,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                         )
                         .bind(chat_id)
                         .bind(user_id)
+                        .bind(client_message_id.as_deref())
                         .bind(&message)
                         .bind(&msg_type)
                         .bind(&envelopes_json)
@@ -283,23 +295,24 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                                 continue;
                             }
                         };
-                        
+
                         // Десериализуем envelopes и metadata обратно
                         let envelopes_value: Option<Value> = row.try_get("envelopes").ok().flatten();
                         let metadata_value: Option<Value> = row.try_get("metadata").ok().flatten();
                         let metadata_vec: Option<Vec<FileMetadata>> = metadata_value
                             .and_then(|v| serde_json::from_value(v).ok());
-                        
+                        let client_message_id_out: Option<String> = row.try_get("client_message_id").ok().flatten();
+
                         let msg = OutMessage {
                             id: row.try_get("id").unwrap_or_default(),
                             chat_id: row.try_get("chat_id").unwrap_or_default(),
                             sender_id: row.try_get("sender_id").unwrap_or_default(),
+                            client_message_id: client_message_id_out,
                             message: row.try_get("message").unwrap_or_default(),
-                            message_type: row.try_get("message_type").unwrap_or_else(|_| "text".to_string()),
-                            created_at: row
-                                .try_get::<chrono::DateTime<chrono::Utc>, _>("created_at")
+                            message_type: row.try_get("message_type").unwrap_or_else(|_| msg_type.clone()),
+                            created_at: row.try_get::<chrono::DateTime<chrono::Utc>, _>("created_at")
                                 .map(|t| t.to_rfc3339())
-                                .unwrap_or_default(),
+                                .unwrap_or_else(|_| chrono::Utc::now().to_rfc3339()),
                             edited_at: row.try_get::<chrono::DateTime<chrono::Utc>, _>("edited_at")
                                 .ok()
                                 .map(|t| t.to_rfc3339()),
@@ -396,6 +409,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                                 id::INT8 AS id,
                                 chat_id::INT8 AS chat_id,
                                 sender_id::INT8 AS sender_id,
+                                client_message_id,
                                 message,
                                 message_type,
                                 created_at,
@@ -442,11 +456,13 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                         let metadata_value: Option<Value> = row.try_get("metadata").ok().flatten();
                         let metadata_vec: Option<Vec<FileMetadata>> = metadata_value
                             .and_then(|v| serde_json::from_value(v).ok());
+                        let client_message_id: Option<String> = row.try_get("client_message_id").ok().flatten();
 
                         let msg = OutMessage {
                             id: row.try_get("id").unwrap_or_default(),
                             chat_id: row.try_get("chat_id").unwrap_or_default(),
                             sender_id: row.try_get("sender_id").unwrap_or_default(),
+                            client_message_id,
                             message: row.try_get("message").unwrap_or_default(),
                             message_type: row.try_get("message_type").unwrap_or_else(|_| "text".to_string()),
                             created_at: row
@@ -669,6 +685,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                                 id::INT8 AS id,
                                 chat_id::INT8 AS chat_id,
                                 sender_id::INT8 AS sender_id,
+                                client_message_id,
                                 message,
                                 message_type,
                                 created_at,
@@ -709,11 +726,13 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                         let metadata_value: Option<Value> = row.try_get("metadata").ok().flatten();
                         let metadata_vec: Option<Vec<FileMetadata>> = metadata_value
                             .and_then(|v| serde_json::from_value(v).ok());
+                        let client_message_id: Option<String> = row.try_get("client_message_id").ok().flatten();
 
                         let msg = OutMessage {
                             id: row.try_get("id").unwrap_or_default(),
                             chat_id: row.try_get("chat_id").unwrap_or_default(),
                             sender_id: row.try_get("sender_id").unwrap_or_default(),
+                            client_message_id,
                             message: row.try_get("message").unwrap_or_default(),
                             message_type: row.try_get("message_type").unwrap_or_else(|_| "text".to_string()),
                             created_at: row

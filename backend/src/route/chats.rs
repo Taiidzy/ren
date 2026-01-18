@@ -340,6 +340,7 @@ async fn get_messages(
                 id::INT8 AS id, 
                 chat_id::INT8 AS chat_id, 
                 sender_id::INT8 AS sender_id, 
+                client_message_id,
                 COALESCE(message, body) AS message,
                 COALESCE(message_type, 'text') AS message_type,
                 created_at,
@@ -381,10 +382,13 @@ async fn get_messages(
             
             let has_files = metadata_vec.as_ref().map(|m| !m.is_empty());
             
+            let client_message_id: Option<String> = row.try_get("client_message_id").ok().flatten();
+
             Message {
                 id: row.try_get("id").unwrap_or_default(),
                 chat_id: row.try_get("chat_id").unwrap_or_default(),
                 sender_id: row.try_get("sender_id").unwrap_or_default(),
+                client_message_id,
                 message: row.try_get("message").unwrap_or_default(),
                 message_type: row.try_get("message_type").unwrap_or_else(|_| "text".to_string()),
                 created_at: row.try_get::<chrono::DateTime<chrono::Utc>,_>("created_at").map(|t| t.to_rfc3339()).unwrap_or_default(),

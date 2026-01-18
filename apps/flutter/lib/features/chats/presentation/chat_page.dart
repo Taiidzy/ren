@@ -11,6 +11,8 @@ import 'package:mime/mime.dart';
 import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:video_player/video_player.dart';
+import 'package:record/record.dart';
+import 'package:audioplayers/audioplayers.dart';
 
 import 'package:ren/core/constants/keys.dart';
 import 'package:ren/core/secure/secure_storage.dart';
@@ -68,6 +70,18 @@ class _ChatPageState extends State<ChatPage> {
 
   final List<_PendingAttachment> _pending = [];
 
+  final AudioRecorder _recorder = AudioRecorder();
+  bool _isRecording = false;
+  DateTime? _recordingStartedAt;
+  String? _recordingPath;
+  Timer? _recordingTicker;
+  int _recordingMs = 0;
+
+  final AudioPlayer _voicePlayer = AudioPlayer();
+  StreamSubscription? _voiceCompleteSub;
+  String? _voicePlayingPath;
+  bool _voiceIsPlaying = false;
+
   int? _myUserId;
 
   bool _peerOnline = false;
@@ -118,7 +132,244 @@ class _ChatPageState extends State<ChatPage> {
     _controller.addListener(_onTextChanged);
     _focusNode.addListener(_onFocusChanged);
     _scrollController.addListener(_onScroll);
+
+    _voiceCompleteSub = _voicePlayer.onPlayerComplete.listen((_) {
+      if (!mounted) return;
+      setState(() {
+        _voiceIsPlaying = false;
+      });
+    });
+
     _init();
+  }
+
+  @override
+  void dispose() {
+    _recordingTicker?.cancel();
+    _recordingTicker = null;
+
+    () async {
+      try {
+        if (_isRecording) {
+          await _recorder.stop();
+        }
+      } catch (_) {}
+      try {
+        await _recorder.dispose();
+      } catch (_) {}
+    }();
+
+    _rtSub?.cancel();
+    _rtSub = null;
+
+    _typingDebounce?.cancel();
+    _typingDebounce = null;
+
+    _voiceCompleteSub?.cancel();
+    _voiceCompleteSub = null;
+    _voicePlayer.dispose();
+
+    _controller.dispose();
+    _focusNode.dispose();
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _toggleVoicePlayback(String path) async {
+    if (path.isEmpty) return;
+    try {
+      if (_voicePlayingPath == path && _voiceIsPlaying) {
+        await _voicePlayer.pause();
+        if (!mounted) return;
+        setState(() {
+          _voiceIsPlaying = false;
+        });
+        return;
+      }
+
+      await _voicePlayer.stop();
+      await _voicePlayer.play(DeviceFileSource(path));
+      if (!mounted) return;
+      setState(() {
+        _voicePlayingPath = path;
+        _voiceIsPlaying = true;
+      });
+    } catch (e) {
+      debugPrint('voice play failed: $e');
+    }
+  }
+
+  Future<void> _startVoiceRecording() async {
+    if (_isRecording) return;
+    final ok = await _recorder.hasPermission();
+    if (!ok) {
+      if (!mounted) return;
+      showGlassSnack(context, 'Нет доступа к микрофону', kind: GlassSnackKind.error);
+      return;
+    }
+
+    final dir = await getTemporaryDirectory();
+    final path = '${dir.path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
+
+    try {
+      await _recorder.start(
+        const RecordConfig(
+          encoder: AudioEncoder.aacLc,
+          bitRate: 128000,
+          sampleRate: 44100,
+        ),
+        path: path,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      debugPrint('voice record start failed: $e');
+      showGlassSnack(context, 'Не удалось начать запись', kind: GlassSnackKind.error);
+      return;
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _isRecording = true;
+      _recordingStartedAt = DateTime.now();
+      _recordingPath = path;
+      _recordingMs = 0;
+    });
+
+    _recordingTicker?.cancel();
+    _recordingTicker = Timer.periodic(const Duration(milliseconds: 150), (_) {
+      if (!mounted) return;
+      if (!_isRecording) return;
+      final start = _recordingStartedAt;
+      if (start == null) return;
+      final ms = DateTime.now().difference(start).inMilliseconds;
+      setState(() {
+        _recordingMs = ms;
+      });
+    });
+  }
+
+  Future<void> _stopVoiceRecording({required bool send}) async {
+    if (!_isRecording) return;
+
+    _recordingTicker?.cancel();
+    _recordingTicker = null;
+
+    String? outPath;
+    try {
+      outPath = await _recorder.stop();
+    } catch (e) {
+      debugPrint('voice record stop failed: $e');
+    }
+
+    final startedAt = _recordingStartedAt;
+    final durationMs = (startedAt == null)
+        ? _recordingMs
+        : DateTime.now().difference(startedAt).inMilliseconds;
+
+    final fallbackPath = _recordingPath;
+    final finalPath = (outPath != null && outPath.isNotEmpty) ? outPath : fallbackPath;
+
+    if (!mounted) return;
+    setState(() {
+      _isRecording = false;
+      _recordingStartedAt = null;
+      _recordingPath = null;
+      _recordingMs = 0;
+    });
+
+    if (!send) return;
+    if (finalPath == null || finalPath.isEmpty) return;
+
+    final file = File(finalPath);
+    if (!await file.exists()) return;
+    final bytes = await file.readAsBytes();
+    if (bytes.isEmpty) return;
+
+    // Basic protection: ignore too-short taps
+    if (durationMs < 350) {
+      return;
+    }
+
+    await _sendVoiceAttachment(
+      filePath: finalPath,
+      bytes: bytes,
+      durationMs: durationMs,
+    );
+  }
+
+  Future<void> _sendVoiceAttachment({
+    required String filePath,
+    required Uint8List bytes,
+    required int durationMs,
+  }) async {
+    final chatId = int.tryParse(widget.chat.id) ?? 0;
+    final peerId = widget.chat.peerId ?? 0;
+    if (chatId <= 0 || peerId <= 0) return;
+
+    final repo = context.read<ChatsRepository>();
+    _rt ??= context.read<RealtimeClient>();
+    final rt = _rt!;
+
+    final filename = 'voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
+    const mimetype = 'audio/mp4';
+
+    final clientMessageId = 'local_${DateTime.now().millisecondsSinceEpoch}';
+
+    // optimistic
+    setState(() {
+      _messages.add(
+        ChatMessage(
+          id: clientMessageId,
+          chatId: chatId.toString(),
+          isMe: true,
+          text: '',
+          attachments: [
+            ChatAttachment(
+              localPath: filePath,
+              filename: filename,
+              mimetype: mimetype,
+              size: bytes.length,
+              durationMs: durationMs,
+            ),
+          ],
+          sentAt: DateTime.now(),
+          replyToMessageId: _replyTo?.id,
+        ),
+      );
+    });
+    _scheduleScrollToBottom(animated: true);
+
+    final payload = await repo.buildEncryptedWsMediaMessage(
+      chatId: chatId,
+      peerId: peerId,
+      caption: '',
+      attachments: [
+        OutgoingAttachment(
+          bytes: bytes,
+          filename: filename,
+          mimetype: mimetype,
+          durationMs: durationMs,
+        ),
+      ],
+    );
+
+    // IMPORTANT: treat as voice message on backend/client.
+    payload['message_type'] = 'voice';
+
+    if (!rt.isConnected) {
+      await rt.connect();
+    }
+    rt.joinChat(chatId);
+
+    rt.sendMessage(
+      chatId: chatId,
+      clientMessageId: clientMessageId,
+      message: payload['message'] as String,
+      messageType: payload['message_type'] as String?,
+      envelopes: payload['envelopes'] as Map<String, dynamic>?,
+      metadata: payload['metadata'] as List<dynamic>?,
+      replyToMessageId: _replyTo == null ? null : int.tryParse(_replyTo!.id),
+    );
   }
 
   void _scheduleScrollToBottom({required bool animated}) {
@@ -156,6 +407,65 @@ class _ChatPageState extends State<ChatPage> {
     // Pagination: when user scrolls near top, load older messages.
     if (pos.pixels < 220) {
       _loadOlder();
+    }
+  }
+
+  Future<void> _pickVideo() async {
+    try {
+      final file = await _picker.pickVideo(source: ImageSource.gallery);
+      if (file == null) return;
+
+      final bytes = await file.readAsBytes();
+      if (bytes.isEmpty) return;
+
+      final name = file.name.isNotEmpty
+          ? file.name
+          : 'video_${DateTime.now().millisecondsSinceEpoch}.mp4';
+      final mime = lookupMimeType(file.path) ?? 'video/mp4';
+
+      if (!mounted) return;
+      setState(() {
+        _pending.add(
+          _PendingAttachment(
+            bytes: bytes,
+            filename: name,
+            mimetype: mime,
+          ),
+        );
+      });
+    } catch (e) {
+      debugPrint('pick video failed: $e');
+    }
+  }
+
+  Future<void> _recordVideo() async {
+    try {
+      final file = await _picker.pickVideo(
+        source: ImageSource.camera,
+        maxDuration: const Duration(seconds: 60),
+      );
+      if (file == null) return;
+
+      final bytes = await file.readAsBytes();
+      if (bytes.isEmpty) return;
+
+      final name = file.name.isNotEmpty
+          ? file.name
+          : 'video_${DateTime.now().millisecondsSinceEpoch}.mp4';
+      final mime = lookupMimeType(file.path) ?? 'video/mp4';
+
+      if (!mounted) return;
+      setState(() {
+        _pending.add(
+          _PendingAttachment(
+            bytes: bytes,
+            filename: name,
+            mimetype: mime,
+          ),
+        );
+      });
+    } catch (e) {
+      debugPrint('record video failed: $e');
     }
   }
 
@@ -472,10 +782,26 @@ class _ChatPageState extends State<ChatPage> {
           return;
         }
 
-        // если это echo нашего сообщения, попробуем убрать последний optimistic дубль
-        if (isMe && _messages.isNotEmpty) {
+        final cmid = (m['client_message_id'] as String?)?.trim();
+        if (isMe && cmid != null && cmid.isNotEmpty) {
+          _messages.removeWhere((x) => x.id == cmid);
+        }
+
+        // Legacy fallback: если client_message_id не пришёл, пробуем убрать последний optimistic дубль
+        if (isMe && (cmid == null || cmid.isEmpty) && _messages.isNotEmpty) {
           final last = _messages.last;
-          if (last.id.startsWith('local_') && last.text == decoded.text) {
+          final sameText = last.text == decoded.text;
+          final sameAttachments = (last.attachments.length == decoded.attachments.length) &&
+              () {
+                for (var i = 0; i < last.attachments.length; i++) {
+                  final a = last.attachments[i];
+                  final b = decoded.attachments[i];
+                  if (a.mimetype != b.mimetype) return false;
+                  if (a.filename != b.filename) return false;
+                }
+                return true;
+              }();
+          if (last.id.startsWith('local_') && sameText && sameAttachments) {
             _messages.removeLast();
           }
         }
@@ -602,10 +928,12 @@ class _ChatPageState extends State<ChatPage> {
     }
 
     // optimistic
+    final clientMessageId = 'local_${DateTime.now().millisecondsSinceEpoch}';
+
     setState(() {
       _messages.add(
         ChatMessage(
-          id: 'local_${DateTime.now().millisecondsSinceEpoch}',
+          id: clientMessageId,
           chatId: chatId.toString(),
           isMe: true,
           text: text,
@@ -646,6 +974,7 @@ class _ChatPageState extends State<ChatPage> {
 
     rt.sendMessage(
       chatId: chatId,
+      clientMessageId: clientMessageId,
       message: payload['message'] as String,
       messageType: payload['message_type'] as String?,
       envelopes: payload['envelopes'] as Map<String, dynamic>?,
@@ -760,6 +1089,8 @@ class _ChatPageState extends State<ChatPage> {
     required Future<void> Function()? onPickPhotos,
     required Future<void> Function()? onPickFiles,
     required Future<void> Function()? onTakePhoto,
+    Future<void> Function()? onPickVideo,
+    Future<void> Function()? onRecordVideo,
   }) async {
     final theme = Theme.of(context);
 
@@ -809,33 +1140,54 @@ class _ChatPageState extends State<ChatPage> {
                     children: [
                       _AttachOption(
                         icon: Icons.photo_library_outlined,
-                        label: 'Фото',
+                        label: 'Галерея',
                         onTap: () async {
                           Navigator.of(ctx).pop();
                           HapticFeedback.selectionClick();
                           if (onPickPhotos != null) await onPickPhotos();
                         },
                       ),
-
-                      _AttachOption(
-                        icon: Icons.insert_drive_file_outlined,
-                        label: 'Файл',
-                        onTap: () async {
-                          Navigator.of(ctx).pop();
-                          HapticFeedback.selectionClick();
-                          if (onPickFiles != null) await onPickFiles();
-                        },
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: _AttachOption(
+                          icon: Icons.insert_drive_file_outlined,
+                          label: 'Файлы',
+                          onTap: () async {
+                            Navigator.of(ctx).pop();
+                            HapticFeedback.selectionClick();
+                            if (onPickFiles != null) await onPickFiles();
+                          },
+                        ),
                       ),
+                    ],
+                  ),
 
-                      // Example: add a third quick action (camera)
-                      _AttachOption(
-                        icon: Icons.camera_alt_outlined,
-                        label: 'Камера',
-                        onTap: () async {
-                          Navigator.of(ctx).pop();
-                          HapticFeedback.selectionClick();
-                          if (onTakePhoto != null) await onTakePhoto();
-                        },
+                  const SizedBox(height: 10),
+
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _AttachOption(
+                          icon: Icons.video_library_outlined,
+                          label: 'Видео',
+                          onTap: () async {
+                            Navigator.of(ctx).pop();
+                            HapticFeedback.selectionClick();
+                            if (onPickVideo != null) await onPickVideo();
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: _AttachOption(
+                          icon: Icons.videocam_outlined,
+                          label: 'Записать',
+                          onTap: () async {
+                            Navigator.of(ctx).pop();
+                            HapticFeedback.selectionClick();
+                            if (onRecordVideo != null) await onRecordVideo();
+                          },
+                        ),
                       ),
                     ],
                   ),
@@ -874,444 +1226,136 @@ class _ChatPageState extends State<ChatPage> {
     );
   }
 
+  Widget inputBar() {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
 
-  @override
-  void dispose() {
-    final chatId = int.tryParse(widget.chat.id) ?? 0;
-    _typingDebounce?.cancel();
-    _typingDebounce = null;
-    _rt?.typing(chatId, false);
-    _rt?.leaveChat(chatId);
-    _rtSub?.cancel();
-    _rtSub = null;
-    _controller.removeListener(_onTextChanged);
-    _focusNode.removeListener(_onFocusChanged);
-    _scrollController.removeListener(_onScroll);
-    _controller.dispose();
-    _focusNode.dispose();
-    _scrollController.dispose();
-    super.dispose();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        12,
+        10,
+        12,
+        10,
+      ),
+      child: Row(
+        children: [
+          GlassSurface(
+            borderRadius: 18,
+            blurSigma: 12,
+            width: 44,
+            height: 44,
+            onTap: () => showAttachMenu(
+              context,
+              onPickPhotos: () async => await _pickPhotos(),
+              onPickFiles: () async => await _pickFiles(),
+              onTakePhoto: () async => await _takePhoto(),
+              onPickVideo: () async => await _pickVideo(),
+              onRecordVideo: () async => await _recordVideo(),
+            ),
+            child: Center(
+              child: HugeIcon(
+                icon: HugeIcons.strokeRoundedAttachment,
+                color: theme.colorScheme.onSurface.withOpacity(0.9),
+                size: 18,
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: GlassSurface(
+              borderRadius: 18,
+              blurSigma: 12,
+              height: 44,
+              borderColor:
+                  theme.colorScheme.onSurface.withOpacity(isDark ? 0.20 : 0.10),
+              child: TextField(
+                controller: _controller,
+                focusNode: _focusNode,
+                style: TextStyle(
+                  color: theme.colorScheme.onSurface,
+                  fontSize: 14,
+                ),
+                cursorColor: theme.colorScheme.primary,
+                decoration: InputDecoration(
+                  hintText: 'Введите сообщение...',
+                  hintStyle: TextStyle(
+                    color: theme.colorScheme.onSurface.withOpacity(0.55),
+                  ),
+                  filled: false,
+                  fillColor: Colors.transparent,
+                  border: InputBorder.none,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 14),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          GlassSurface(
+            borderRadius: 18,
+            blurSigma: 12,
+            width: 44,
+            height: 44,
+            onTap:
+                (_isRecording || _controller.text.trim().isNotEmpty || _pending.isNotEmpty)
+                    ? _send
+                    : null,
+            child: Center(
+              child: (_controller.text.trim().isEmpty && _pending.isEmpty)
+                  ? GestureDetector(
+                      onLongPressStart: (_) async {
+                        HapticFeedback.selectionClick();
+                        await _startVoiceRecording();
+                      },
+                      onLongPressCancel: () async {
+                        await _stopVoiceRecording(send: false);
+                      },
+                      onLongPressEnd: (_) async {
+                        await _stopVoiceRecording(send: true);
+                      },
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            _isRecording ? Icons.mic : Icons.mic_none,
+                            size: 20,
+                            color: _isRecording
+                                ? const Color(0xFFEF4444)
+                                : theme.colorScheme.onSurface.withOpacity(0.9),
+                          ),
+                          if (_isRecording)
+                            Text(
+                              '${(_recordingMs / 1000).floor()}s',
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: theme.colorScheme.onSurface.withOpacity(0.75),
+                              ),
+                            ),
+                        ],
+                      ),
+                    )
+                  : HugeIcon(
+                      icon: HugeIcons.strokeRoundedSent,
+                      color: theme.colorScheme.onSurface.withOpacity(0.9),
+                      size: 18,
+                    ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final baseInk = isDark ? Colors.white : Colors.black;
+    final media = MediaQuery.of(context);
 
-    return AppBackground(
-      imageOpacity: 1,
-      imageBlurSigma: 0,
-      imageFit: BoxFit.cover,
-      animate: true,
-      animationDuration: const Duration(seconds: 20),
-      child: Scaffold(
-        resizeToAvoidBottomInset: false,
-        extendBodyBehindAppBar: true,
-        appBar: AppBar(
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          flexibleSpace: const GlassAppBarBackground(),
-          centerTitle: true,
-          titleSpacing: 0,
-          leading: IconButton(
-            icon: const Icon(Icons.arrow_back_ios_new_rounded),
-            onPressed: () {
-              if (_selectionMode) {
-                _exitSelectionMode();
-              } else {
-                Navigator.of(context).maybePop();
-              }
-            },
-          ),
-          title: Stack(
-            alignment: Alignment.center,
-            children: [
-              SizedBox(
-                width: double.infinity,
-                child: Center(
-                  child: GlassSurface(
-                    borderRadius: 18,
-                    blurSigma: 12,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 6,
-                    ),
-                    borderColor: baseInk.withOpacity(isDark ? 0.18 : 0.10),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (_selectionMode)
-                          Text(
-                            'Выбрано: ${_selectedMessageIds.length}',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                              color: theme.colorScheme.onSurface,
-                            ),
-                          )
-                        else ...[
-                          RenAvatar(
-                            url: widget.chat.user.avatarUrl,
-                            name: widget.chat.user.name,
-                            isOnline: _peerOnline,
-                            size: 36,
-                          ),
-                          const SizedBox(width: 10),
-                          ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 200),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  widget.chat.user.name,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w600,
-                                    color: theme.colorScheme.onSurface,
-                                  ),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  _peerTyping
-                                      ? 'Печатает...'
-                                      : (_peerOnline ? 'Online' : 'Offline'),
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: theme.colorScheme.onSurface
-                                        .withOpacity(0.65),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            if (_selectionMode) ...[
-              IconButton(
-                icon: Icon(
-                  Icons.share_outlined,
-                  color: theme.colorScheme.onSurface,
-                ),
-                onPressed: _selectedMessageIds.isEmpty
-                    ? null
-                    : () async {
-                        await _forwardSelected();
-                      },
-              ),
-              IconButton(
-                icon: Icon(
-                  Icons.delete_outline,
-                  color: theme.colorScheme.onSurface,
-                ),
-                onPressed: _selectedMessageIds.isEmpty
-                    ? null
-                    : () {
-                        final ids = Set<String>.from(_selectedMessageIds);
-                        _deleteByIds(ids);
-                        _deleteRemote(ids);
-                      },
-              ),
-            ] else
-              IconButton(
-                icon: HugeIcon(
-                  icon: HugeIcons.strokeRoundedMenu01,
-                  color: theme.colorScheme.onSurface,
-                  size: 24.0,
-                ),
-                onPressed: () {},
-              ),
-          ],
-        ),
-        body: Builder(
-          builder: (context) {
-            final media = MediaQuery.of(context);
-            const double inputHeight = 44;
-            const double horizontalPadding = 14;
-            const double verticalPadding = 14;
+    const horizontalPadding = 12.0;
+    const listTopPadding = 12.0;
+    const listBottomPadding = 88.0;
 
-            final double topInset = media.padding.top;
-            // viewInsets.bottom is already applied via AnimatedPadding below.
-            final double bottomInset = media.padding.bottom;
-
-            final double listTopPadding = topInset + kToolbarHeight + 12;
-            final double listBottomPadding =
-                bottomInset + inputHeight + verticalPadding + 12;
-
-            final messages = _messages;
-
-            final insetsBottom = media.viewInsets.bottom;
-            if (_focusNode.hasFocus && _isAtBottom && insetsBottom != _lastViewInsetsBottom) {
-              _lastViewInsetsBottom = insetsBottom;
-              _scheduleScrollToBottom(animated: false);
-            } else {
-              _lastViewInsetsBottom = insetsBottom;
-            }
-
-            Widget inputBar() {
-              return Padding(
-                padding: const EdgeInsets.fromLTRB(
-                  horizontalPadding,
-                  10,
-                  horizontalPadding,
-                  10,
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (_editing != null)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 10),
-                        child: GlassSurface(
-                          borderRadius: 16,
-                          blurSigma: 10,
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  'Редактирование',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    color: theme.colorScheme.onSurface.withOpacity(0.9),
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 10),
-                              GestureDetector(
-                                onTap: () {
-                                  setState(() {
-                                    _editing = null;
-                                  });
-                                  _controller.clear();
-                                },
-                                child: Icon(
-                                  Icons.close,
-                                  size: 18,
-                                  color: theme.colorScheme.onSurface.withOpacity(0.8),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    if (_replyTo != null)
-                      AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 220),
-                        switchInCurve: Curves.easeOut,
-                        switchOutCurve: Curves.easeOut,
-                        transitionBuilder: (child, animation) {
-                          return FadeTransition(
-                            opacity: animation,
-                            child: SizeTransition(
-                              sizeFactor: animation,
-                              axisAlignment: -1,
-                              child: child,
-                            ),
-                          );
-                        },
-                        child: Padding(
-                          key: ValueKey<String>('reply_${_replyTo!.id}'),
-                          padding: const EdgeInsets.only(bottom: 10),
-                          child: GlassSurface(
-                            borderRadius: 16,
-                            blurSigma: 12,
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                            child: Row(
-                              children: [
-                                Icon(
-                                  Icons.reply,
-                                  size: 16,
-                                  color: theme.colorScheme.onSurface.withOpacity(0.7),
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Text(
-                                    _messageSummary(_replyTo!).isNotEmpty
-                                        ? _messageSummary(_replyTo!)
-                                        : 'Сообщение',
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      color: theme.colorScheme.onSurface.withOpacity(0.9),
-                                      fontSize: 13,
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                GestureDetector(
-                                  onTap: () {
-                                    setState(() {
-                                      _replyTo = null;
-                                    });
-                                  },
-                                  child: Icon(
-                                    Icons.close,
-                                    size: 18,
-                                    color: theme.colorScheme.onSurface.withOpacity(0.7),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      )
-                    else
-                      const SizedBox.shrink(),
-                    if (_pending.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 10),
-                        child: SizedBox(
-                          height: 64,
-                          child: ListView.separated(
-                            scrollDirection: Axis.horizontal,
-                            itemCount: _pending.length,
-                            separatorBuilder: (_, __) => const SizedBox(width: 10),
-                            itemBuilder: (context, index) {
-                              final p = _pending[index];
-                              final isImg = p.mimetype.startsWith('image/');
-                              return Stack(
-                                clipBehavior: Clip.none,
-                                children: [
-                                  ClipRRect(
-                                    borderRadius: BorderRadius.circular(12),
-                                    child: Container(
-                                      width: 64,
-                                      height: 64,
-                                      color: theme.colorScheme.surface,
-                                      child: isImg
-                                          ? Image.memory(
-                                              p.bytes,
-                                              fit: BoxFit.cover,
-                                              errorBuilder: (c, e, s) => const SizedBox(),
-                                            )
-                                          : Center(
-                                              child: Icon(
-                                                Icons.insert_drive_file,
-                                                color: theme.colorScheme.onSurface.withOpacity(0.65),
-                                              ),
-                                            ),
-                                    ),
-                                  ),
-                                  Positioned(
-                                    right: -6,
-                                    top: -6,
-                                    child: GestureDetector(
-                                      onTap: () {
-                                        setState(() {
-                                          _pending.removeAt(index);
-                                        });
-                                      },
-                                      child: Container(
-                                        width: 20,
-                                        height: 20,
-                                        decoration: BoxDecoration(
-                                          color: theme.colorScheme.surface,
-                                          shape: BoxShape.circle,
-                                          border: Border.all(
-                                            color: theme.colorScheme.onSurface.withOpacity(0.25),
-                                          ),
-                                        ),
-                                        child: Icon(
-                                          Icons.close,
-                                          size: 14,
-                                          color: theme.colorScheme.onSurface.withOpacity(0.8),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              );
-                            },
-                          ),
-                        ),
-                      ),
-                    Row(
-                      children: [
-                        GlassSurface(
-                          borderRadius: 18,
-                          blurSigma: 12,
-                          width: inputHeight,
-                          height: inputHeight,
-                          onTap: () => showAttachMenu(
-                            context,
-                            onPickPhotos: () async => await _pickPhotos(),
-                            onPickFiles: () async => await _pickFiles(),
-                            onTakePhoto: () async => await _takePhoto(),
-                          ),
-                          child: Center(
-                            child: HugeIcon(
-                              icon: HugeIcons.strokeRoundedAttachment01,
-                              color: theme.colorScheme.onSurface.withOpacity(0.9),
-                              size: 18,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: GlassSurface(
-                            borderRadius: 18,
-                            blurSigma: 12,
-                            height: inputHeight,
-                            borderColor: theme.colorScheme.onSurface
-                                .withOpacity(isDark ? 0.20 : 0.10),
-                            child: TextField(
-                              controller: _controller,
-                              focusNode: _focusNode,
-                              style: TextStyle(
-                                color: theme.colorScheme.onSurface,
-                                fontSize: 14,
-                              ),
-                              cursorColor: theme.colorScheme.primary,
-                              decoration: InputDecoration(
-                                hintText: 'Введите сообщение...',
-                                hintStyle: TextStyle(
-                                  color: theme.colorScheme.onSurface
-                                      .withOpacity(0.55),
-                                ),
-                                filled: false,
-                                fillColor: Colors.transparent,
-                                border: InputBorder.none,
-                                contentPadding:
-                                    const EdgeInsets.symmetric(horizontal: 14),
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        GlassSurface(
-                          borderRadius: 18,
-                          blurSigma: 12,
-                          width: inputHeight,
-                          height: inputHeight,
-                          onTap: _send,
-                          child: Center(
-                            child: HugeIcon(
-                              icon: HugeIcons.strokeRoundedSent,
-                              color: theme.colorScheme.onSurface.withOpacity(0.9),
-                              size: 18,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              );
-            }
+    final messages = _messages;
 
             return Stack(
               children: [
@@ -1490,6 +1534,9 @@ class _ChatPageState extends State<ChatPage> {
                                               isMe: msg.isMe,
                                               isDark: isDark,
                                               onOpenAttachment: (a) => _openAttachmentSheet(a),
+                                              voiceIsPlaying: _voiceIsPlaying,
+                                              voicePlayingPath: _voicePlayingPath,
+                                              onToggleVoice: (a) => _toggleVoicePlayback(a.localPath),
                                             ),
                                           ),
                                         ),
@@ -1549,10 +1596,6 @@ class _ChatPageState extends State<ChatPage> {
                 ),
               ],
             );
-          },
-        ),
-      ),
-    );
   }
 
   String _formatTime(DateTime dt) {
@@ -1681,6 +1724,7 @@ class _ChatPageState extends State<ChatPage> {
                   );
                 },
               ),
+
             ),
           ),
         );
@@ -1863,6 +1907,10 @@ class _AttachmentViewerSheetState extends State<_AttachmentViewerSheet> {
   final Map<int, VideoPlayerController> _videoControllers = {};
   final Map<int, Future<void>> _videoInits = {};
 
+  final AudioPlayer _audioPlayer = AudioPlayer();
+  String? _playingPath;
+  bool _audioPlaying = false;
+
   @override
   void initState() {
     super.initState();
@@ -1877,6 +1925,7 @@ class _AttachmentViewerSheetState extends State<_AttachmentViewerSheet> {
     }
     _videoControllers.clear();
     _videoInits.clear();
+    _audioPlayer.dispose();
     _pageController.dispose();
     super.dispose();
   }
@@ -2049,6 +2098,68 @@ class _AttachmentViewerSheetState extends State<_AttachmentViewerSheet> {
                         );
                       }
 
+                      if (a.isAudio) {
+                        return Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(18),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.audiotrack,
+                                  size: 64,
+                                  color: theme.colorScheme.onSurface.withOpacity(0.75),
+                                ),
+                                const SizedBox(height: 12),
+                                Text(
+                                  a.filename.isNotEmpty ? a.filename : 'Аудио',
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  textAlign: TextAlign.center,
+                                  style: theme.textTheme.titleSmall,
+                                ),
+                                const SizedBox(height: 14),
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    ElevatedButton.icon(
+                                      onPressed: () async {
+                                        try {
+                                          if (_audioPlaying && _playingPath == path) {
+                                            await _audioPlayer.pause();
+                                            setState(() {
+                                              _audioPlaying = false;
+                                            });
+                                            return;
+                                          }
+
+                                          await _audioPlayer.stop();
+                                          await _audioPlayer.play(DeviceFileSource(path));
+                                          setState(() {
+                                            _playingPath = path;
+                                            _audioPlaying = true;
+                                          });
+                                        } catch (e) {
+                                          debugPrint('audio play failed: $e');
+                                        }
+                                      },
+                                      icon: Icon(_audioPlaying && _playingPath == path ? Icons.pause : Icons.play_arrow),
+                                      label: Text(_audioPlaying && _playingPath == path ? 'Пауза' : 'Играть'),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    OutlinedButton.icon(
+                                      onPressed: _saveCurrent,
+                                      icon: const Icon(Icons.download_outlined),
+                                      label: const Text('Скачать'),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      }
+
                       final icon = a.mimetype.startsWith('audio/')
                           ? Icons.audiotrack
                           : Icons.insert_drive_file;
@@ -2113,6 +2224,9 @@ class _MessageBubble extends StatelessWidget {
   final bool isMe;
   final bool isDark;
   final void Function(ChatAttachment a)? onOpenAttachment;
+  final bool voiceIsPlaying;
+  final String? voicePlayingPath;
+  final void Function(ChatAttachment a)? onToggleVoice;
 
   const _MessageBubble({
     this.replyPreview,
@@ -2122,6 +2236,9 @@ class _MessageBubble extends StatelessWidget {
     required this.isMe,
     required this.isDark,
     this.onOpenAttachment,
+    this.voiceIsPlaying = false,
+    this.voicePlayingPath,
+    this.onToggleVoice,
   });
 
   @override
@@ -2136,6 +2253,10 @@ class _MessageBubble extends StatelessWidget {
 
     void onTapAttachment(ChatAttachment a) {
       onOpenAttachment?.call(a);
+    }
+
+    void onTapVoice(ChatAttachment a) {
+      onToggleVoice?.call(a);
     }
 
     return GlassSurface(
@@ -2234,6 +2355,56 @@ class _MessageBubble extends StatelessWidget {
                               ),
                             ],
                           ),
+                        ),
+                      ),
+                    ),
+                  )
+                else if (a.isAudio)
+                  Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: () => onTapVoice(a),
+                      borderRadius: BorderRadius.circular(12),
+                      child: Container(
+                        width: 220,
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.surface,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: theme.colorScheme.onSurface.withOpacity(0.12),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.keyboard_voice,
+                              size: 18,
+                              color: theme.colorScheme.onSurface.withOpacity(0.75),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                (a.durationMs != null)
+                                    ? '${(a.durationMs! / 1000).round()} сек'
+                                    : 'Голосовое',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: theme.colorScheme.onSurface.withOpacity(0.85),
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Icon(
+                              (voiceIsPlaying && voicePlayingPath == a.localPath)
+                                  ? Icons.pause
+                                  : Icons.play_arrow,
+                              size: 20,
+                              color: theme.colorScheme.onSurface.withOpacity(0.8),
+                            ),
+                          ],
                         ),
                       ),
                     ),

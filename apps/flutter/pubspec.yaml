@@ -54,6 +54,8 @@ dependencies:
   share_plus: ^10.1.4
   flutter_local_notifications: ^17.2.3
   flutter_launcher_icons: ^0.13.1
+  record: ^5.2.0
+  audioplayers: ^6.1.0
 
 dev_dependencies:
   flutter_test:
