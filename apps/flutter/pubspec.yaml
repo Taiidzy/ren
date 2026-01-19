@@ -54,6 +54,10 @@ dependencies:
   share_plus: ^10.1.4
   flutter_local_notifications: ^17.2.3
   flutter_launcher_icons: ^0.13.1
+  camera: ^0.10.0+4
+  permission_handler: ^10.4.0
+  record: ^4.4.0
+  vibration: ^1.7.6
 
 dev_dependencies:
   flutter_test:
