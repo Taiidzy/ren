@@ -394,7 +394,10 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
       entries: [
         RenContextMenuEntry.action(
           RenContextMenuAction<String>(
-            icon: const Icon(Icons.star_outline_rounded),
+            icon: HugeIcon(
+              icon: HugeIcons.strokeRoundedStar,
+              size: 20,
+            ),
             label: chat.isFavorite ? 'Убрать из избранного' : 'Добавить в избранное',
             value: 'favorite',
           ),
@@ -402,7 +405,10 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
         const RenContextMenuEntry.divider(),
         RenContextMenuEntry.action(
           RenContextMenuAction<String>(
-            icon: const Icon(Icons.delete_outline_rounded),
+            icon: HugeIcon(
+              icon: HugeIcons.strokeRoundedDelete02,
+              size: 20,
+            ),
             label: 'Удалить чат',
             danger: true,
             value: 'delete',
@@ -1038,7 +1044,8 @@ class _ChatTile extends StatelessWidget {
     final isDark = theme.brightness == Brightness.dark;
     final baseInk = isDark ? Colors.white : Colors.black;
 
-    return GestureDetector(
+    return _Pressable(
+      onTap: onTap,
       onLongPressStart: (d) => onLongPressAt(d.globalPosition),
       child: GlassSurface(
         borderRadius: 18,
@@ -1046,7 +1053,6 @@ class _ChatTile extends StatelessWidget {
         height: 72,
         padding: const EdgeInsets.symmetric(horizontal: 14),
         borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.12),
-        onTap: onTap,
         child: Row(
           children: [
           RenAvatar(
@@ -1103,5 +1109,59 @@ class _ChatTile extends StatelessWidget {
     final h = local.hour.toString().padLeft(2, '0');
     final m = local.minute.toString().padLeft(2, '0');
     return '$h:$m';
+  }
+}
+
+class _Pressable extends StatefulWidget {
+  final Widget child;
+  final VoidCallback? onTap;
+  final GestureLongPressStartCallback? onLongPressStart;
+
+  const _Pressable({
+    required this.child,
+    this.onTap,
+    this.onLongPressStart,
+  });
+
+  @override
+  State<_Pressable> createState() => _PressableState();
+}
+
+class _PressableState extends State<_Pressable> {
+  bool _pressed = false;
+
+  void _setPressed(bool v) {
+    if (_pressed == v) return;
+    setState(() => _pressed = v);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scale = _pressed ? 0.985 : 1.0;
+    final opacity = _pressed ? 0.92 : 1.0;
+
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onTapDown: (_) => _setPressed(true),
+      onTapCancel: () => _setPressed(false),
+      onTapUp: (_) => _setPressed(false),
+      onTap: widget.onTap,
+      onLongPressStart: (d) {
+        _setPressed(true);
+        widget.onLongPressStart?.call(d);
+      },
+      onLongPressEnd: (_) => _setPressed(false),
+      child: AnimatedScale(
+        duration: const Duration(milliseconds: 130),
+        curve: Curves.easeOutCubic,
+        scale: scale,
+        child: AnimatedOpacity(
+          duration: const Duration(milliseconds: 130),
+          curve: Curves.easeOut,
+          opacity: opacity,
+          child: widget.child,
+        ),
+      ),
+    );
   }
 }

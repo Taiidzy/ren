@@ -201,12 +201,21 @@ class _ChatAttachmentViewerSheetState extends State<ChatAttachmentViewerSheet> {
                                       aspectRatio: c.value.aspectRatio,
                                       child: VideoPlayer(c),
                                     ),
-                                    if (!c.value.isPlaying)
-                                      Icon(
-                                        Icons.play_circle_fill,
-                                        size: 72,
-                                        color: Colors.white.withOpacity(0.8),
+                                    AnimatedOpacity(
+                                      opacity: c.value.isPlaying ? 0.0 : 1.0,
+                                      duration: const Duration(milliseconds: 180),
+                                      curve: Curves.easeOut,
+                                      child: AnimatedScale(
+                                        scale: c.value.isPlaying ? 0.96 : 1.0,
+                                        duration: const Duration(milliseconds: 220),
+                                        curve: Curves.easeOutCubic,
+                                        child: Icon(
+                                          Icons.play_circle_fill,
+                                          size: 72,
+                                          color: Colors.white.withOpacity(0.8),
+                                        ),
                                       ),
+                                    ),
                                   ],
                                 ),
                               );

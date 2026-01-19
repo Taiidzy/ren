@@ -200,48 +200,62 @@ class ChatRecorderButtonState extends State<ChatRecorderButton> with TickerProvi
       translateY = _dragOffsetY.clamp(-100.0, 0.0);
     }
 
+    final targetOffset = Offset(translateX, translateY);
+
     return Stack(
       clipBehavior: Clip.none,
       alignment: Alignment.center,
       children: [
         // LOCK ICON (Выезжает сверху при записи)
-        if (isRecording)
-          Positioned(
-            top: -100 + translateY * 0.5, // Параллакс эффект для замка
-            child: AnimatedBuilder(
-              animation: _lockController,
-              builder: (context, child) {
-                return Transform.translate(
-                  offset: Offset(0, _lockController.value * -10), // Легкое подпрыгивание
-                  child: Opacity(
-                    opacity: ((-_dragOffsetY) / 100).clamp(0.0, 1.0),
-                    child: GlassSurface(
-                      borderRadius: 16,
-                      blurSigma: 10,
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-                      color: theme.colorScheme.surface.withOpacity(isDark ? 0.35 : 0.55),
-                      borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.14),
-                      child: Column(
-                        children: [
-                          HugeIcon(
-                            icon: HugeIcons.strokeRoundedLockKey,
-                            color: theme.colorScheme.onSurface.withOpacity(0.9),
-                            size: 22,
+        Positioned(
+          top: -100 + translateY * 0.5, // Параллакс эффект для замка
+          child: AnimatedOpacity(
+            opacity: isRecording ? 1.0 : 0.0,
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOut,
+            child: AnimatedScale(
+              scale: isRecording ? 1.0 : 0.96,
+              duration: const Duration(milliseconds: 220),
+              curve: Curves.easeOutCubic,
+              child: IgnorePointer(
+                ignoring: !isRecording,
+                child: AnimatedBuilder(
+                  animation: _lockController,
+                  builder: (context, child) {
+                    return Transform.translate(
+                      offset: Offset(0, _lockController.value * -10), // Легкое подпрыгивание
+                      child: Opacity(
+                        opacity: ((-_dragOffsetY) / 100).clamp(0.0, 1.0),
+                        child: GlassSurface(
+                          borderRadius: 16,
+                          blurSigma: 10,
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                          color: theme.colorScheme.surface.withOpacity(isDark ? 0.35 : 0.55),
+                          borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.14),
+                          child: Column(
+                            children: [
+                              HugeIcon(
+                                icon: HugeIcons.strokeRoundedLockKey,
+                                color: theme.colorScheme.onSurface.withOpacity(0.9),
+                                size: 22,
+                              ),
+                              const SizedBox(height: 2),
+                              HugeIcon(
+                                icon: HugeIcons.strokeRoundedArrowUp01,
+                                size: 16,
+                                color: theme.colorScheme.onSurface.withOpacity(0.75),
+                              ),
+                            ],
                           ),
-                          const SizedBox(height: 2),
-                          Icon(
-                            Icons.keyboard_arrow_up,
-                            size: 16,
-                            color: theme.colorScheme.onSurface.withOpacity(0.75),
-                          ),
-                        ],
+                        ),
                       ),
-                    ),
-                  ),
-                );
-              },
+                    );
+                  },
+                ),
+              ),
             ),
           ),
+        ),
 
         // MAIN BUTTON
         GestureDetector(
@@ -255,8 +269,16 @@ class ChatRecorderButtonState extends State<ChatRecorderButton> with TickerProvi
           onLongPressStart: _onLongPressStart,
           onLongPressMoveUpdate: _onLongPressMoveUpdate,
           onLongPressEnd: _onLongPressEnd,
-          child: Transform.translate(
-            offset: Offset(translateX, translateY),
+          child: TweenAnimationBuilder<Offset>(
+            tween: Tween<Offset>(begin: targetOffset, end: targetOffset),
+            duration: const Duration(milliseconds: 70),
+            curve: Curves.easeOut,
+            builder: (context, value, child) {
+              return Transform.translate(
+                offset: value,
+                child: child,
+              );
+            },
             child: AnimatedBuilder(
               animation: _scaleController,
               builder: (context, child) {
@@ -284,7 +306,7 @@ class ChatRecorderButtonState extends State<ChatRecorderButton> with TickerProvi
                                   : HugeIcons.strokeRoundedVideo01,
                               size: 20,
                               color: isRecording
-                                  ? theme.colorScheme.onError
+                                  ? theme.colorScheme.primary
                                   : theme.colorScheme.onSurface,
                             ),
                     ),
