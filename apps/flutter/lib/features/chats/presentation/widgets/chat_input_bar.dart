@@ -104,7 +104,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
     _timer?.cancel();
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
       _seconds++;
-      if (_seconds >= 60) {
+      if (_activeRecordingMode == RecorderMode.video && _seconds >= 60) {
         _recorderKey.currentState?.stopRecording();
         return;
       }

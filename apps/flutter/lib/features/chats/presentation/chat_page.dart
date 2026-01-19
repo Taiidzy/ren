@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -39,7 +40,7 @@ class ChatPage extends StatefulWidget {
   State<ChatPage> createState() => _ChatPageState();
 }
 
-class _ChatPageState extends State<ChatPage> with SingleTickerProviderStateMixin {
+class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   final _controller = TextEditingController();
   final _focusNode = FocusNode();
   final _scrollController = ScrollController();
@@ -84,6 +85,8 @@ class _ChatPageState extends State<ChatPage> with SingleTickerProviderStateMixin
   VoidCallback? _cancelVideoRecording;
   VoidCallback? _stopVideoRecording;
   late final AnimationController _videoProgressController;
+  late final AnimationController _videoLockedTransition;
+  late final AnimationController _videoPulse;
 
   void _setVideoRecordingOverlay({required bool show}) {
     if (!mounted) return;
@@ -105,6 +108,12 @@ class _ChatPageState extends State<ChatPage> with SingleTickerProviderStateMixin
       _videoProgressController
         ..stop()
         ..reset();
+    }
+
+    if (!show) {
+      _videoLockedTransition
+        ..stop()
+        ..value = 0;
     }
   }
 
@@ -148,6 +157,14 @@ class _ChatPageState extends State<ChatPage> with SingleTickerProviderStateMixin
       vsync: this,
       duration: const Duration(seconds: 60),
     );
+    _videoLockedTransition = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 320),
+    );
+    _videoPulse = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 920),
+    )..repeat();
     _peerOnline = widget.chat.user.isOnline;
     _controller.addListener(_onTextChanged);
     _focusNode.addListener(_onFocusChanged);
@@ -809,6 +826,8 @@ class _ChatPageState extends State<ChatPage> with SingleTickerProviderStateMixin
   void dispose() {
     final chatId = int.tryParse(widget.chat.id) ?? 0;
     _videoProgressController.dispose();
+    _videoLockedTransition.dispose();
+    _videoPulse.dispose();
     _typingDebounce?.cancel();
     _typingDebounce = null;
     _loadOlderDebounce?.cancel();
@@ -1166,6 +1185,12 @@ class _ChatPageState extends State<ChatPage> with SingleTickerProviderStateMixin
                           setState(() {
                             _videoRecordingLocked = locked;
                           });
+
+                          if (locked) {
+                            _videoLockedTransition.forward();
+                          } else {
+                            _videoLockedTransition.reverse();
+                          }
                         },
                         onRecorderController: (cancel, stop) {
                           _cancelVideoRecording = cancel;
@@ -1180,176 +1205,299 @@ class _ChatPageState extends State<ChatPage> with SingleTickerProviderStateMixin
                   Positioned.fill(
                     child: Stack(
                       children: [
-                        if (_videoRecordingLocked)
-                          Positioned.fill(
-                            child: ClipRect(
-                              child: BackdropFilter(
-                                filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
-                                child: Container(
-                                  color: Colors.black.withOpacity(isDark ? 0.25 : 0.10),
-                                ),
-                              ),
+                        Positioned.fill(
+                          child: IgnorePointer(
+                            ignoring: !_videoRecordingLocked,
+                            child: AnimatedBuilder(
+                              animation: _videoLockedTransition,
+                              builder: (context, _) {
+                                final t = Curves.easeOut.transform(_videoLockedTransition.value);
+                                if (t <= 0) return const SizedBox();
+                                return ClipRect(
+                                  child: BackdropFilter(
+                                    filter: ImageFilter.blur(
+                                      sigmaX: 14 * t,
+                                      sigmaY: 14 * t,
+                                    ),
+                                    child: Container(
+                                      color: Colors.black.withOpacity(
+                                        (isDark ? 0.25 : 0.10) * t,
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
                             ),
                           ),
+                        ),
                         Center(
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              ClipRRect(
-                                borderRadius: BorderRadius.circular(32),
-                                child: Container(
-                                  width: 320,
-                                  height: 320,
-                                  color: theme.colorScheme.surface.withOpacity(isDark ? 0.55 : 0.80),
-                                  child: Stack(
-                                    children: [
-                                      Center(
-                                        child: HugeIcon(
-                                          icon: HugeIcons.strokeRoundedVideo01,
-                                          size: 92,
-                                          color: theme.colorScheme.onSurface.withOpacity(0.85),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(height: 14),
-                              GlassSurface(
-                                borderRadius: 999,
-                                blurSigma: 12,
-                                padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-                                child: SizedBox(
-                                  width: 320,
-                                  child: Row(
-                                    children: [
-                                      if (_videoRecordingLocked) ...[
-                                        GestureDetector(
-                                          onTap: () {
-                                            _cancelVideoRecording?.call();
-                                          },
-                                          child: GlassSurface(
-                                            borderRadius: 12,
-                                            blurSigma: 12,
-                                            width: 32,
-                                            height: 32,
-                                            child: Center(
-                                              child: HugeIcon(
-                                                icon: HugeIcons.strokeRoundedCancel01,
-                                                size: 20,
-                                                color: theme.colorScheme.onSurface.withOpacity(0.9),
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                        const SizedBox(width: 10),
-                                      ],
-                                      Container(
-                                        width: 8,
-                                        height: 8,
-                                        decoration: BoxDecoration(
-                                          color: theme.colorScheme.error,
-                                          shape: BoxShape.circle,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Text(
-                                        _videoRecordingDurationText,
-                                        style: theme.textTheme.titleSmall?.copyWith(
-                                          fontWeight: FontWeight.w800,
-                                          color: theme.colorScheme.onSurface,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 10),
-                                      Expanded(
-                                        child: AnimatedBuilder(
-                                          animation: _videoProgressController,
-                                          builder: (context, _) {
-                                            return ClipRRect(
-                                              borderRadius: BorderRadius.circular(999),
-                                              child: Container(
-                                                height: 4,
-                                                color: theme.colorScheme.onSurface.withOpacity(isDark ? 0.18 : 0.12),
-                                                alignment: Alignment.centerLeft,
-                                                child: FractionallySizedBox(
-                                                  widthFactor: _videoProgressController.value.clamp(0.0, 1.0),
-                                                  child: Container(
-                                                    color: theme.colorScheme.primary,
-                                                  ),
+                              AnimatedBuilder(
+                                animation: _videoLockedTransition,
+                                builder: (context, _) {
+                                  final t = Curves.easeOutBack.transform(_videoLockedTransition.value);
+                                  final pulse = _videoPulse.value;
+                                  final breathe = math.sin(pulse * math.pi * 2);
+                                  final breathingScale = 1 + 0.006 * breathe;
+                                  final scale = (1 - 0.02 * t) * breathingScale;
+                                  final dy = -8.0 * t;
+                                  return Transform.translate(
+                                    offset: Offset(0, dy),
+                                    child: Transform.scale(
+                                      scale: scale,
+                                      child: ClipRRect(
+                                        borderRadius: BorderRadius.circular(32),
+                                        child: Container(
+                                          width: 320,
+                                          height: 320,
+                                          color: theme.colorScheme.surface.withOpacity(isDark ? 0.55 : 0.80),
+                                          child: Stack(
+                                            children: [
+                                              Center(
+                                                child: HugeIcon(
+                                                  icon: HugeIcons.strokeRoundedVideo01,
+                                                  size: 92,
+                                                  color: theme.colorScheme.onSurface.withOpacity(0.85),
                                                 ),
                                               ),
-                                            );
-                                          },
+                                            ],
+                                          ),
                                         ),
                                       ),
-                                      if (_videoRecordingLocked) ...[
-                                        const SizedBox(width: 10),
-                                        GestureDetector(
-                                          onTap: () {
-                                            if (!mounted) return;
-                                            setState(() {
-                                              _videoFlashEnabled = !_videoFlashEnabled;
-                                            });
-                                          },
-                                          child: GlassSurface(
-                                            borderRadius: 12,
-                                            blurSigma: 12,
-                                            width: 32,
-                                            height: 32,
-                                            child: Center(
-                                              child: HugeIcon(
-                                                icon: _videoFlashEnabled ? HugeIcons.strokeRoundedFlash : HugeIcons.strokeRoundedFlashOff,
-                                                size: 20,
-                                                color: theme.colorScheme.onSurface.withOpacity(0.9),
+                                    ),
+                                  );
+                                },
+                              ),
+                              const SizedBox(height: 14),
+                              AnimatedBuilder(
+                                animation: _videoLockedTransition,
+                                builder: (context, _) {
+                                  final t = Curves.easeOut.transform(_videoLockedTransition.value);
+                                  final capsuleScale = 1 + 0.01 * t;
+                                  final capsuleDy = -4.0 * t;
+                                  return Transform.translate(
+                                    offset: Offset(0, capsuleDy),
+                                    child: Transform.scale(
+                                      scale: capsuleScale,
+                                      child: GlassSurface(
+                                        borderRadius: 999,
+                                        blurSigma: 12,
+                                        padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                                        child: SizedBox(
+                                          width: 320,
+                                          child: Row(
+                                            children: [
+                                              AnimatedSwitcher(
+                                                duration: const Duration(milliseconds: 220),
+                                                switchInCurve: Curves.easeOut,
+                                                switchOutCurve: Curves.easeOut,
+                                                transitionBuilder: (child, anim) {
+                                                  final curved = CurvedAnimation(parent: anim, curve: Curves.easeOut);
+                                                  return FadeTransition(
+                                                    opacity: curved,
+                                                    child: ScaleTransition(
+                                                      scale: Tween<double>(begin: 0.92, end: 1.0).animate(curved),
+                                                      child: SlideTransition(
+                                                        position: Tween<Offset>(
+                                                          begin: const Offset(-0.10, 0),
+                                                          end: Offset.zero,
+                                                        ).animate(curved),
+                                                        child: child,
+                                                      ),
+                                                    ),
+                                                  );
+                                                },
+                                                child: _videoRecordingLocked
+                                                    ? Row(
+                                                        key: const ValueKey('locked_cancel'),
+                                                        mainAxisSize: MainAxisSize.min,
+                                                        children: [
+                                                          GestureDetector(
+                                                            onTap: () {
+                                                              _cancelVideoRecording?.call();
+                                                            },
+                                                            child: GlassSurface(
+                                                              borderRadius: 12,
+                                                              blurSigma: 12,
+                                                              width: 32,
+                                                              height: 32,
+                                                              child: Center(
+                                                                child: HugeIcon(
+                                                                  icon: HugeIcons.strokeRoundedCancel01,
+                                                                  size: 20,
+                                                                  color: theme.colorScheme.onSurface.withOpacity(0.9),
+                                                                ),
+                                                              ),
+                                                            ),
+                                                          ),
+                                                          const SizedBox(width: 10),
+                                                        ],
+                                                      )
+                                                    : const SizedBox(
+                                                        key: ValueKey('hold_cancel_spacer'),
+                                                      ),
                                               ),
-                                            ),
+                                              AnimatedBuilder(
+                                                animation: _videoPulse,
+                                                builder: (context, _) {
+                                                  final p = Curves.easeInOut.transform(_videoPulse.value);
+                                                  final s = 1.0 + 0.18 * p;
+                                                  final o = 0.55 + 0.45 * (1 - p);
+                                                  return Transform.scale(
+                                                    scale: s,
+                                                    child: Container(
+                                                      width: 8,
+                                                      height: 8,
+                                                      decoration: BoxDecoration(
+                                                        color: theme.colorScheme.error.withOpacity(o),
+                                                        shape: BoxShape.circle,
+                                                        boxShadow: [
+                                                          BoxShadow(
+                                                            color: theme.colorScheme.error.withOpacity(0.35 * o),
+                                                            blurRadius: 10 + 10 * p,
+                                                            spreadRadius: 0.5 + 0.8 * p,
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    ),
+                                                  );
+                                                },
+                                              ),
+                                              const SizedBox(width: 8),
+                                              Text(
+                                                _videoRecordingDurationText,
+                                                style: theme.textTheme.titleSmall?.copyWith(
+                                                  fontWeight: FontWeight.w800,
+                                                  color: theme.colorScheme.onSurface,
+                                                ),
+                                              ),
+                                              const SizedBox(width: 10),
+                                              Expanded(
+                                                child: AnimatedBuilder(
+                                                  animation: _videoProgressController,
+                                                  builder: (context, _) {
+                                                    return ClipRRect(
+                                                      borderRadius: BorderRadius.circular(999),
+                                                      child: Container(
+                                                        height: 4,
+                                                        color: theme.colorScheme.onSurface.withOpacity(isDark ? 0.18 : 0.12),
+                                                        alignment: Alignment.centerLeft,
+                                                        child: FractionallySizedBox(
+                                                          widthFactor: _videoProgressController.value.clamp(0.0, 1.0),
+                                                          child: Container(
+                                                            color: theme.colorScheme.primary,
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    );
+                                                  },
+                                                ),
+                                              ),
+                                              AnimatedSwitcher(
+                                                duration: const Duration(milliseconds: 220),
+                                                switchInCurve: Curves.easeOut,
+                                                switchOutCurve: Curves.easeOut,
+                                                transitionBuilder: (child, anim) {
+                                                  final curved = CurvedAnimation(parent: anim, curve: Curves.easeOut);
+                                                  return FadeTransition(
+                                                    opacity: curved,
+                                                    child: ScaleTransition(
+                                                      scale: Tween<double>(begin: 0.92, end: 1.0).animate(curved),
+                                                      child: SlideTransition(
+                                                        position: Tween<Offset>(
+                                                          begin: const Offset(0.12, 0),
+                                                          end: Offset.zero,
+                                                        ).animate(curved),
+                                                        child: child,
+                                                      ),
+                                                    ),
+                                                  );
+                                                },
+                                                child: _videoRecordingLocked
+                                                    ? Row(
+                                                        key: const ValueKey('locked_actions'),
+                                                        mainAxisSize: MainAxisSize.min,
+                                                        children: [
+                                                          const SizedBox(width: 10),
+                                                          GestureDetector(
+                                                            onTap: () {
+                                                              if (!mounted) return;
+                                                              setState(() {
+                                                                _videoFlashEnabled = !_videoFlashEnabled;
+                                                              });
+                                                            },
+                                                            child: GlassSurface(
+                                                              borderRadius: 12,
+                                                              blurSigma: 12,
+                                                              width: 32,
+                                                              height: 32,
+                                                              child: Center(
+                                                                child: HugeIcon(
+                                                                  icon: _videoFlashEnabled
+                                                                      ? HugeIcons.strokeRoundedFlash
+                                                                      : HugeIcons.strokeRoundedFlashOff,
+                                                                  size: 20,
+                                                                  color: theme.colorScheme.onSurface.withOpacity(0.9),
+                                                                ),
+                                                              ),
+                                                            ),
+                                                          ),
+                                                          const SizedBox(width: 8),
+                                                          GestureDetector(
+                                                            onTap: () {
+                                                              if (!mounted) return;
+                                                              setState(() {
+                                                                _videoUseFrontCamera = !_videoUseFrontCamera;
+                                                              });
+                                                            },
+                                                            child: GlassSurface(
+                                                              borderRadius: 12,
+                                                              blurSigma: 12,
+                                                              width: 32,
+                                                              height: 32,
+                                                              child: Center(
+                                                                child: HugeIcon(
+                                                                  icon: HugeIcons.strokeRoundedExchange01,
+                                                                  size: 20,
+                                                                  color: theme.colorScheme.onSurface.withOpacity(0.9),
+                                                                ),
+                                                              ),
+                                                            ),
+                                                          ),
+                                                          const SizedBox(width: 8),
+                                                          GestureDetector(
+                                                            onTap: () {
+                                                              _stopVideoRecording?.call();
+                                                            },
+                                                            child: GlassSurface(
+                                                              borderRadius: 12,
+                                                              blurSigma: 12,
+                                                              width: 32,
+                                                              height: 32,
+                                                              child: Center(
+                                                                child: HugeIcon(
+                                                                  icon: HugeIcons.strokeRoundedSent,
+                                                                  size: 20,
+                                                                  color: theme.colorScheme.onSurface.withOpacity(0.9),
+                                                                ),
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      )
+                                                    : const SizedBox(
+                                                        key: ValueKey('hold_actions_spacer'),
+                                                      ),
+                                              ),
+                                            ],
                                           ),
                                         ),
-                                        const SizedBox(width: 8),
-                                        GestureDetector(
-                                          onTap: () {
-                                            if (!mounted) return;
-                                            setState(() {
-                                              _videoUseFrontCamera = !_videoUseFrontCamera;
-                                            });
-                                          },
-                                          child: GlassSurface(
-                                            borderRadius: 12,
-                                            blurSigma: 12,
-                                            width: 32,
-                                            height: 32,
-                                            child: Center(
-                                              child: HugeIcon(
-                                                icon: HugeIcons.strokeRoundedExchange01,
-                                                size: 20,
-                                                color: theme.colorScheme.onSurface.withOpacity(0.9),
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        GestureDetector(
-                                          onTap: () {
-                                            _stopVideoRecording?.call();
-                                          },
-                                          child: GlassSurface(
-                                            borderRadius: 12,
-                                            blurSigma: 12,
-                                            width: 32,
-                                            height: 32,
-                                            child: Center(
-                                              child: HugeIcon(
-                                                icon: HugeIcons.strokeRoundedSent,
-                                                size: 20,
-                                                color: theme.colorScheme.onSurface.withOpacity(0.9),
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ],
-                                  ),
-                                ),
+                                      ),
+                                    ),
+                                  );
+                                },
                               ),
                             ],
                           ),

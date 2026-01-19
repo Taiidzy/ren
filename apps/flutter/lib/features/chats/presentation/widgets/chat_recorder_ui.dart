@@ -245,7 +245,13 @@ class ChatRecorderButtonState extends State<ChatRecorderButton> with TickerProvi
 
         // MAIN BUTTON
         GestureDetector(
-          onTap: _switchMode,
+          onTap: () {
+            if (_state == RecorderState.locked) {
+              stopRecording();
+            } else {
+              _switchMode();
+            }
+          },
           onLongPressStart: _onLongPressStart,
           onLongPressMoveUpdate: _onLongPressMoveUpdate,
           onLongPressEnd: _onLongPressEnd,
