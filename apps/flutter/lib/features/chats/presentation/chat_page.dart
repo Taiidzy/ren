@@ -10,6 +10,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:mime/mime.dart';
 import 'package:flutter/services.dart';
+import 'package:camera/camera.dart';
 
 import 'package:ren/core/constants/keys.dart';
 import 'package:ren/core/secure/secure_storage.dart';
@@ -84,6 +85,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   bool _videoFlashEnabled = false;
   bool _videoUseFrontCamera = false;
   bool _videoRecordingLocked = false;
+  CameraController? _videoCameraController;
   VoidCallback? _cancelVideoRecording;
   VoidCallback? _stopVideoRecording;
   late final AnimationController _videoProgressController;
@@ -99,6 +101,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
         _videoFlashEnabled = false;
         _videoUseFrontCamera = false;
         _videoRecordingLocked = false;
+        _videoCameraController = null;
       }
     });
 
@@ -1063,7 +1066,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
 
             final double listTopPadding = topInset + kToolbarHeight + 12;
             final double listBottomPadding =
-                bottomInset + inputHeight + verticalPadding + 12;
+                bottomInset + media.viewInsets.bottom + inputHeight + verticalPadding + 12;
 
             final messages = _messages;
 
@@ -1358,6 +1361,12 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                           _cancelVideoRecording = cancel;
                           _stopVideoRecording = stop;
                         },
+                        onVideoControllerChanged: (controller) {
+                          if (!mounted) return;
+                          setState(() {
+                            _videoCameraController = controller;
+                          });
+                        },
                         onAddRecordedFile: (attachment) async {
                           if (!mounted) return;
                           if ((attachment.mimetype).toLowerCase().startsWith('audio/')) {
@@ -1431,13 +1440,29 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                                           color: theme.colorScheme.surface.withOpacity(isDark ? 0.55 : 0.80),
                                           child: Stack(
                                             children: [
-                                              Center(
-                                                child: HugeIcon(
-                                                  icon: HugeIcons.strokeRoundedVideo01,
-                                                  size: 92,
-                                                  color: theme.colorScheme.onSurface.withOpacity(0.85),
+                                              if (_videoCameraController != null &&
+                                                  _videoCameraController!.value.isInitialized)
+                                                Positioned.fill(
+                                                  child: ClipRRect(
+                                                    borderRadius: BorderRadius.circular(32),
+                                                    child: FittedBox(
+                                                      fit: BoxFit.cover,
+                                                      child: SizedBox(
+                                                        width: _videoCameraController!.value.previewSize?.height ?? 320,
+                                                        height: _videoCameraController!.value.previewSize?.width ?? 320,
+                                                        child: CameraPreview(_videoCameraController!),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                )
+                                              else
+                                                Center(
+                                                  child: HugeIcon(
+                                                    icon: HugeIcons.strokeRoundedVideo01,
+                                                    size: 92,
+                                                    color: theme.colorScheme.onSurface.withOpacity(0.85),
+                                                  ),
                                                 ),
-                                              ),
                                             ],
                                           ),
                                         ),

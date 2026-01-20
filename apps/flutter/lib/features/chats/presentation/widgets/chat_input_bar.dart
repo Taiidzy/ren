@@ -13,6 +13,7 @@ import 'package:ren/features/chats/presentation/widgets/chat_attach_menu.dart';
 import 'package:ren/features/chats/presentation/widgets/chat_pending_attachment.dart';
 import 'package:ren/shared/widgets/glass_surface.dart';
 import 'package:ren/features/chats/presentation/widgets/chat_recorder_ui.dart';
+import 'package:ren/shared/widgets/glass_snackbar.dart';
 
 class ChatInputBar extends StatefulWidget {
   
@@ -35,6 +36,7 @@ class ChatInputBar extends StatefulWidget {
   final void Function(RecorderMode mode, bool isLocked)? onRecordingLockedChanged;
   final void Function(VoidCallback cancel, VoidCallback stop)? onRecorderController;
   final Future<void> Function(PendingChatAttachment attachment)? onAddRecordedFile;
+  final void Function(CameraController? controller)? onVideoControllerChanged;
 
   const ChatInputBar({
     super.key,
@@ -57,6 +59,7 @@ class ChatInputBar extends StatefulWidget {
     this.onRecordingLockedChanged,
     this.onRecorderController,
     this.onAddRecordedFile,
+    this.onVideoControllerChanged,
   });
 
   @override
@@ -86,6 +89,14 @@ class _ChatInputBarState extends State<ChatInputBar> {
   // Video recording
   CameraController? _cameraController;
   bool _isCameraInitialized = false;
+  bool _videoEnableAudio = true;
+
+  void _disposeCamera() {
+    widget.onVideoControllerChanged?.call(null);
+    _cameraController?.dispose();
+    _cameraController = null;
+    _isCameraInitialized = false;
+  }
 
   // Слушатель для кнопки Send/Mic
   bool get _showSendButton => widget.controller.text.trim().isNotEmpty || widget.pending.isNotEmpty;
@@ -161,37 +172,96 @@ class _ChatInputBarState extends State<ChatInputBar> {
       widget.controller.removeListener(_controllerListener!);
     }
     _audioRecorder.dispose();
-    _cameraController?.dispose();
+    _disposeCamera();
     super.dispose();
+  }
+
+  void _showPermissionSnack(String text, {VoidCallback? action}) {
+    if (!mounted) return;
+    showGlassSnack(
+      context,
+      text,
+      kind: GlassSnackKind.error,
+      duration: const Duration(seconds: 3),
+      actionLabel: action == null ? null : 'Настройки',
+      onAction: action,
+    );
+  }
+
+  void _showInfoSnack(String text) {
+    if (!mounted) return;
+    showGlassSnack(
+      context,
+      text,
+      kind: GlassSnackKind.info,
+      duration: const Duration(seconds: 3),
+    );
   }
 
   Future<bool> _requestPermissions(RecorderMode mode) async {
     if (mode == RecorderMode.audio) {
+      try {
+        final allowed = await _audioRecorder.hasPermission();
+        if (allowed) return true;
+      } catch (_) {}
+
       final micStatus = await Permission.microphone.request();
       return micStatus.isGranted;
     } else {
-      final cameraStatus = await Permission.camera.request();
-      final micStatus = await Permission.microphone.request();
-      return cameraStatus.isGranted && micStatus.isGranted;
+      final cameraBefore = await Permission.camera.status;
+      final micBefore = await Permission.microphone.status;
+
+      // Some OEMs / app states may report denied here even when camera works
+      // (e.g. via image_picker). We only hard-fail on permanentlyDenied/restricted.
+      if (cameraBefore.isPermanentlyDenied || cameraBefore.isRestricted) {
+        _showPermissionSnack(
+          'Нет доступа к камере. Разреши доступ в настройках.',
+          action: () => openAppSettings(),
+        );
+        return false;
+      }
+
+      // Request (best-effort). Even if it returns denied, we still try to init camera.
+      await Permission.camera.request();
+
+      // Microphone is optional for video.
+      bool micAllowed = micBefore.isGranted;
+      if (!micAllowed) {
+        try {
+          micAllowed = await _audioRecorder.hasPermission();
+        } catch (_) {}
+      }
+
+      if (micAllowed) {
+        _videoEnableAudio = true;
+      } else {
+        final micAfter = await Permission.microphone.request();
+        _videoEnableAudio = micAfter.isGranted;
+        if (!_videoEnableAudio) {
+          _showInfoSnack('Микрофон недоступен. Видео будет записано без звука.');
+        }
+      }
+
+      return true;
     }
   }
 
-  Future<void> _initializeCamera() async {
-    if (_isCameraInitialized && _cameraController != null) return;
+  Future<bool> _initializeCamera() async {
+    if (_isCameraInitialized && _cameraController != null) return true;
     
     try {
       final cameras = await availableCameras();
       if (cameras.isEmpty) {
-        debugPrint('No cameras available');
-        return;
+        print('No cameras available');
+        _showPermissionSnack('Камера недоступна на устройстве.');
+        return false;
       }
 
       final camera = cameras.first;
       _cameraController = CameraController(
         camera,
         ResolutionPreset.high,
-        enableAudio: true,
-        imageFormatGroup: ImageFormatGroup.jpeg,
+        enableAudio: _videoEnableAudio,
       );
 
       await _cameraController!.initialize();
@@ -200,8 +270,12 @@ class _ChatInputBarState extends State<ChatInputBar> {
           _isCameraInitialized = true;
         });
       }
+      widget.onVideoControllerChanged?.call(_cameraController);
+      return true;
     } catch (e) {
-      debugPrint('Camera initialization failed: $e');
+      print('Camera initialization failed: $e');
+      _showPermissionSnack('Не удалось инициализировать камеру.');
+      return false;
     }
   }
 
@@ -218,24 +292,29 @@ class _ChatInputBarState extends State<ChatInputBar> {
         samplingRate: 44100,
       );
     } catch (e) {
-      debugPrint('Failed to start audio recording: $e');
+      print('Failed to start audio recording: $e');
     }
   }
 
-  Future<void> _startVideoRecording() async {
+  Future<bool> _startVideoRecording() async {
     if (!_isCameraInitialized || _cameraController == null) {
-      await _initializeCamera();
+      final ok = await _initializeCamera();
+      if (!ok) return false;
     }
     
     if (!_isCameraInitialized || _cameraController == null) {
-      debugPrint('Camera not initialized');
-      return;
+      print('Camera not initialized');
+      _showPermissionSnack('Камера не инициализирована.');
+      return false;
     }
 
     try {
       await _cameraController!.startVideoRecording();
+      return true;
     } catch (e) {
-      debugPrint('Failed to start video recording: $e');
+      print('Failed to start video recording: $e');
+      _showPermissionSnack('Не удалось начать запись видео.');
+      return false;
     }
   }
 
@@ -244,7 +323,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
       final path = await _audioRecorder.stop();
       return path;
     } catch (e) {
-      debugPrint('Failed to stop audio recording: $e');
+      print('Failed to stop audio recording: $e');
       return null;
     }
   }
@@ -256,9 +335,11 @@ class _ChatInputBarState extends State<ChatInputBar> {
 
     try {
       final file = await _cameraController!.stopVideoRecording();
+      _disposeCamera();
       return file.path;
     } catch (e) {
-      debugPrint('Failed to stop video recording: $e');
+      print('Failed to stop video recording: $e');
+      _disposeCamera();
       return null;
     }
   }
@@ -284,6 +365,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
           }
         } catch (_) {}
       }
+      _disposeCamera();
     }
   }
 
@@ -620,46 +702,67 @@ class _ChatInputBarState extends State<ChatInputBar> {
                     return false;
                   }
 
-                  setState(() {
-                    _isRecording = true;
-                    _isRecordingLocked = false;
-                  });
-                  _activeRecordingMode = mode;
-                  widget.onRecordingChanged?.call(mode, true);
-                  widget.onRecordingLockedChanged?.call(mode, false);
-                  _startTimer();
+                  bool started = false;
 
                   if (mode == RecorderMode.audio) {
+                    setState(() {
+                      _isRecording = true;
+                      _isRecordingLocked = false;
+                    });
+                    _activeRecordingMode = mode;
+                    widget.onRecordingChanged?.call(mode, true);
+                    widget.onRecordingLockedChanged?.call(mode, false);
+                    _startTimer();
                     await _startAudioRecording();
+                    started = true;
                   } else {
-                    await _startVideoRecording();
+                    // For video, verify camera initialization/recording actually started.
+                    final ok = await _startVideoRecording();
+                    if (!ok) {
+                      widget.onRecordingChanged?.call(mode, false);
+                      widget.onRecordingLockedChanged?.call(mode, false);
+                      return false;
+                    }
+
+                    setState(() {
+                      _isRecording = true;
+                      _isRecordingLocked = false;
+                    });
+                    _activeRecordingMode = mode;
+                    widget.onRecordingChanged?.call(mode, true);
+                    widget.onRecordingLockedChanged?.call(mode, false);
+                    _startTimer();
+                    started = true;
                   }
 
-                  return true; 
+                  return started;
                 },
                 onStopRecording: (mode, path, canceled) async {
                   String? recordedPath;
-                  
+
+                  // Stop UI/timer immediately to avoid confusing lag.
+                  if (mounted) {
+                    setState(() {
+                      _resetRecordingUi();
+                    });
+                  }
+                  _stopTimer();
+                  widget.onRecordingChanged?.call(mode, false);
+                  widget.onRecordingLockedChanged?.call(mode, false);
+
                   if (!canceled) {
                     if (mode == RecorderMode.audio) {
                       recordedPath = await _stopAudioRecording();
                     } else {
                       recordedPath = await _stopVideoRecording();
                     }
-                    
+
                     if (recordedPath != null) {
                       await _handleRecordedFile(recordedPath, mode);
                     }
                   } else {
                     await _cancelRecording();
                   }
-
-                  setState(() {
-                    _resetRecordingUi();
-                  });
-                  _stopTimer();
-                  widget.onRecordingChanged?.call(mode, false);
-                  widget.onRecordingLockedChanged?.call(mode, false);
                 },
                 onCancelRecording: () async {
                   await _cancelRecording();
