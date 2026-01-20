@@ -177,12 +177,11 @@ class ChatRecorderButtonState extends State<ChatRecorderButton> with TickerProvi
           blurSigma: 12,
           width: 44,
           height: 44,
-          color: theme.colorScheme.primary,
           borderColor: baseInk.withOpacity(isDark ? 0.18 : 0.10),
           child: Center(
             child: HugeIcon(
               icon: HugeIcons.strokeRoundedSent,
-              color: theme.colorScheme.onPrimary,
+              color: theme.colorScheme.onSurface,
               size: 20,
             ),
           ),
