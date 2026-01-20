@@ -30,6 +30,8 @@ import 'package:ren/features/chats/presentation/widgets/chat_page_app_bar.dart';
 import 'package:ren/features/chats/presentation/widgets/chat_pending_attachment.dart';
 import 'package:ren/features/chats/presentation/widgets/chat_skeleton_message_bubble.dart';
 import 'package:ren/features/chats/presentation/widgets/chat_recorder_ui.dart';
+import 'package:ren/features/chats/presentation/widgets/voice_message_bubble.dart';
+import 'package:ren/features/chats/presentation/widgets/square_video_bubble.dart';
 
 class ChatPage extends StatefulWidget {
   final ChatPreview chat;
@@ -130,10 +132,26 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
       final a = m.attachments.first;
       if (a.isImage) return 'Фото';
       if (a.isVideo) return 'Видео';
+      if (a.mimetype.startsWith('audio/')) return 'Голосовое сообщение';
       final name = a.filename.trim();
       return name.isNotEmpty ? name : 'Файл';
     }
     return '';
+  }
+
+  bool _isVoiceMessage(ChatMessage msg) {
+    if (msg.attachments.length != 1) return false;
+    final att = msg.attachments.first;
+    return att.mimetype.startsWith('audio/');
+  }
+
+  bool _isSquareVideoMessage(ChatMessage msg) {
+    if (msg.attachments.length != 1) return false;
+    final att = msg.attachments.first;
+    if (!att.mimetype.startsWith('video/')) return false;
+    // Проверяем, что это квадратик по имени файла (начинается с video_)
+    final filename = att.filename.toLowerCase();
+    return filename.startsWith('video_') || filename.startsWith('square_');
   }
 
   Future<void> _ensureWsReady(int chatId) async {
@@ -1075,16 +1093,10 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                                     child: Padding(
                                       padding: const EdgeInsets.all(2),
                                       child: RepaintBoundary(
-                                        child: ChatMessageBubble(
-                                          replyPreview: (replyPreview != null && replyPreview.isNotEmpty)
-                                              ? replyPreview
-                                              : null,
-                                          text: msg.text,
-                                          attachments: msg.attachments,
-                                          timeLabel: _formatTime(msg.sentAt),
-                                          isMe: msg.isMe,
+                                        child: _buildMessageBubble(
+                                          msg: msg,
+                                          replyPreview: replyPreview,
                                           isDark: isDark,
-                                          onOpenAttachment: (a) => _openAttachmentSheet(a),
                                         ),
                                       ),
                                     ),
@@ -1195,6 +1207,12 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                         onRecorderController: (cancel, stop) {
                           _cancelVideoRecording = cancel;
                           _stopVideoRecording = stop;
+                        },
+                        onAddRecordedFile: (attachment) async {
+                          if (!mounted) return;
+                          setState(() {
+                            _pending.add(attachment);
+                          });
                         },
                       ),
                     ),
@@ -1518,6 +1536,45 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     final h = local.hour.toString().padLeft(2, '0');
     final m = local.minute.toString().padLeft(2, '0');
     return '$h:$m';
+  }
+
+  Widget _buildMessageBubble({
+    required ChatMessage msg,
+    required String? replyPreview,
+    required bool isDark,
+  }) {
+    if (_isVoiceMessage(msg)) {
+      final audioPath = msg.attachments.first.localPath;
+      return VoiceMessageBubble(
+        audioPath: audioPath,
+        timeLabel: _formatTime(msg.sentAt),
+        isMe: msg.isMe,
+        isDark: isDark,
+      );
+    }
+
+    if (_isSquareVideoMessage(msg)) {
+      final videoPath = msg.attachments.first.localPath;
+      return SquareVideoBubble(
+        videoPath: videoPath,
+        timeLabel: _formatTime(msg.sentAt),
+        isMe: msg.isMe,
+        isDark: isDark,
+      );
+    }
+
+    // Обычное сообщение (текст, фото, файлы, обычное видео)
+    return ChatMessageBubble(
+      replyPreview: (replyPreview != null && replyPreview.isNotEmpty)
+          ? replyPreview
+          : null,
+      text: msg.text,
+      attachments: msg.attachments,
+      timeLabel: _formatTime(msg.sentAt),
+      isMe: msg.isMe,
+      isDark: isDark,
+      onOpenAttachment: (a) => _openAttachmentSheet(a),
+    );
   }
 
   List<ChatAttachment> _allChatAttachments() {

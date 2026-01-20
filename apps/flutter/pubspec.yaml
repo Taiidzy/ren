@@ -58,6 +58,7 @@ dependencies:
   permission_handler: ^10.4.0
   record: ^4.4.0
   vibration: ^1.7.6
+  just_audio: ^0.9.40
 
 dev_dependencies:
   flutter_test:
