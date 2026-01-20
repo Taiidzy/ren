@@ -86,6 +86,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
   bool _videoUseFrontCamera = false;
   bool _videoRecordingLocked = false;
   CameraController? _videoCameraController;
+  Future<bool> Function(bool enabled)? _setVideoTorch;
+  Future<bool> Function(bool useFront)? _setVideoUseFrontCamera;
   VoidCallback? _cancelVideoRecording;
   VoidCallback? _stopVideoRecording;
   late final AnimationController _videoProgressController;
@@ -1367,6 +1369,10 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                             _videoCameraController = controller;
                           });
                         },
+                        onVideoActionsController: (setTorch, setUseFrontCamera) {
+                          _setVideoTorch = setTorch;
+                          _setVideoUseFrontCamera = setUseFrontCamera;
+                        },
                         onAddRecordedFile: (attachment) async {
                           if (!mounted) return;
                           if ((attachment.mimetype).toLowerCase().startsWith('audio/')) {
@@ -1623,11 +1629,18 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                                                         children: [
                                                           const SizedBox(width: 10),
                                                           GestureDetector(
-                                                            onTap: () {
+                                                            onTap: () async {
                                                               if (!mounted) return;
+                                                              final next = !_videoFlashEnabled;
                                                               setState(() {
-                                                                _videoFlashEnabled = !_videoFlashEnabled;
+                                                                _videoFlashEnabled = next;
                                                               });
+                                                              final ok = await _setVideoTorch?.call(next);
+                                                              if (ok != true && mounted) {
+                                                                setState(() {
+                                                                  _videoFlashEnabled = !next;
+                                                                });
+                                                              }
                                                             },
                                                             child: GlassSurface(
                                                               borderRadius: 12,
@@ -1647,11 +1660,18 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                                                           ),
                                                           const SizedBox(width: 8),
                                                           GestureDetector(
-                                                            onTap: () {
+                                                            onTap: () async {
                                                               if (!mounted) return;
+                                                              final next = !_videoUseFrontCamera;
                                                               setState(() {
-                                                                _videoUseFrontCamera = !_videoUseFrontCamera;
+                                                                _videoUseFrontCamera = next;
                                                               });
+                                                              final ok = await _setVideoUseFrontCamera?.call(next);
+                                                              if (ok != true && mounted) {
+                                                                setState(() {
+                                                                  _videoUseFrontCamera = !next;
+                                                                });
+                                                              }
                                                             },
                                                             child: GlassSurface(
                                                               borderRadius: 12,

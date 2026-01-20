@@ -3,9 +3,12 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:hugeicons/hugeicons.dart';
 import 'package:record/record.dart';
 import 'package:camera/camera.dart';
+import 'package:ffmpeg_kit_min_gpl/ffmpeg_kit.dart';
+import 'package:ffmpeg_kit_min_gpl/return_code.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -37,6 +40,10 @@ class ChatInputBar extends StatefulWidget {
   final void Function(VoidCallback cancel, VoidCallback stop)? onRecorderController;
   final Future<void> Function(PendingChatAttachment attachment)? onAddRecordedFile;
   final void Function(CameraController? controller)? onVideoControllerChanged;
+  final void Function(
+    Future<bool> Function(bool enabled) setTorch,
+    Future<bool> Function(bool useFront) setUseFrontCamera,
+  )? onVideoActionsController;
 
   const ChatInputBar({
     super.key,
@@ -60,6 +67,7 @@ class ChatInputBar extends StatefulWidget {
     this.onRecorderController,
     this.onAddRecordedFile,
     this.onVideoControllerChanged,
+    this.onVideoActionsController,
   });
 
   @override
@@ -90,12 +98,102 @@ class _ChatInputBarState extends State<ChatInputBar> {
   CameraController? _cameraController;
   bool _isCameraInitialized = false;
   bool _videoEnableAudio = true;
+  bool _useFrontCamera = false;
+  List<CameraDescription>? _availableCameras;
+  final List<String> _videoSegmentPaths = <String>[];
+  bool _isSwitchingVideoCamera = false;
 
   void _disposeCamera() {
     widget.onVideoControllerChanged?.call(null);
     _cameraController?.dispose();
     _cameraController = null;
     _isCameraInitialized = false;
+  }
+
+  Future<List<CameraDescription>> _getCameras() async {
+    _availableCameras ??= await availableCameras();
+    return _availableCameras!;
+  }
+
+  CameraDescription? _pickCamera(List<CameraDescription> cams, {required bool useFront}) {
+    if (cams.isEmpty) return null;
+    final desired = useFront ? CameraLensDirection.front : CameraLensDirection.back;
+    final found = cams.where((c) => c.lensDirection == desired).toList();
+    return found.isNotEmpty ? found.first : cams.first;
+  }
+
+  Future<bool> _setTorch(bool enabled) async {
+    final c = _cameraController;
+    if (c == null || !c.value.isInitialized) {
+      _showPermissionSnack('Камера не инициализирована.');
+      return false;
+    }
+    try {
+      await c.setFlashMode(enabled ? FlashMode.torch : FlashMode.off);
+      return true;
+    } catch (_) {
+      _showInfoSnack('Фонарик недоступен на этой камере.');
+      return false;
+    }
+  }
+
+  Future<bool> _setUseFrontCamera(bool useFront) async {
+    if (_isSwitchingVideoCamera) return false;
+
+    final current = _cameraController;
+    final wasRecording = current != null && current.value.isRecordingVideo;
+
+    _isSwitchingVideoCamera = true;
+    try {
+      if (wasRecording) {
+        try {
+          final file = await current.stopVideoRecording();
+          _videoSegmentPaths.add(file.path);
+        } catch (_) {
+          _showPermissionSnack('Не удалось переключить камеру.');
+          return false;
+        }
+      }
+
+      _useFrontCamera = useFront;
+
+      final cams = await _getCameras();
+      final desc = _pickCamera(cams, useFront: useFront);
+      if (desc == null) {
+        _showPermissionSnack('Камера недоступна на устройстве.');
+        return false;
+      }
+
+      _disposeCamera();
+      try {
+        _cameraController = CameraController(
+          desc,
+          ResolutionPreset.high,
+          enableAudio: _videoEnableAudio,
+        );
+        await _cameraController!.initialize();
+        _isCameraInitialized = true;
+        await _setTorch(false);
+        widget.onVideoControllerChanged?.call(_cameraController);
+        if (mounted) setState(() {});
+      } catch (_) {
+        _disposeCamera();
+        _showPermissionSnack('Не удалось инициализировать камеру.');
+        return false;
+      }
+
+      if (wasRecording) {
+        final ok = await _startVideoRecording();
+        if (!ok) {
+          _showPermissionSnack('Не удалось продолжить запись после переключения.');
+          return false;
+        }
+      }
+
+      return true;
+    } finally {
+      _isSwitchingVideoCamera = false;
+    }
   }
 
   // Слушатель для кнопки Send/Mic
@@ -114,6 +212,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
         () => _recorderKey.currentState?.cancelRecording(),
         () => _recorderKey.currentState?.stopRecording(),
       );
+      widget.onVideoActionsController?.call(_setTorch, _setUseFrontCamera);
     });
   }
 
@@ -131,6 +230,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
         () => _recorderKey.currentState?.cancelRecording(),
         () => _recorderKey.currentState?.stopRecording(),
       );
+      widget.onVideoActionsController?.call(_setTorch, _setUseFrontCamera);
     });
   }
 
@@ -250,14 +350,14 @@ class _ChatInputBarState extends State<ChatInputBar> {
     if (_isCameraInitialized && _cameraController != null) return true;
     
     try {
-      final cameras = await availableCameras();
+      final cameras = await _getCameras();
       if (cameras.isEmpty) {
         print('No cameras available');
         _showPermissionSnack('Камера недоступна на устройстве.');
         return false;
       }
 
-      final camera = cameras.first;
+      final camera = _pickCamera(cameras, useFront: _useFrontCamera) ?? cameras.first;
       _cameraController = CameraController(
         camera,
         ResolutionPreset.high,
@@ -318,6 +418,47 @@ class _ChatInputBarState extends State<ChatInputBar> {
     }
   }
 
+  Future<String?> _concatVideoSegments(List<String> segmentPaths) async {
+    if (segmentPaths.isEmpty) return null;
+    if (segmentPaths.length == 1) return segmentPaths.first;
+
+    final dir = await getTemporaryDirectory();
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    final listFile = File('${dir.path}/video_concat_$ts.txt');
+    final outPath = '${dir.path}/video_merged_$ts.mp4';
+
+    final lines = segmentPaths.map((p) {
+      final escaped = p.replaceAll("'", "'\\''");
+      return "file '$escaped'";
+    }).join('\n');
+    await listFile.writeAsString(lines);
+
+    final audioArgs = _videoEnableAudio ? "-c:a aac -b:a 128k" : "-an";
+    final cmd =
+        "-y -f concat -safe 0 -i '${listFile.path}' -c:v libx264 -preset ultrafast -crf 23 $audioArgs -movflags +faststart '$outPath'";
+    try {
+      final session = await FFmpegKit.execute(cmd);
+      final rc = await session.getReturnCode();
+      if (!ReturnCode.isSuccess(rc)) {
+        return null;
+      }
+
+      final outFile = File(outPath);
+      if (!await outFile.exists()) return null;
+      return outPath;
+    } on MissingPluginException {
+      _showInfoSnack('Склейка видео недоступна (плагин не подключен). Отправляем без склейки.');
+      return null;
+    } catch (_) {
+      _showInfoSnack('Не удалось склеить видео. Отправляем без склейки.');
+      return null;
+    } finally {
+      try {
+        if (await listFile.exists()) await listFile.delete();
+      } catch (_) {}
+    }
+  }
+
   Future<String?> _stopAudioRecording() async {
     try {
       final path = await _audioRecorder.stop();
@@ -330,13 +471,35 @@ class _ChatInputBarState extends State<ChatInputBar> {
 
   Future<String?> _stopVideoRecording() async {
     if (_cameraController == null || !_cameraController!.value.isRecordingVideo) {
-      return null;
+      if (_videoSegmentPaths.isEmpty) return null;
+      final merged = await _concatVideoSegments(List<String>.from(_videoSegmentPaths));
+      return merged;
     }
 
     try {
       final file = await _cameraController!.stopVideoRecording();
+      final segmentPath = file.path;
+      _videoSegmentPaths.add(segmentPath);
       _disposeCamera();
-      return file.path;
+
+      final merged = await _concatVideoSegments(List<String>.from(_videoSegmentPaths));
+      if (merged == null) {
+        // Fallback: send the last recorded segment.
+        return segmentPath;
+      }
+
+      for (final p in _videoSegmentPaths) {
+        if (p == merged) continue;
+        try {
+          final f = File(p);
+          if (await f.exists()) await f.delete();
+        } catch (_) {}
+      }
+      _videoSegmentPaths
+        ..clear()
+        ..add(merged);
+
+      return merged;
     } catch (e) {
       print('Failed to stop video recording: $e');
       _disposeCamera();
@@ -366,6 +529,14 @@ class _ChatInputBarState extends State<ChatInputBar> {
         } catch (_) {}
       }
       _disposeCamera();
+
+      for (final p in _videoSegmentPaths) {
+        try {
+          final f = File(p);
+          if (await f.exists()) await f.delete();
+        } catch (_) {}
+      }
+      _videoSegmentPaths.clear();
     }
   }
 
@@ -716,6 +887,8 @@ class _ChatInputBarState extends State<ChatInputBar> {
                     await _startAudioRecording();
                     started = true;
                   } else {
+                    _videoSegmentPaths.clear();
+
                     // For video, verify camera initialization/recording actually started.
                     final ok = await _startVideoRecording();
                     if (!ok) {
