@@ -68,6 +68,8 @@ class _ChatInputBarState extends State<ChatInputBar> {
   final GlobalKey<ChatRecorderButtonState> _recorderKey =
       GlobalKey<ChatRecorderButtonState>();
 
+  VoidCallback? _controllerListener;
+
 
   RecorderMode _activeRecordingMode = RecorderMode.audio;
 
@@ -79,7 +81,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
   int _seconds = 0;
 
   // Audio recording
-  final AudioRecorder _audioRecorder = AudioRecorder();
+  final Record _audioRecorder = Record();
 
   // Video recording
   CameraController? _cameraController;
@@ -91,7 +93,11 @@ class _ChatInputBarState extends State<ChatInputBar> {
   @override
   void initState() {
     super.initState();
-    widget.controller.addListener(() => setState(() {}));
+    _controllerListener = () {
+      if (!mounted) return;
+      setState(() {});
+    };
+    widget.controller.addListener(_controllerListener!);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       widget.onRecorderController?.call(
         () => _recorderKey.currentState?.cancelRecording(),
@@ -103,6 +109,12 @@ class _ChatInputBarState extends State<ChatInputBar> {
   @override
   void didUpdateWidget(covariant ChatInputBar oldWidget) {
     super.didUpdateWidget(oldWidget);
+
+    if (oldWidget.controller != widget.controller && _controllerListener != null) {
+      oldWidget.controller.removeListener(_controllerListener!);
+      widget.controller.addListener(_controllerListener!);
+    }
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       widget.onRecorderController?.call(
         () => _recorderKey.currentState?.cancelRecording(),
@@ -145,6 +157,9 @@ class _ChatInputBarState extends State<ChatInputBar> {
   @override
   void dispose() {
     _timer?.cancel();
+    if (_controllerListener != null) {
+      widget.controller.removeListener(_controllerListener!);
+    }
     _audioRecorder.dispose();
     _cameraController?.dispose();
     super.dispose();
@@ -195,14 +210,13 @@ class _ChatInputBarState extends State<ChatInputBar> {
       final dir = await getTemporaryDirectory();
       final timestamp = DateTime.now().millisecondsSinceEpoch;
       final path = '${dir.path}/voice_$timestamp.m4a';
-      
-      final config = const RecordConfig(
+
+      await _audioRecorder.start(
+        path: path,
         encoder: AudioEncoder.aacLc,
         bitRate: 128000,
-        sampleRate: 44100,
+        samplingRate: 44100,
       );
-      
-      await _audioRecorder.start(config, path: path);
     } catch (e) {
       debugPrint('Failed to start audio recording: $e');
     }
@@ -252,7 +266,13 @@ class _ChatInputBarState extends State<ChatInputBar> {
   Future<void> _cancelRecording() async {
     if (_activeRecordingMode == RecorderMode.audio) {
       try {
-        await _audioRecorder.cancel();
+        final path = await _audioRecorder.stop();
+        if (path != null) {
+          final audioFile = File(path);
+          if (await audioFile.exists()) {
+            await audioFile.delete();
+          }
+        }
       } catch (_) {}
     } else {
       if (_cameraController != null && _cameraController!.value.isRecordingVideo) {

@@ -42,6 +42,22 @@ enum ClientEvent {
         metadata: Option<Vec<FileMetadata>>, // метаданные файлов
         reply_to_message_id: Option<i64>,
     },
+    voce_message {
+        chat_id: i32,
+        message: String,
+        message_type: Option<String>,
+        envelopes: Option<Value>,
+        metadata: Option<Vec<FileMetadata>>,
+        reply_to_message_id: Option<i64>,
+    },
+    video_message {
+        chat_id: i32,
+        message: String,
+        message_type: Option<String>,
+        envelopes: Option<Value>,
+        metadata: Option<Vec<FileMetadata>>,
+        reply_to_message_id: Option<i64>,
+    },
     edit_message {
         chat_id: i32,
         message_id: i64,
@@ -223,7 +239,9 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                             }
                         }
                     }
-                    Ok(ClientEvent::send_message { chat_id, message, message_type, envelopes, metadata, reply_to_message_id }) => {
+                    Ok(ClientEvent::send_message { chat_id, message, message_type, envelopes, metadata, reply_to_message_id })
+                    | Ok(ClientEvent::voce_message { chat_id, message, message_type, envelopes, metadata, reply_to_message_id })
+                    | Ok(ClientEvent::video_message { chat_id, message, message_type, envelopes, metadata, reply_to_message_id }) => {
                         if !subs.joined.contains(&chat_id) {
                             // safety: проверка членства
                             if let Err(e) = ensure_member(&state, chat_id, user_id).await {

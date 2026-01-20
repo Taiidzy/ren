@@ -122,12 +122,13 @@ class RealtimeClient {
     required int chatId,
     required String message,
     required Map<String, dynamic>? envelopes,
+    String wsType = 'send_message',
     String? messageType,
     List<dynamic>? metadata,
     int? replyToMessageId,
   }) {
     _send({
-      'type': 'send_message',
+      'type': wsType,
       'chat_id': chatId,
       'message': message,
       'message_type': messageType,

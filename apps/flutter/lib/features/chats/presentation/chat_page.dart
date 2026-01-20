@@ -723,6 +723,17 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
             plaintext: text,
           );
 
+    String wsType = 'send_message';
+    if (hasAttachments) {
+      final hasAudio = pendingCopy.any((p) => p.mimetype.toLowerCase().startsWith('audio/'));
+      final hasVideo = pendingCopy.any((p) => p.mimetype.toLowerCase().startsWith('video/'));
+      if (hasAudio && !hasVideo) {
+        wsType = 'voce_message';
+      } else if (hasVideo && !hasAudio) {
+        wsType = 'video_message';
+      }
+    }
+
     if (!rt.isConnected) {
       await rt.connect();
     }
@@ -731,6 +742,145 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
     rt.sendMessage(
       chatId: chatId,
       message: payload['message'] as String,
+      wsType: wsType,
+      messageType: payload['message_type'] as String?,
+      envelopes: payload['envelopes'] as Map<String, dynamic>?,
+      metadata: payload['metadata'] as List<dynamic>?,
+      replyToMessageId: replyTo == null ? null : int.tryParse(replyTo.id),
+    );
+  }
+
+  Future<void> _sendRecordedVoice(PendingChatAttachment attachment) async {
+    final chatId = int.tryParse(widget.chat.id) ?? 0;
+    final peerId = widget.chat.peerId ?? 0;
+    if (chatId <= 0 || peerId <= 0) return;
+
+    final repo = context.read<ChatsRepository>();
+
+    // optimistic attachment preview
+    final dir = await getTemporaryDirectory();
+    final safeName = attachment.filename.isNotEmpty
+        ? attachment.filename
+        : 'voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
+    final path = '${dir.path}/$safeName';
+    final f = File(path);
+    await f.writeAsBytes(attachment.bytes, flush: true);
+
+    final replyTo = _replyTo;
+    if (mounted) {
+      setState(() {
+        _replyTo = null;
+        _messages.add(
+          ChatMessage(
+            id: 'local_${DateTime.now().millisecondsSinceEpoch}',
+            chatId: chatId.toString(),
+            isMe: true,
+            text: '',
+            attachments: [
+              ChatAttachment(
+                localPath: path,
+                filename: safeName,
+                mimetype: attachment.mimetype,
+                size: attachment.bytes.length,
+              ),
+            ],
+            sentAt: DateTime.now(),
+            replyToMessageId: replyTo?.id,
+          ),
+        );
+        _reindexMessages();
+      });
+    }
+    _scheduleScrollToBottom(animated: true);
+
+    final payload = await repo.buildEncryptedWsMediaMessage(
+      chatId: chatId,
+      peerId: peerId,
+      caption: '',
+      attachments: [
+        OutgoingAttachment(
+          bytes: attachment.bytes,
+          filename: safeName,
+          mimetype: attachment.mimetype,
+        ),
+      ],
+    );
+
+    await _ensureWsReady(chatId);
+    final rt = _rt!;
+    rt.sendMessage(
+      chatId: chatId,
+      message: payload['message'] as String,
+      wsType: 'voce_message',
+      messageType: payload['message_type'] as String?,
+      envelopes: payload['envelopes'] as Map<String, dynamic>?,
+      metadata: payload['metadata'] as List<dynamic>?,
+      replyToMessageId: replyTo == null ? null : int.tryParse(replyTo.id),
+    );
+  }
+
+  Future<void> _sendRecordedVideo(PendingChatAttachment attachment) async {
+    final chatId = int.tryParse(widget.chat.id) ?? 0;
+    final peerId = widget.chat.peerId ?? 0;
+    if (chatId <= 0 || peerId <= 0) return;
+
+    final repo = context.read<ChatsRepository>();
+
+    // optimistic attachment preview
+    final dir = await getTemporaryDirectory();
+    final safeName = attachment.filename.isNotEmpty
+        ? attachment.filename
+        : 'video_${DateTime.now().millisecondsSinceEpoch}.mp4';
+    final path = '${dir.path}/$safeName';
+    final f = File(path);
+    await f.writeAsBytes(attachment.bytes, flush: true);
+
+    final replyTo = _replyTo;
+    if (mounted) {
+      setState(() {
+        _replyTo = null;
+        _messages.add(
+          ChatMessage(
+            id: 'local_${DateTime.now().millisecondsSinceEpoch}',
+            chatId: chatId.toString(),
+            isMe: true,
+            text: '',
+            attachments: [
+              ChatAttachment(
+                localPath: path,
+                filename: safeName,
+                mimetype: attachment.mimetype,
+                size: attachment.bytes.length,
+              ),
+            ],
+            sentAt: DateTime.now(),
+            replyToMessageId: replyTo?.id,
+          ),
+        );
+        _reindexMessages();
+      });
+    }
+    _scheduleScrollToBottom(animated: true);
+
+    final payload = await repo.buildEncryptedWsMediaMessage(
+      chatId: chatId,
+      peerId: peerId,
+      caption: '',
+      attachments: [
+        OutgoingAttachment(
+          bytes: attachment.bytes,
+          filename: safeName,
+          mimetype: attachment.mimetype,
+        ),
+      ],
+    );
+
+    await _ensureWsReady(chatId);
+    final rt = _rt!;
+    rt.sendMessage(
+      chatId: chatId,
+      message: payload['message'] as String,
+      wsType: 'video_message',
       messageType: payload['message_type'] as String?,
       envelopes: payload['envelopes'] as Map<String, dynamic>?,
       metadata: payload['metadata'] as List<dynamic>?,
@@ -1210,6 +1360,14 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                         },
                         onAddRecordedFile: (attachment) async {
                           if (!mounted) return;
+                          if ((attachment.mimetype).toLowerCase().startsWith('audio/')) {
+                            await _sendRecordedVoice(attachment);
+                            return;
+                          }
+                          if ((attachment.mimetype).toLowerCase().startsWith('video/')) {
+                            await _sendRecordedVideo(attachment);
+                            return;
+                          }
                           setState(() {
                             _pending.add(attachment);
                           });
