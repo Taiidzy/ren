@@ -92,7 +92,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
   int _seconds = 0;
 
   // Audio recording
-  final Record _audioRecorder = Record();
+  final AudioRecorder _audioRecorder = AudioRecorder();
 
   // Video recording
   CameraController? _cameraController;
@@ -386,10 +386,12 @@ class _ChatInputBarState extends State<ChatInputBar> {
       final path = '${dir.path}/voice_$timestamp.m4a';
 
       await _audioRecorder.start(
+        const RecordConfig(
+          encoder: AudioEncoder.aacLc,
+          bitRate: 128000,
+          sampleRate: 44100,
+        ),
         path: path,
-        encoder: AudioEncoder.aacLc,
-        bitRate: 128000,
-        samplingRate: 44100,
       );
     } catch (e) {
       print('Failed to start audio recording: $e');
