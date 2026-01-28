@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:hugeicons/hugeicons.dart';
 
 import 'package:ren/shared/widgets/glass_overlays.dart';
 import 'package:ren/shared/widgets/glass_surface.dart';
@@ -57,7 +58,11 @@ Future<void> showChatAttachMenu(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
                     ChatAttachOption(
-                      icon: Icons.photo_library_outlined,
+                      icon: HugeIcon(
+                        icon: HugeIcons.strokeRoundedAlbum01,
+                        color: theme.colorScheme.primary,
+                        size: 28,
+                      ),
                       label: 'Фото',
                       onTap: () async {
                         Navigator.of(ctx).pop();
@@ -67,7 +72,11 @@ Future<void> showChatAttachMenu(
                     ),
 
                     ChatAttachOption(
-                      icon: Icons.insert_drive_file_outlined,
+                      icon: HugeIcon(
+                        icon: HugeIcons.strokeRoundedFileEmpty02,
+                        color: theme.colorScheme.primary,
+                        size: 28,
+                      ),
                       label: 'Файл',
                       onTap: () async {
                         Navigator.of(ctx).pop();
@@ -78,7 +87,11 @@ Future<void> showChatAttachMenu(
 
                     // Example: add a third quick action (camera)
                     ChatAttachOption(
-                      icon: Icons.camera_alt_outlined,
+                      icon: HugeIcon(
+                        icon: HugeIcons.strokeRoundedCamera01,
+                        color: theme.colorScheme.primary,
+                        size: 28,
+                      ),
                       label: 'Камера',
                       onTap: () async {
                         Navigator.of(ctx).pop();
@@ -124,7 +137,7 @@ Future<void> showChatAttachMenu(
 }
 
 class ChatAttachOption extends StatelessWidget {
-  final IconData icon;
+  final HugeIcon icon;
   final String label;
   final VoidCallback onTap;
 
@@ -156,7 +169,7 @@ class ChatAttachOption extends StatelessWidget {
                 CircleAvatar(
                   radius: 28,
                   backgroundColor: theme.colorScheme.primary.withOpacity(0.12),
-                  child: Icon(icon, size: 28, color: theme.colorScheme.primary),
+                  child: HugeIcon(icon: icon.icon, color: icon.color, size: 28),
                 ),
                 const SizedBox(height: 8),
                 Text(

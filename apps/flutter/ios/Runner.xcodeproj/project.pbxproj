@@ -494,6 +494,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
+				DEAD_CODE_STRIPPING = NO;
 				DEVELOPMENT_TEAM = JP8C9427LV;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = Runner/Info.plist;
@@ -503,8 +504,7 @@
 				);
 				OTHER_LDFLAGS = (
 					"$(inherited)",
-					"-Wl,-force_load",
-					"$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a",
+					"-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = taiidzy.ren;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -691,8 +691,7 @@
 				);
 				OTHER_LDFLAGS = (
 					"$(inherited)",
-					"-Wl,-force_load",
-					"$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a",
+					"-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = taiidzy.ren;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -710,6 +709,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CLANG_ENABLE_MODULES = YES;
 				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
+				DEAD_CODE_STRIPPING = NO;
 				DEVELOPMENT_TEAM = JP8C9427LV;
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = Runner/Info.plist;
@@ -719,8 +719,7 @@
 				);
 				OTHER_LDFLAGS = (
 					"$(inherited)",
-					"-Wl,-force_load",
-					"$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a",
+					"-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = taiidzy.ren;
 				PRODUCT_NAME = "$(TARGET_NAME)";

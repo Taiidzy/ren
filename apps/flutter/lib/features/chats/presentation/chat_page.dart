@@ -1222,7 +1222,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin {
                               });
                             },
                             child: AnimatedScale(
-                              scale: pressed ? 0.985 : (selected ? 1.3 : 1.0),
+                              scale: pressed ? 0.985 : (selected ? 1.05 : 1.0),
                               duration: const Duration(milliseconds: 110),
                               curve: Curves.easeOut,
                               child: Stack(
