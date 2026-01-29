@@ -30,7 +30,98 @@ class ChatsRepository {
   final Map<int, Uint8List> _ciphertextMemoryCache = <int, Uint8List>{};
   final Map<int, Future<Uint8List>> _ciphertextInFlight = <int, Future<Uint8List>>{};
 
+  Directory? _tempDirCache;
+  Future<Directory>? _tempDirInFlight;
+
+  Directory? _ciphertextCacheDirCache;
+  Future<Directory>? _ciphertextCacheDirInFlight;
+
+  int? _myUserIdCache;
+  String? _myPrivateKeyB64Cache;
+  String? _myPublicKeyB64Cache;
+  final Map<int, String> _peerPublicKeyB64Cache = <int, String>{};
+
   ChatsRepository(this.api, this.renSdk);
+
+  Future<Directory> _getTempDir() async {
+    final cached = _tempDirCache;
+    if (cached != null) return cached;
+    final inflight = _tempDirInFlight;
+    if (inflight != null) return inflight;
+    final future = getTemporaryDirectory().then((d) {
+      _tempDirCache = d;
+      return d;
+    });
+    _tempDirInFlight = future;
+    try {
+      return await future;
+    } finally {
+      _tempDirInFlight = null;
+    }
+  }
+
+  Future<Directory> _getCiphertextCacheDir() async {
+    final cached = _ciphertextCacheDirCache;
+    if (cached != null) return cached;
+    final inflight = _ciphertextCacheDirInFlight;
+    if (inflight != null) return inflight;
+    final future = () async {
+      final dir = await _getTempDir();
+      final cacheDir = Directory('${dir.path}/ren_ciphertext_cache');
+      if (!await cacheDir.exists()) {
+        await cacheDir.create(recursive: true);
+      }
+      _ciphertextCacheDirCache = cacheDir;
+      return cacheDir;
+    }();
+    _ciphertextCacheDirInFlight = future;
+    try {
+      return await future;
+    } finally {
+      _ciphertextCacheDirInFlight = null;
+    }
+  }
+
+  Future<int> _getMyUserId() async {
+    final cached = _myUserIdCache;
+    if (cached != null && cached > 0) return cached;
+    final myUserIdStr = await SecureStorage.readKey(Keys.UserId);
+    final myUserId = int.tryParse(myUserIdStr ?? '') ?? 0;
+    _myUserIdCache = myUserId;
+    return myUserId;
+  }
+
+  Future<String?> _getMyPrivateKeyB64() async {
+    final cached = _myPrivateKeyB64Cache;
+    if (cached != null && cached.trim().isNotEmpty) return cached;
+    final v = await SecureStorage.readKey(Keys.PrivateKey);
+    final trimmed = v?.trim();
+    if (trimmed != null && trimmed.isNotEmpty) {
+      _myPrivateKeyB64Cache = trimmed;
+    }
+    return trimmed;
+  }
+
+  Future<String?> _getMyPublicKeyB64() async {
+    final cached = _myPublicKeyB64Cache;
+    if (cached != null && cached.trim().isNotEmpty) return cached;
+    final v = await SecureStorage.readKey(Keys.PublicKey);
+    final trimmed = v?.trim();
+    if (trimmed != null && trimmed.isNotEmpty) {
+      _myPublicKeyB64Cache = trimmed;
+    }
+    return trimmed;
+  }
+
+  Future<String> _getPeerPublicKeyB64(int peerId) async {
+    final cached = _peerPublicKeyB64Cache[peerId];
+    if (cached != null && cached.isNotEmpty) return cached;
+    final v = (await api.getPublicKey(peerId)).trim();
+    if (v.isNotEmpty) {
+      _peerPublicKeyB64Cache[peerId] = v;
+    }
+    return v;
+  }
 
   Future<Uint8List> _getCiphertextBytes(int fileId) async {
     final cached = _ciphertextMemoryCache[fileId];
@@ -44,11 +135,7 @@ class ChatsRepository {
     }
 
     final future = () async {
-      final dir = await getTemporaryDirectory();
-      final cacheDir = Directory('${dir.path}/ren_ciphertext_cache');
-      if (!await cacheDir.exists()) {
-        await cacheDir.create(recursive: true);
-      }
+      final cacheDir = await _getCiphertextCacheDir();
       final cacheFile = File('${cacheDir.path}/$fileId.bin');
 
       if (await cacheFile.exists()) {
@@ -60,7 +147,7 @@ class ChatsRepository {
       final bytes = await api.downloadMedia(fileId);
       _ciphertextMemoryCache[fileId] = bytes;
       try {
-        await cacheFile.writeAsBytes(bytes, flush: true);
+        await cacheFile.writeAsBytes(bytes);
       } catch (_) {
         // ignore cache write errors
       }
@@ -168,10 +255,8 @@ class ChatsRepository {
       afterId: afterId,
     );
 
-    final myUserIdStr = await SecureStorage.readKey(Keys.UserId);
-    final myUserId = int.tryParse(myUserIdStr ?? '') ?? 0;
-
-    final privateKey = await SecureStorage.readKey(Keys.PrivateKey);
+    final myUserId = await _getMyUserId();
+    final privateKey = await _getMyPrivateKeyB64();
 
     final out = <ChatMessage>[];
 
@@ -229,10 +314,19 @@ class ChatsRepository {
     final key = msgKeyB64?.trim();
     if (key == null || key.isEmpty) return const [];
 
-    final out = <ChatAttachment>[];
+    Uint8List keyBytes;
+    try {
+      keyBytes = base64Decode(key);
+    } catch (_) {
+      return const [];
+    }
 
-    for (final item in metadata) {
-      if (item is! Map) continue;
+    final dir = await _getTempDir();
+    final outByIndex = List<ChatAttachment?>.filled(metadata.length, null);
+
+    Future<void> processAt(int index) async {
+      final item = metadata[index];
+      if (item is! Map) return;
       final m = item.cast<String, dynamic>();
       final fileIdDyn = m['file_id'];
       final encFile = (m['enc_file'] as String?)?.trim();
@@ -244,12 +338,12 @@ class ChatsRepository {
           : int.tryParse('${m['size']}') ?? 0;
 
       if (nonce == null || nonce.isEmpty) {
-        continue;
+        return;
       }
 
+      Uint8List? ciphertextBytes;
       String? ciphertextB64;
 
-      // New mode: ciphertext stored on server, referenced by file_id
       int? fileId;
       if (fileIdDyn is int) {
         fileId = fileIdDyn;
@@ -258,42 +352,55 @@ class ChatsRepository {
       }
       if (fileId != null && fileId > 0) {
         try {
-          final ciphertextBytes = await _getCiphertextBytes(fileId);
-          ciphertextB64 = base64Encode(ciphertextBytes);
+          ciphertextBytes = await _getCiphertextBytes(fileId);
         } catch (e) {
           debugPrint('download media failed fileId=$fileId err=$e');
-          continue;
+          return;
         }
       } else if (encFile != null && encFile.isNotEmpty) {
-        // Legacy mode: ciphertext inline in metadata
         ciphertextB64 = encFile;
       }
 
-      if (ciphertextB64 == null || ciphertextB64.isEmpty) {
-        continue;
-      }
+      final bytes = (ciphertextBytes != null)
+          ? await renSdk.decryptFileBytesRawWithKeyBytes(ciphertextBytes, nonce, keyBytes)
+          : (ciphertextB64 != null && ciphertextB64.isNotEmpty)
+              ? await renSdk.decryptFileBytes(ciphertextB64, nonce, key)
+              : null;
+      if (bytes == null) return;
 
-      final bytes = await renSdk.decryptFileBytes(ciphertextB64, nonce, key);
-      if (bytes == null) continue;
-
-      final dir = await getTemporaryDirectory();
       final safeName = filename.isNotEmpty
           ? filename
           : 'file_${DateTime.now().millisecondsSinceEpoch}';
       final path = '${dir.path}/$safeName';
       final f = File(path);
-      await f.writeAsBytes(bytes, flush: true);
+      await f.writeAsBytes(bytes);
 
-      out.add(
-        ChatAttachment(
-          localPath: path,
-          filename: filename,
-          mimetype: mimetype,
-          size: size,
-        ),
+      outByIndex[index] = ChatAttachment(
+        localPath: path,
+        filename: filename,
+        mimetype: mimetype,
+        size: size,
       );
     }
 
+    const maxConcurrent = 3;
+    final inFlight = <Future<void>>[];
+
+    for (var i = 0; i < metadata.length; i++) {
+      inFlight.add(processAt(i));
+      if (inFlight.length >= maxConcurrent) {
+        await Future.wait(inFlight);
+        inFlight.clear();
+      }
+    }
+    if (inFlight.isNotEmpty) {
+      await Future.wait(inFlight);
+    }
+
+    final out = <ChatAttachment>[];
+    for (final a in outByIndex) {
+      if (a != null) out.add(a);
+    }
     return out;
   }
 
@@ -348,12 +455,13 @@ class ChatsRepository {
       return (text: '[encrypted]', key: null);
     }
 
-    final msgKey = renSdk.unwrapSymmetricKey(wrapped, eph, wrapNonce, priv);
-    if (msgKey == null) {
+    final msgKeyBytes = renSdk.unwrapSymmetricKeyBytes(wrapped, eph, wrapNonce, priv);
+    if (msgKeyBytes == null || msgKeyBytes.isEmpty) {
       return (text: '[encrypted]', key: null);
     }
 
-    final decrypted = renSdk.decryptMessage(ciphertext, nonce, msgKey);
+    final msgKey = base64Encode(msgKeyBytes);
+    final decrypted = renSdk.decryptMessageWithKeyBytes(ciphertext, nonce, msgKeyBytes);
     if (decrypted == null) {
       debugPrint('decrypt: decryptMessage failed');
     }
@@ -375,8 +483,7 @@ class ChatsRepository {
   }
 
   Future<ChatPreview> createPrivateChat(int peerId) async {
-    final myUserIdStr = await SecureStorage.readKey(Keys.UserId);
-    final myUserId = int.tryParse(myUserIdStr ?? '') ?? 0;
+    final myUserId = await _getMyUserId();
 
     final json = await api.createChat(
       kind: 'private',
@@ -412,10 +519,9 @@ class ChatsRepository {
     required int peerId,
     required String plaintext,
   }) async {
-    final myUserIdStr = await SecureStorage.readKey(Keys.UserId);
-    final myUserId = int.tryParse(myUserIdStr ?? '') ?? 0;
-    final myPrivateKeyB64 = (await SecureStorage.readKey(Keys.PrivateKey))?.trim();
-    final myPublicKeyB64 = (await SecureStorage.readKey(Keys.PublicKey))?.trim();
+    final myUserId = await _getMyUserId();
+    final myPrivateKeyB64 = await _getMyPrivateKeyB64();
+    final myPublicKeyB64 = await _getMyPublicKeyB64();
 
     if (myUserId == 0) {
       throw Exception('Не найден userId');
@@ -427,7 +533,7 @@ class ChatsRepository {
       throw Exception('Не найден публичный ключ');
     }
 
-    final peerPublicKeyB64 = (await api.getPublicKey(peerId)).trim();
+    final peerPublicKeyB64 = await _getPeerPublicKeyB64(peerId);
 
     final msgKeyB64 = renSdk.generateMessageKey().trim();
     final enc = renSdk.encryptMessage(plaintext, msgKeyB64);
@@ -495,10 +601,9 @@ class ChatsRepository {
     required String mimetype,
     required String caption,
   }) async {
-    final myUserIdStr = await SecureStorage.readKey(Keys.UserId);
-    final myUserId = int.tryParse(myUserIdStr ?? '') ?? 0;
-    final myPrivateKeyB64 = (await SecureStorage.readKey(Keys.PrivateKey))?.trim();
-    final myPublicKeyB64 = (await SecureStorage.readKey(Keys.PublicKey))?.trim();
+    final myUserId = await _getMyUserId();
+    final myPrivateKeyB64 = await _getMyPrivateKeyB64();
+    final myPublicKeyB64 = await _getMyPublicKeyB64();
 
     if (myUserId == 0) {
       throw Exception('Не найден userId');
@@ -510,7 +615,7 @@ class ChatsRepository {
       throw Exception('Не найден публичный ключ');
     }
 
-    final peerPublicKeyB64 = (await api.getPublicKey(peerId)).trim();
+    final peerPublicKeyB64 = await _getPeerPublicKeyB64(peerId);
 
     final msgKeyB64 = renSdk.generateMessageKey().trim();
     final encMsg = renSdk.encryptMessage(caption, msgKeyB64);
@@ -599,18 +704,17 @@ class ChatsRepository {
       throw Exception('Некорректный peerId');
     }
 
-    final myIdStr = await SecureStorage.readKey(Keys.UserId);
-    final myId = int.tryParse(myIdStr ?? '') ?? 0;
+    final myId = await _getMyUserId();
     if (myId <= 0) {
       throw Exception('Не удалось определить userId');
     }
 
-    final myPublicKeyB64 = (await SecureStorage.readKey(Keys.PublicKey))?.trim();
+    final myPublicKeyB64 = await _getMyPublicKeyB64();
     if (myPublicKeyB64 == null || myPublicKeyB64.isEmpty) {
       throw Exception('Отсутствует публичный ключ');
     }
 
-    final peerPublicKeyB64 = (await api.getPublicKey(peerId)).trim();
+    final peerPublicKeyB64 = await _getPeerPublicKeyB64(peerId);
 
     final msgKeyB64 = renSdk.generateMessageKey().trim();
 
@@ -696,9 +800,8 @@ class ChatsRepository {
   Future<String> decryptIncomingWsMessage({
     required Map<String, dynamic> message,
   }) async {
-    final myUserIdStr = await SecureStorage.readKey(Keys.UserId);
-    final myUserId = int.tryParse(myUserIdStr ?? '') ?? 0;
-    final myPrivateKeyB64 = await SecureStorage.readKey(Keys.PrivateKey);
+    final myUserId = await _getMyUserId();
+    final myPrivateKeyB64 = await _getMyPrivateKeyB64();
 
     final encrypted = message['message'] as String? ?? '';
     final envelopes = message['envelopes'];
@@ -716,9 +819,8 @@ class ChatsRepository {
   Future<({String text, List<ChatAttachment> attachments})> decryptIncomingWsMessageFull({
     required Map<String, dynamic> message,
   }) async {
-    final myUserIdStr = await SecureStorage.readKey(Keys.UserId);
-    final myUserId = int.tryParse(myUserIdStr ?? '') ?? 0;
-    final myPrivateKeyB64 = await SecureStorage.readKey(Keys.PrivateKey);
+    final myUserId = await _getMyUserId();
+    final myPrivateKeyB64 = await _getMyPrivateKeyB64();
 
     final encrypted = message['message'] as String? ?? '';
     final envelopes = message['envelopes'];

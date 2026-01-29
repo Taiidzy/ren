@@ -156,6 +156,13 @@ typedef ren_encrypt_message_native =
 typedef ren_decrypt_message_native =
     Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
 
+typedef ren_decrypt_message_with_key_bytes_native = Pointer<Utf8> Function(
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Uint8>,
+  IntPtr,
+);
+
 // file encrypt/decrypt
 typedef ren_encrypt_file_native =
     RenEncryptedFile Function(
@@ -172,6 +179,23 @@ typedef ren_decrypt_file_native = Pointer<Uint8> Function(
   Pointer<IntPtr>,
 );
 
+typedef ren_decrypt_file_raw_native = Pointer<Uint8> Function(
+  Pointer<Uint8>,
+  IntPtr,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<IntPtr>,
+);
+
+typedef ren_decrypt_file_raw_with_key_bytes_native = Pointer<Uint8> Function(
+  Pointer<Uint8>,
+  IntPtr,
+  Pointer<Utf8>,
+  Pointer<Uint8>,
+  IntPtr,
+  Pointer<IntPtr>,
+);
+
 // wrap / unwrap
 typedef ren_wrap_symmetric_key_native =
     RenWrappedKey Function(Pointer<Utf8>, Pointer<Utf8>);
@@ -182,6 +206,14 @@ typedef ren_unwrap_symmetric_key_native =
       Pointer<Utf8>,
       Pointer<Utf8>,
     );
+
+typedef ren_unwrap_symmetric_key_bytes_native = Pointer<Uint8> Function(
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<IntPtr>,
+);
 
 // --- Dart-side typedefs (для lookupFunction second generic) ---
 typedef ren_free_string_dart = void Function(Pointer<Utf8>);
@@ -208,6 +240,13 @@ typedef ren_encrypt_message_dart =
     RenEncryptedMessage Function(Pointer<Utf8>, Pointer<Utf8>);
 typedef ren_decrypt_message_dart =
     Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
+
+typedef ren_decrypt_message_with_key_bytes_dart = Pointer<Utf8> Function(
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Uint8>,
+  int,
+);
 typedef ren_encrypt_file_dart =
     RenEncryptedFile Function(
       Pointer<Uint8>,
@@ -222,6 +261,23 @@ typedef ren_decrypt_file_dart = Pointer<Uint8> Function(
   Pointer<Utf8>,
   Pointer<IntPtr>,
 );
+
+typedef ren_decrypt_file_raw_dart = Pointer<Uint8> Function(
+  Pointer<Uint8>,
+  int,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<IntPtr>,
+);
+
+typedef ren_decrypt_file_raw_with_key_bytes_dart = Pointer<Uint8> Function(
+  Pointer<Uint8>,
+  int,
+  Pointer<Utf8>,
+  Pointer<Uint8>,
+  int,
+  Pointer<IntPtr>,
+);
 typedef ren_wrap_symmetric_key_dart =
     RenWrappedKey Function(Pointer<Utf8>, Pointer<Utf8>);
 typedef ren_unwrap_symmetric_key_dart =
@@ -231,6 +287,14 @@ typedef ren_unwrap_symmetric_key_dart =
       Pointer<Utf8>,
       Pointer<Utf8>,
     );
+
+typedef ren_unwrap_symmetric_key_bytes_dart = Pointer<Uint8> Function(
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<IntPtr>,
+);
 
 // ==============================
 // Lookup native functions
@@ -316,6 +380,12 @@ final _ren_decrypt_message = _dylib
       'ren_decrypt_message',
     );
 
+final _ren_decrypt_message_with_key_bytes = _dylib.lookupFunction<
+    ren_decrypt_message_with_key_bytes_native,
+    ren_decrypt_message_with_key_bytes_dart>(
+  'ren_decrypt_message_with_key_bytes',
+);
+
 final _ren_encrypt_file = _dylib
     .lookupFunction<ren_encrypt_file_native, ren_encrypt_file_dart>(
       'ren_encrypt_file',
@@ -324,6 +394,17 @@ final _ren_decrypt_file = _dylib
     .lookupFunction<ren_decrypt_file_native, ren_decrypt_file_dart>(
       'ren_decrypt_file',
     );
+
+final _ren_decrypt_file_raw = _dylib
+    .lookupFunction<ren_decrypt_file_raw_native, ren_decrypt_file_raw_dart>(
+  'ren_decrypt_file_raw',
+);
+
+final _ren_decrypt_file_raw_with_key_bytes = _dylib.lookupFunction<
+    ren_decrypt_file_raw_with_key_bytes_native,
+    ren_decrypt_file_raw_with_key_bytes_dart>(
+  'ren_decrypt_file_raw_with_key_bytes',
+);
 
 final _ren_wrap_symmetric_key = _dylib
     .lookupFunction<ren_wrap_symmetric_key_native, ren_wrap_symmetric_key_dart>(
@@ -334,6 +415,12 @@ final _ren_unwrap_symmetric_key = _dylib
       ren_unwrap_symmetric_key_native,
       ren_unwrap_symmetric_key_dart
     >('ren_unwrap_symmetric_key');
+
+final _ren_unwrap_symmetric_key_bytes = _dylib.lookupFunction<
+    ren_unwrap_symmetric_key_bytes_native,
+    ren_unwrap_symmetric_key_bytes_dart>(
+  'ren_unwrap_symmetric_key_bytes',
+);
 
 // ==============================
 // High-level Dart wrapper
@@ -357,6 +444,86 @@ class RenSdk {
     }
     try {
       _initialized = true;
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  Uint8List? unwrapSymmetricKeyBytes(
+    String wrappedB64,
+    String ephemeralPublicKeyB64,
+    String nonceB64,
+    String receiverPrivateKeyB64,
+  ) {
+    try {
+      return using((arena) {
+        final pw = wrappedB64.toNativeUtf8(allocator: arena);
+        final peph = ephemeralPublicKeyB64.toNativeUtf8(allocator: arena);
+        final pn = nonceB64.toNativeUtf8(allocator: arena);
+        final pr = receiverPrivateKeyB64.toNativeUtf8(allocator: arena);
+        final outLenPtr = arena.allocate<IntPtr>(sizeOf<IntPtr>());
+
+        final dataPtr = _ren_unwrap_symmetric_key_bytes(
+          pw,
+          peph,
+          pn,
+          pr,
+          outLenPtr,
+        );
+        if (dataPtr == nullptr) {
+          return null;
+        }
+
+        final len = outLenPtr.value;
+        final dataList = dataPtr.asTypedList(len);
+        final out = Uint8List.fromList(dataList);
+        ren_free_bytes(dataPtr, len);
+        return out;
+      });
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  Future<Uint8List?> decryptFileBytesRawWithKeyBytes(
+    Uint8List ciphertextBytes,
+    String nonceB64,
+    Uint8List keyBytes,
+  ) async {
+    try {
+      if (ciphertextBytes.isEmpty || keyBytes.isEmpty) {
+        return null;
+      }
+
+      return using((arena) {
+        final ctPtr = arena.allocate<Uint8>(ciphertextBytes.length);
+        ctPtr.asTypedList(ciphertextBytes.length).setAll(0, ciphertextBytes);
+
+        final kPtr = arena.allocate<Uint8>(keyBytes.length);
+        kPtr.asTypedList(keyBytes.length).setAll(0, keyBytes);
+
+        final pn = nonceB64.toNativeUtf8(allocator: arena);
+        final outLenPtr = arena.allocate<IntPtr>(sizeOf<IntPtr>());
+
+        final dataPtr = _ren_decrypt_file_raw_with_key_bytes(
+          ctPtr,
+          ciphertextBytes.length,
+          pn,
+          kPtr,
+          keyBytes.length,
+          outLenPtr,
+        );
+
+        if (dataPtr == nullptr) {
+          return null;
+        }
+
+        final len = outLenPtr.value;
+        final dataList = dataPtr.asTypedList(len);
+        final bytesOut = Uint8List.fromList(dataList);
+        ren_free_bytes(dataPtr, len);
+        return bytesOut;
+      });
     } catch (e) {
       rethrow;
     }
@@ -391,17 +558,17 @@ class RenSdk {
   /// Используйте для быстрой симметричной шифрации небольших данных.
   String? encryptData(String data, String keyB64) {
     try {
-      final pd = data.toNativeUtf8();
-      final pk = keyB64.toNativeUtf8();
-      final pres = _ren_encrypt_data(pd, pk);
-      malloc.free(pd);
-      malloc.free(pk);
-      if (pres == nullptr) {
-        return null;
-      }
-      final res = pres.toDartString();
-      ren_free_string(pres);
-      return res;
+      return using((arena) {
+        final pd = data.toNativeUtf8(allocator: arena);
+        final pk = keyB64.toNativeUtf8(allocator: arena);
+        final pres = _ren_encrypt_data(pd, pk);
+        if (pres == nullptr) {
+          return null;
+        }
+        final res = pres.toDartString();
+        ren_free_string(pres);
+        return res;
+      });
     } catch (e) {
       rethrow;
     }
@@ -411,17 +578,17 @@ class RenSdk {
   /// Возвращает исходную строку или null при ошибке/несовпадении ключа.
   String? decryptData(String b64cipher, String keyB64) {
     try {
-      final pc = b64cipher.toNativeUtf8();
-      final pk = keyB64.toNativeUtf8();
-      final pres = _ren_decrypt_data(pc, pk);
-      malloc.free(pc);
-      malloc.free(pk);
-      if (pres == nullptr) {
-        return null;
-      }
-      final res = pres.toDartString();
-      ren_free_string(pres);
-      return res;
+      return using((arena) {
+        final pc = b64cipher.toNativeUtf8(allocator: arena);
+        final pk = keyB64.toNativeUtf8(allocator: arena);
+        final pres = _ren_decrypt_data(pc, pk);
+        if (pres == nullptr) {
+          return null;
+        }
+        final res = pres.toDartString();
+        ren_free_string(pres);
+        return res;
+      });
     } catch (e) {
       rethrow;
     }
@@ -431,18 +598,18 @@ class RenSdk {
   /// Параметры: `message` (строка) и `keyB64` (симметричный ключ base64).
   Map<String, String>? encryptMessage(String message, String keyB64) {
     try {
-      final pm = message.toNativeUtf8();
-      final pk = keyB64.toNativeUtf8();
-      final resStruct = _ren_encrypt_message(pm, pk);
-      malloc.free(pm);
-      malloc.free(pk);
+      return using((arena) {
+        final pm = message.toNativeUtf8(allocator: arena);
+        final pk = keyB64.toNativeUtf8(allocator: arena);
+        final resStruct = _ren_encrypt_message(pm, pk);
 
-      if (resStruct.ciphertext == nullptr) {
-        return null;
-      }
-      final ct = _readAndFreeString(resStruct.ciphertext);
-      final nonce = _readAndFreeString(resStruct.nonce);
-      return {'ciphertext': ct, 'nonce': nonce};
+        if (resStruct.ciphertext == nullptr) {
+          return null;
+        }
+        final ct = _readAndFreeString(resStruct.ciphertext);
+        final nonce = _readAndFreeString(resStruct.nonce);
+        return {'ciphertext': ct, 'nonce': nonce};
+      });
     } catch (e) {
       rethrow;
     }
@@ -452,19 +619,50 @@ class RenSdk {
   /// Возвращает исходный текст или null при ошибке.
   String? decryptMessage(String ciphertextB64, String nonceB64, String keyB64) {
     try {
-      final pc = ciphertextB64.toNativeUtf8();
-      final pn = nonceB64.toNativeUtf8();
-      final pk = keyB64.toNativeUtf8();
-      final pres = _ren_decrypt_message(pc, pn, pk);
-      malloc.free(pc);
-      malloc.free(pn);
-      malloc.free(pk);
-      if (pres == nullptr) {
-        return null;
-      }
-      final res = pres.toDartString();
-      ren_free_string(pres);
-      return res;
+      return using((arena) {
+        final pc = ciphertextB64.toNativeUtf8(allocator: arena);
+        final pn = nonceB64.toNativeUtf8(allocator: arena);
+        final pk = keyB64.toNativeUtf8(allocator: arena);
+        final pres = _ren_decrypt_message(pc, pn, pk);
+        if (pres == nullptr) {
+          return null;
+        }
+        final res = pres.toDartString();
+        ren_free_string(pres);
+        return res;
+      });
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  String? decryptMessageWithKeyBytes(
+    String ciphertextB64,
+    String nonceB64,
+    Uint8List keyBytes,
+  ) {
+    try {
+      if (keyBytes.isEmpty) return null;
+
+      return using((arena) {
+        final pc = ciphertextB64.toNativeUtf8(allocator: arena);
+        final pn = nonceB64.toNativeUtf8(allocator: arena);
+        final kPtr = arena.allocate<Uint8>(keyBytes.length);
+        kPtr.asTypedList(keyBytes.length).setAll(0, keyBytes);
+
+        final pres = _ren_decrypt_message_with_key_bytes(
+          pc,
+          pn,
+          kPtr,
+          keyBytes.length,
+        );
+        if (pres == nullptr) {
+          return null;
+        }
+        final res = pres.toDartString();
+        ren_free_string(pres);
+        return res;
+      });
     } catch (e) {
       rethrow;
     }
@@ -480,41 +678,37 @@ class RenSdk {
     String keyB64,
   ) async {
     try {
-      final dataPtr = malloc.allocate<Uint8>(bytes.length);
-      final byteList = dataPtr.asTypedList(bytes.length);
-      byteList.setAll(0, bytes);
+      return using((arena) {
+        final dataPtr = arena.allocate<Uint8>(bytes.length);
+        dataPtr.asTypedList(bytes.length).setAll(0, bytes);
 
-      final pFilename = filename.toNativeUtf8();
-      final pMimetype = mimetype.toNativeUtf8();
-      final pKey = keyB64.toNativeUtf8();
+        final pFilename = filename.toNativeUtf8(allocator: arena);
+        final pMimetype = mimetype.toNativeUtf8(allocator: arena);
+        final pKey = keyB64.toNativeUtf8(allocator: arena);
 
-      final res = _ren_encrypt_file(
-        dataPtr,
-        bytes.length,
-        pFilename,
-        pMimetype,
-        pKey,
-      );
+        final res = _ren_encrypt_file(
+          dataPtr,
+          bytes.length,
+          pFilename,
+          pMimetype,
+          pKey,
+        );
 
-      malloc.free(dataPtr);
-      malloc.free(pFilename);
-      malloc.free(pMimetype);
-      malloc.free(pKey);
+        if (res.ciphertext == nullptr) {
+          return null;
+        }
+        final ciphertext = _readAndFreeString(res.ciphertext);
+        final nonce = _readAndFreeString(res.nonce);
+        final fname = _readAndFreeString(res.filename);
+        final mime = _readAndFreeString(res.mimetype);
 
-      if (res.ciphertext == nullptr) {
-        return null;
-      }
-      final ciphertext = _readAndFreeString(res.ciphertext);
-      final nonce = _readAndFreeString(res.nonce);
-      final fname = _readAndFreeString(res.filename);
-      final mime = _readAndFreeString(res.mimetype);
-
-      return {
-        'ciphertext': ciphertext,
-        'nonce': nonce,
-        'filename': fname,
-        'mimetype': mime,
-      };
+        return {
+          'ciphertext': ciphertext,
+          'nonce': nonce,
+          'filename': fname,
+          'mimetype': mime,
+        };
+      });
     } catch (e) {
       rethrow;
     }
@@ -528,29 +722,64 @@ class RenSdk {
     String keyB64,
   ) async {
     try {
-      final pc = ciphertextB64.toNativeUtf8();
-      final pn = nonceB64.toNativeUtf8();
-      final pk = keyB64.toNativeUtf8();
-      final outLenPtr = malloc.allocate<IntPtr>(sizeOf<IntPtr>());
+      return using((arena) {
+        final pc = ciphertextB64.toNativeUtf8(allocator: arena);
+        final pn = nonceB64.toNativeUtf8(allocator: arena);
+        final pk = keyB64.toNativeUtf8(allocator: arena);
+        final outLenPtr = arena.allocate<IntPtr>(sizeOf<IntPtr>());
 
-      final dataPtr = _ren_decrypt_file(pc, pn, pk, outLenPtr);
+        final dataPtr = _ren_decrypt_file(pc, pn, pk, outLenPtr);
+        if (dataPtr == nullptr) {
+          return null;
+        }
 
-      malloc.free(pc);
-      malloc.free(pn);
-      malloc.free(pk);
+        final len = outLenPtr.value;
+        final dataList = dataPtr.asTypedList(len);
+        final bytesOut = Uint8List.fromList(dataList);
+        ren_free_bytes(dataPtr, len);
+        return bytesOut;
+      });
+    } catch (e) {
+      rethrow;
+    }
+  }
 
-      if (dataPtr == nullptr) {
-        malloc.free(outLenPtr);
+  Future<Uint8List?> decryptFileBytesRaw(
+    Uint8List ciphertextBytes,
+    String nonceB64,
+    String keyB64,
+  ) async {
+    try {
+      if (ciphertextBytes.isEmpty) {
         return null;
       }
 
-      final len = outLenPtr.value;
-      malloc.free(outLenPtr);
+      return using((arena) {
+        final ctPtr = arena.allocate<Uint8>(ciphertextBytes.length);
+        ctPtr.asTypedList(ciphertextBytes.length).setAll(0, ciphertextBytes);
 
-      final dataList = dataPtr.asTypedList(len);
-      final bytesOut = Uint8List.fromList(dataList);
-      ren_free_bytes(dataPtr, len);
-      return bytesOut;
+        final pn = nonceB64.toNativeUtf8(allocator: arena);
+        final pk = keyB64.toNativeUtf8(allocator: arena);
+        final outLenPtr = arena.allocate<IntPtr>(sizeOf<IntPtr>());
+
+        final dataPtr = _ren_decrypt_file_raw(
+          ctPtr,
+          ciphertextBytes.length,
+          pn,
+          pk,
+          outLenPtr,
+        );
+
+        if (dataPtr == nullptr) {
+          return null;
+        }
+
+        final len = outLenPtr.value;
+        final dataList = dataPtr.asTypedList(len);
+        final bytesOut = Uint8List.fromList(dataList);
+        ren_free_bytes(dataPtr, len);
+        return bytesOut;
+      });
     } catch (e) {
       rethrow;
     }
@@ -563,18 +792,18 @@ class RenSdk {
     String receiverPublicKeyB64,
   ) {
     try {
-      final pKey = keyB64.toNativeUtf8();
-      final pRecv = receiverPublicKeyB64.toNativeUtf8();
-      final res = _ren_wrap_symmetric_key(pKey, pRecv);
-      malloc.free(pKey);
-      malloc.free(pRecv);
-      if (res.wrapped_key == nullptr) {
-        return null;
-      }
-      final wrapped = _readAndFreeString(res.wrapped_key);
-      final eph = _readAndFreeString(res.ephemeral_public_key);
-      final nonce = _readAndFreeString(res.nonce);
-      return {'wrapped': wrapped, 'ephemeral_public_key': eph, 'nonce': nonce};
+      return using((arena) {
+        final pKey = keyB64.toNativeUtf8(allocator: arena);
+        final pRecv = receiverPublicKeyB64.toNativeUtf8(allocator: arena);
+        final res = _ren_wrap_symmetric_key(pKey, pRecv);
+        if (res.wrapped_key == nullptr) {
+          return null;
+        }
+        final wrapped = _readAndFreeString(res.wrapped_key);
+        final eph = _readAndFreeString(res.ephemeral_public_key);
+        final nonce = _readAndFreeString(res.nonce);
+        return {'wrapped': wrapped, 'ephemeral_public_key': eph, 'nonce': nonce};
+      });
     } catch (e) {
       rethrow;
     }
@@ -590,21 +819,19 @@ class RenSdk {
     String receiverPrivateKeyB64,
   ) {
     try {
-      final pw = wrappedB64.toNativeUtf8();
-      final peph = ephemeralPublicKeyB64.toNativeUtf8();
-      final pn = nonceB64.toNativeUtf8();
-      final pr = receiverPrivateKeyB64.toNativeUtf8();
-      final pres = _ren_unwrap_symmetric_key(pw, peph, pn, pr);
-      malloc.free(pw);
-      malloc.free(peph);
-      malloc.free(pn);
-      malloc.free(pr);
-      if (pres == nullptr) {
-        return null;
-      }
-      final k = pres.toDartString();
-      ren_free_string(pres);
-      return k;
+      return using((arena) {
+        final pw = wrappedB64.toNativeUtf8(allocator: arena);
+        final peph = ephemeralPublicKeyB64.toNativeUtf8(allocator: arena);
+        final pn = nonceB64.toNativeUtf8(allocator: arena);
+        final pr = receiverPrivateKeyB64.toNativeUtf8(allocator: arena);
+        final pres = _ren_unwrap_symmetric_key(pw, peph, pn, pr);
+        if (pres == nullptr) {
+          return null;
+        }
+        final k = pres.toDartString();
+        ren_free_string(pres);
+        return k;
+      });
     } catch (e) {
       rethrow;
     }
@@ -678,13 +905,13 @@ class RenSdk {
   /// Параметры: password и salt (строки), результат — base64-ключ.
   String deriveKeyFromPassword(String password, String salt) {
     try {
-      final pp = password.toNativeUtf8();
-      final ps = salt.toNativeUtf8();
-      final pOut = _ren_derive_key_from_password(pp, ps);
-      malloc.free(pp);
-      malloc.free(ps);
-      final out = readAndFreeString(pOut);
-      return out;
+      return using((arena) {
+        final pp = password.toNativeUtf8(allocator: arena);
+        final ps = salt.toNativeUtf8(allocator: arena);
+        final pOut = _ren_derive_key_from_password(pp, ps);
+        final out = readAndFreeString(pOut);
+        return out;
+      });
     } catch (e) {
       rethrow;
     }
@@ -694,11 +921,12 @@ class RenSdk {
   /// Параметр: input (строка), результат — base64-ключ.
   String deriveKeyFromString(String input) {
     try {
-      final pi = input.toNativeUtf8();
-      final pOut = _ren_derive_key_from_string(pi);
-      malloc.free(pi);
-      final out = readAndFreeString(pOut);
-      return out;
+      return using((arena) {
+        final pi = input.toNativeUtf8(allocator: arena);
+        final pOut = _ren_derive_key_from_string(pi);
+        final out = readAndFreeString(pOut);
+        return out;
+      });
     } catch (e) {
       rethrow;
     }

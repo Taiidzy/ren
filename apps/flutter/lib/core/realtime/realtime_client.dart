@@ -9,6 +9,16 @@ import 'package:ren/core/constants/api_url.dart';
 import 'package:ren/core/constants/keys.dart';
 import 'package:ren/core/secure/secure_storage.dart';
 
+Future<Map<String, dynamic>?> _decodeWsEventJson(String raw) async {
+  try {
+    final json = jsonDecode(raw);
+    if (json is Map<String, dynamic>) return json;
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
 class RealtimeEvent {
   final String type;
   final Map<String, dynamic> data;
@@ -61,16 +71,18 @@ class RealtimeClient {
     _channel = ch;
 
     _sub = ch.stream.listen(
-      (event) {
-        if (event is String) {
-          try {
-            final json = jsonDecode(event);
-            if (json is Map<String, dynamic>) {
-              _events.add(RealtimeEvent.fromJson(json));
-            }
-          } catch (_) {
-            // ignore non-json
-          }
+      (event) async {
+        if (event is! String) return;
+
+        Map<String, dynamic>? json;
+        if (!kIsWeb && event.length > 4096) {
+          json = await compute(_decodeWsEventJson, event);
+        } else {
+          json = await _decodeWsEventJson(event);
+        }
+
+        if (json != null) {
+          _events.add(RealtimeEvent.fromJson(json));
         }
       },
       onError: (e) {

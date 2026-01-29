@@ -109,6 +109,111 @@ flutter pub get
 flutter run
 ```
 
+### 🧰 Скрипты запуска и сборки (рекомендуется)
+
+В репозитории есть набор скриптов в `./scripts/`, которые:
+- не зависят от того, из какой директории вы их запускаете (автоматически находят корень репо),
+- умеют опционально собирать `Ren-SDK` перед запуском/сборкой,
+- дают единый интерфейс для `ios/macos/windows/linux`.
+
+Важно:
+- **iOS и macOS можно запускать/собирать только на macOS**.
+- **Windows и Linux обычно требуют соответствующую ОС** (на macOS скрипт предупредит, но Flutter чаще всего не соберёт/не запустит).
+
+#### `./scripts/run.sh` — запуск приложения
+
+Синтаксис:
+```bash
+./scripts/run.sh <ios|macos|windows|linux> [options] [-- <extra flutter args>]
+```
+
+Параметры:
+- `--sdk`
+  - Собрать `Ren-SDK` перед запуском.
+  - Вызовет `./Ren-SDK/build.sh <platform>`.
+  - Для `ios` дополнительно скопирует `Ren-SDK/target/RenSDK.xcframework` в `apps/flutter/ios/RenSDK.xcframework`.
+- `--debug`
+  - Запуск в debug режиме.
+  - **Режим по умолчанию**.
+- `--release`
+  - Запуск в release режиме (`flutter run --release`).
+- `--device <id>`
+  - Пробросит `-d <id>` в `flutter run`.
+  - Полезно, если нужно выбрать конкретный симулятор/устройство.
+  - Если не указано:
+    - для `macos/windows/linux` будет использовано `-d <platform>`,
+    - для `ios` `-d` не задаётся (Flutter сам предложит/выберет устройство).
+- `-- <extra flutter args>`
+  - Всё, что идёт после `--`, будет передано в `flutter run` как есть.
+
+Примеры:
+```bash
+./scripts/run.sh ios --sdk
+./scripts/run.sh ios --device "00008110-0012345678901234"
+./scripts/run.sh macos
+./scripts/run.sh linux --release
+./scripts/run.sh windows -- --verbose
+```
+
+#### `./scripts/build.sh` — сборка приложения
+
+Синтаксис:
+```bash
+./scripts/build.sh <ios|macos|windows|linux> [options] [-- <extra flutter args>]
+```
+
+Параметры:
+- `--sdk`
+  - Собрать `Ren-SDK` перед сборкой.
+  - Для `ios` дополнительно скопирует `Ren-SDK/target/RenSDK.xcframework` в `apps/flutter/ios/RenSDK.xcframework`.
+- `--release`
+  - Release сборка.
+  - **Режим по умолчанию**.
+- `--debug`
+  - Debug сборка.
+- `--no-codesign` (только iOS)
+  - Добавит `--no-codesign` к `flutter build ios`.
+  - Удобно для сборки без настроенных signing-профилей.
+- `--ipa` (только iOS)
+  - Вместо `flutter build ios` вызовет `flutter build ipa`.
+  - Артефакт будет в `apps/flutter/build/ios/ipa`.
+- `--output <dir>`
+  - Скопирует получившийся артефакт(ы) в указанную директорию.
+  - Пример: `--output dist/`.
+- `-- <extra flutter args>`
+  - Всё, что идёт после `--`, будет передано в `flutter build ...` как есть.
+
+Типовые команды:
+```bash
+./scripts/build.sh ios --sdk --no-codesign
+./scripts/build.sh ios --ipa
+./scripts/build.sh macos --release --output dist/
+./scripts/build.sh linux --debug
+./scripts/build.sh windows --release
+```
+
+Пути артефактов (по умолчанию, без `--output`):
+- **iOS**:
+  - `flutter build ios`: `apps/flutter/build/ios/iphoneos`
+  - `flutter build ipa`: `apps/flutter/build/ios/ipa`
+- **macOS**: `apps/flutter/build/macos/Build/Products/Release` или `.../Debug`
+- **Windows**: `apps/flutter/build/windows/x64/runner/Release` или `.../Debug`
+- **Linux**: `apps/flutter/build/linux/x64/release/bundle` или `.../debug/bundle`
+
+#### Алиасы
+
+Для удобства есть короткие алиасы, которые просто прокидывают аргументы в основные скрипты:
+- Запуск:
+  - `./scripts/run-ios.sh ...`
+  - `./scripts/run-macos.sh ...`
+  - `./scripts/run-windows.sh ...`
+  - `./scripts/run-linux.sh ...`
+- Сборка:
+  - `./scripts/build-ios.sh ...`
+  - `./scripts/build-macos.sh ...`
+  - `./scripts/build-windows.sh ...`
+  - `./scripts/build-linux.sh ...`
+
 5. **Запуск веб-приложения**
 ```bash
 cd ../frontend

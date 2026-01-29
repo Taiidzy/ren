@@ -15,6 +15,9 @@ build_ios() {
 
     echo -e "${YELLOW}Building for iOS (XCFramework)...${NC}"
 
+    mkdir -p target/ios-headers
+    cp target/ren_sdk.h target/ios-headers/ren_sdk.h
+
     rustup target add \
         aarch64-apple-ios \
         aarch64-apple-ios-sim \
@@ -44,9 +47,9 @@ build_ios() {
 
     xcodebuild -create-xcframework \
         -library target/aarch64-apple-ios/release/libren_sdk.a \
-        -headers target \
+        -headers target/ios-headers \
         -library target/ios-sim/libren_sdk.a \
-        -headers target \
+        -headers target/ios-headers \
         -output target/RenSDK.xcframework
 
     echo -e "${GREEN}✓ iOS XCFramework created cleanly${NC}\n"

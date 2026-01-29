@@ -81,6 +81,8 @@ class _ChatInputBarState extends State<ChatInputBar> {
 
   VoidCallback? _controllerListener;
 
+  bool _lastShowSendButton = false;
+
 
   RecorderMode _activeRecordingMode = RecorderMode.audio;
 
@@ -202,8 +204,14 @@ class _ChatInputBarState extends State<ChatInputBar> {
   @override
   void initState() {
     super.initState();
+    _lastShowSendButton = _showSendButton;
     _controllerListener = () {
       if (!mounted) return;
+      final next = _showSendButton;
+      if (next == _lastShowSendButton) {
+        return;
+      }
+      _lastShowSendButton = next;
       setState(() {});
     };
     widget.controller.addListener(_controllerListener!);
@@ -223,6 +231,14 @@ class _ChatInputBarState extends State<ChatInputBar> {
     if (oldWidget.controller != widget.controller && _controllerListener != null) {
       oldWidget.controller.removeListener(_controllerListener!);
       widget.controller.addListener(_controllerListener!);
+    }
+
+    if (oldWidget.pending.length != widget.pending.length) {
+      final next = _showSendButton;
+      if (next != _lastShowSendButton && mounted) {
+        _lastShowSendButton = next;
+        setState(() {});
+      }
     }
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
