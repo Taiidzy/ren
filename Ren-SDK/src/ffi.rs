@@ -4,7 +4,7 @@ use std::ptr;
 
 use crate::crypto::{
     decrypt_data, decrypt_file, decrypt_file_with_message, decrypt_message,
-    derive_key_from_password, derive_key_from_string, encrypt_data, encrypt_file,
+    decrypt_file_raw, derive_key_from_password, derive_key_from_string, encrypt_data, encrypt_file,
     encrypt_file_with_message, encrypt_message, export_private_key_b64, export_public_key_b64,
     generate_key_pair, generate_message_encryption_key, generate_nonce, generate_salt,
     import_private_key_b64, import_public_key_b64, unwrap_symmetric_key, wrap_symmetric_key,
@@ -14,11 +14,11 @@ use crate::crypto::{
 // Helper functions для работы со строками C
 // ============================================================================
 
-fn c_str_to_rust(c_str: *const c_char) -> Option<String> {
+fn c_str_to_str<'a>(c_str: *const c_char) -> Option<&'a str> {
     if c_str.is_null() {
         return None;
     }
-    unsafe { CStr::from_ptr(c_str).to_str().ok().map(|s| s.to_string()) }
+    unsafe { CStr::from_ptr(c_str).to_str().ok() }
 }
 
 fn rust_str_to_c(s: String) -> *mut c_char {
@@ -162,11 +162,11 @@ pub extern "C" fn ren_derive_key_from_password(
     password: *const c_char,
     salt_b64: *const c_char,
 ) -> *mut c_char {
-    let pwd = match c_str_to_rust(password) {
+    let pwd = match c_str_to_str(password) {
         Some(s) => s,
         None => return ptr::null_mut(),
     };
-    let salt = match c_str_to_rust(salt_b64) {
+    let salt = match c_str_to_str(salt_b64) {
         Some(s) => s,
         None => return ptr::null_mut(),
     };
@@ -182,7 +182,7 @@ pub extern "C" fn ren_derive_key_from_password(
 
 #[no_mangle]
 pub extern "C" fn ren_derive_key_from_string(secret: *const c_char) -> *mut c_char {
-    let s = match c_str_to_rust(secret) {
+    let s = match c_str_to_str(secret) {
         Some(s) => s,
         None => return ptr::null_mut(),
     };
@@ -202,11 +202,11 @@ pub extern "C" fn ren_derive_key_from_string(secret: *const c_char) -> *mut c_ch
 
 #[no_mangle]
 pub extern "C" fn ren_encrypt_data(data: *const c_char, key_b64: *const c_char) -> *mut c_char {
-    let data_str = match c_str_to_rust(data) {
+    let data_str = match c_str_to_str(data) {
         Some(s) => s,
         None => return ptr::null_mut(),
     };
-    let key_str = match c_str_to_rust(key_b64) {
+    let key_str = match c_str_to_str(key_b64) {
         Some(s) => s,
         None => return ptr::null_mut(),
     };
@@ -231,11 +231,11 @@ pub extern "C" fn ren_decrypt_data(
     encrypted_b64: *const c_char,
     key_b64: *const c_char,
 ) -> *mut c_char {
-    let enc_str = match c_str_to_rust(encrypted_b64) {
+    let enc_str = match c_str_to_str(encrypted_b64) {
         Some(s) => s,
         None => return ptr::null_mut(),
     };
-    let key_str = match c_str_to_rust(key_b64) {
+    let key_str = match c_str_to_str(key_b64) {
         Some(s) => s,
         None => return ptr::null_mut(),
     };
@@ -264,7 +264,7 @@ pub extern "C" fn ren_encrypt_message(
     message: *const c_char,
     key_b64: *const c_char,
 ) -> RenEncryptedMessage {
-    let msg = match c_str_to_rust(message) {
+    let msg = match c_str_to_str(message) {
         Some(s) => s,
         None => {
             return RenEncryptedMessage {
@@ -273,7 +273,7 @@ pub extern "C" fn ren_encrypt_message(
             }
         }
     };
-    let key_str = match c_str_to_rust(key_b64) {
+    let key_str = match c_str_to_str(key_b64) {
         Some(s) => s,
         None => {
             return RenEncryptedMessage {
@@ -320,15 +320,15 @@ pub extern "C" fn ren_decrypt_message(
     nonce_b64: *const c_char,
     key_b64: *const c_char,
 ) -> *mut c_char {
-    let ct = match c_str_to_rust(ciphertext_b64) {
+    let ct = match c_str_to_str(ciphertext_b64) {
         Some(s) => s,
         None => return ptr::null_mut(),
     };
-    let nonce = match c_str_to_rust(nonce_b64) {
+    let nonce = match c_str_to_str(nonce_b64) {
         Some(s) => s,
         None => return ptr::null_mut(),
     };
-    let key_str = match c_str_to_rust(key_b64) {
+    let key_str = match c_str_to_str(key_b64) {
         Some(s) => s,
         None => return ptr::null_mut(),
     };
@@ -338,6 +338,38 @@ pub extern "C" fn ren_decrypt_message(
         Err(_) => return ptr::null_mut(),
     };
     let key = match crate::crypto::types::AeadKey::from_bytes(&key_bytes) {
+        Ok(k) => k,
+        Err(_) => return ptr::null_mut(),
+    };
+
+    match decrypt_message(&ct, &nonce, &key) {
+        Ok(msg) => rust_str_to_c(msg),
+        Err(_) => ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn ren_decrypt_message_with_key_bytes(
+    ciphertext_b64: *const c_char,
+    nonce_b64: *const c_char,
+    key_ptr: *const u8,
+    key_len: usize,
+) -> *mut c_char {
+    if key_ptr.is_null() {
+        return ptr::null_mut();
+    }
+
+    let ct = match c_str_to_str(ciphertext_b64) {
+        Some(s) => s,
+        None => return ptr::null_mut(),
+    };
+    let nonce = match c_str_to_str(nonce_b64) {
+        Some(s) => s,
+        None => return ptr::null_mut(),
+    };
+
+    let key_bytes = unsafe { std::slice::from_raw_parts(key_ptr, key_len) };
+    let key = match crate::crypto::types::AeadKey::from_bytes(key_bytes) {
         Ok(k) => k,
         Err(_) => return ptr::null_mut(),
     };
@@ -370,9 +402,9 @@ pub extern "C" fn ren_encrypt_file(
     }
 
     let bytes = unsafe { std::slice::from_raw_parts(data, len) };
-    let fname = c_str_to_rust(filename).unwrap_or_default();
-    let mime = c_str_to_rust(mimetype).unwrap_or_default();
-    let key_str = match c_str_to_rust(key_b64) {
+    let fname = c_str_to_str(filename).unwrap_or("");
+    let mime = c_str_to_str(mimetype).unwrap_or("");
+    let key_str = match c_str_to_str(key_b64) {
         Some(s) => s,
         None => {
             return RenEncryptedFile {
@@ -434,15 +466,15 @@ pub extern "C" fn ren_decrypt_file(
         return ptr::null_mut();
     }
 
-    let ct = match c_str_to_rust(ciphertext_b64) {
+    let ct = match c_str_to_str(ciphertext_b64) {
         Some(s) => s,
         None => return ptr::null_mut(),
     };
-    let nonce = match c_str_to_rust(nonce_b64) {
+    let nonce = match c_str_to_str(nonce_b64) {
         Some(s) => s,
         None => return ptr::null_mut(),
     };
-    let key_str = match c_str_to_rust(key_b64) {
+    let key_str = match c_str_to_str(key_b64) {
         Some(s) => s,
         None => return ptr::null_mut(),
     };
@@ -460,7 +492,103 @@ pub extern "C" fn ren_decrypt_file(
         Ok(bytes) => {
             let len = bytes.len();
             let mut v = bytes;
-            v.shrink_to_fit();
+            let ptr = v.as_mut_ptr();
+            std::mem::forget(v);
+            unsafe {
+                *out_len = len;
+            }
+            ptr
+        }
+        Err(_) => ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn ren_decrypt_file_raw(
+    ciphertext_ptr: *const u8,
+    ciphertext_len: usize,
+    nonce_b64: *const c_char,
+    key_b64: *const c_char,
+    out_len: *mut usize,
+) -> *mut u8 {
+    if out_len.is_null() {
+        return ptr::null_mut();
+    }
+    if ciphertext_ptr.is_null() {
+        return ptr::null_mut();
+    }
+
+    let nonce = match c_str_to_str(nonce_b64) {
+        Some(s) => s,
+        None => return ptr::null_mut(),
+    };
+    let key_str = match c_str_to_str(key_b64) {
+        Some(s) => s,
+        None => return ptr::null_mut(),
+    };
+
+    let key_bytes = match base64::decode(&key_str) {
+        Ok(b) => b,
+        Err(_) => return ptr::null_mut(),
+    };
+    let key = match crate::crypto::types::AeadKey::from_bytes(&key_bytes) {
+        Ok(k) => k,
+        Err(_) => return ptr::null_mut(),
+    };
+
+    let ct = unsafe { std::slice::from_raw_parts(ciphertext_ptr, ciphertext_len) };
+
+    match decrypt_file_raw(ct, &nonce, &key) {
+        Ok(bytes) => {
+            let len = bytes.len();
+            let mut v = bytes;
+            let ptr = v.as_mut_ptr();
+            std::mem::forget(v);
+            unsafe {
+                *out_len = len;
+            }
+            ptr
+        }
+        Err(_) => ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn ren_decrypt_file_raw_with_key_bytes(
+    ciphertext_ptr: *const u8,
+    ciphertext_len: usize,
+    nonce_b64: *const c_char,
+    key_ptr: *const u8,
+    key_len: usize,
+    out_len: *mut usize,
+) -> *mut u8 {
+    if out_len.is_null() {
+        return ptr::null_mut();
+    }
+    if ciphertext_ptr.is_null() {
+        return ptr::null_mut();
+    }
+    if key_ptr.is_null() {
+        return ptr::null_mut();
+    }
+
+    let nonce = match c_str_to_str(nonce_b64) {
+        Some(s) => s,
+        None => return ptr::null_mut(),
+    };
+
+    let key_bytes = unsafe { std::slice::from_raw_parts(key_ptr, key_len) };
+    let key = match crate::crypto::types::AeadKey::from_bytes(key_bytes) {
+        Ok(k) => k,
+        Err(_) => return ptr::null_mut(),
+    };
+
+    let ct = unsafe { std::slice::from_raw_parts(ciphertext_ptr, ciphertext_len) };
+
+    match decrypt_file_raw(ct, &nonce, &key) {
+        Ok(bytes) => {
+            let len = bytes.len();
+            let mut v = bytes;
             let ptr = v.as_mut_ptr();
             std::mem::forget(v);
             unsafe {
@@ -481,7 +609,7 @@ pub extern "C" fn ren_wrap_symmetric_key(
     key_b64: *const c_char,
     receiver_public_key_b64: *const c_char,
 ) -> RenWrappedKey {
-    let key_str = match c_str_to_rust(key_b64) {
+    let key_str = match c_str_to_str(key_b64) {
         Some(s) => s,
         None => {
             return RenWrappedKey {
@@ -491,7 +619,7 @@ pub extern "C" fn ren_wrap_symmetric_key(
             }
         }
     };
-    let recv_pk = match c_str_to_rust(receiver_public_key_b64) {
+    let recv_pk = match c_str_to_str(receiver_public_key_b64) {
         Some(s) => s,
         None => {
             return RenWrappedKey {
@@ -544,19 +672,19 @@ pub extern "C" fn ren_unwrap_symmetric_key(
     nonce_b64: *const c_char,
     receiver_private_key_b64: *const c_char,
 ) -> *mut c_char {
-    let wrapped = match c_str_to_rust(wrapped_key_b64) {
+    let wrapped = match c_str_to_str(wrapped_key_b64) {
         Some(s) => s,
         None => return ptr::null_mut(),
     };
-    let eph_pk = match c_str_to_rust(ephemeral_public_key_b64) {
+    let eph_pk = match c_str_to_str(ephemeral_public_key_b64) {
         Some(s) => s,
         None => return ptr::null_mut(),
     };
-    let nonce = match c_str_to_rust(nonce_b64) {
+    let nonce = match c_str_to_str(nonce_b64) {
         Some(s) => s,
         None => return ptr::null_mut(),
     };
-    let recv_sk = match c_str_to_rust(receiver_private_key_b64) {
+    let recv_sk = match c_str_to_str(receiver_private_key_b64) {
         Some(s) => s,
         None => return ptr::null_mut(),
     };
@@ -565,6 +693,51 @@ pub extern "C" fn ren_unwrap_symmetric_key(
         Ok(key) => {
             let bytes = key.to_bytes();
             rust_str_to_c(base64::encode(&bytes))
+        }
+        Err(_) => ptr::null_mut(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn ren_unwrap_symmetric_key_bytes(
+    wrapped_key_b64: *const c_char,
+    ephemeral_public_key_b64: *const c_char,
+    nonce_b64: *const c_char,
+    receiver_private_key_b64: *const c_char,
+    out_len: *mut usize,
+) -> *mut u8 {
+    if out_len.is_null() {
+        return ptr::null_mut();
+    }
+
+    let wrapped = match c_str_to_str(wrapped_key_b64) {
+        Some(s) => s,
+        None => return ptr::null_mut(),
+    };
+    let eph_pk = match c_str_to_str(ephemeral_public_key_b64) {
+        Some(s) => s,
+        None => return ptr::null_mut(),
+    };
+    let nonce = match c_str_to_str(nonce_b64) {
+        Some(s) => s,
+        None => return ptr::null_mut(),
+    };
+    let recv_sk = match c_str_to_str(receiver_private_key_b64) {
+        Some(s) => s,
+        None => return ptr::null_mut(),
+    };
+
+    match unwrap_symmetric_key(&wrapped, &eph_pk, &nonce, &recv_sk) {
+        Ok(key) => {
+            let bytes = key.to_bytes();
+            let mut v = bytes.to_vec();
+            let len = v.len();
+            let ptr = v.as_mut_ptr();
+            std::mem::forget(v);
+            unsafe {
+                *out_len = len;
+            }
+            ptr
         }
         Err(_) => ptr::null_mut(),
     }

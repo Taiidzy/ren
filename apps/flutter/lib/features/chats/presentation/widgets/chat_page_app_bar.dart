@@ -121,16 +121,18 @@ class ChatPageAppBar extends StatelessWidget implements PreferredSizeWidget {
       actions: [
         if (selectionMode) ...[
           IconButton(
-            icon: Icon(
-              Icons.share_outlined,
+            icon: HugeIcon(
+              icon: HugeIcons.strokeRoundedArrowTurnForward,
               color: theme.colorScheme.onSurface,
+              size: 24.0,
             ),
             onPressed: selectedCount == 0 ? null : onShareSelected,
           ),
           IconButton(
-            icon: Icon(
-              Icons.delete_outline,
-              color: theme.colorScheme.onSurface,
+            icon: HugeIcon(
+              icon: HugeIcons.strokeRoundedDelete01,
+              color: theme.colorScheme.error,
+              size: 24.0,
             ),
             onPressed: selectedCount == 0 ? null : onDeleteSelected,
           ),

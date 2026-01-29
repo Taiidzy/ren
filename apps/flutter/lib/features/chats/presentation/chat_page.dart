@@ -1,13 +1,17 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
+import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:hugeicons/hugeicons.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:mime/mime.dart';
 import 'package:flutter/services.dart';
+import 'package:camera/camera.dart';
 
 import 'package:ren/core/constants/keys.dart';
 import 'package:ren/core/secure/secure_storage.dart';
@@ -27,6 +31,9 @@ import 'package:ren/features/chats/presentation/widgets/chat_message_bubble.dart
 import 'package:ren/features/chats/presentation/widgets/chat_page_app_bar.dart';
 import 'package:ren/features/chats/presentation/widgets/chat_pending_attachment.dart';
 import 'package:ren/features/chats/presentation/widgets/chat_skeleton_message_bubble.dart';
+import 'package:ren/features/chats/presentation/widgets/chat_recorder_ui.dart';
+import 'package:ren/features/chats/presentation/widgets/voice_message_bubble.dart';
+import 'package:ren/features/chats/presentation/widgets/square_video_bubble.dart';
 
 class ChatPage extends StatefulWidget {
   final ChatPreview chat;
@@ -37,7 +44,7 @@ class ChatPage extends StatefulWidget {
   State<ChatPage> createState() => _ChatPageState();
 }
 
-class _ChatPageState extends State<ChatPage> {
+class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, WidgetsBindingObserver {
   final _controller = TextEditingController();
   final _focusNode = FocusNode();
   final _scrollController = ScrollController();
@@ -50,10 +57,10 @@ class _ChatPageState extends State<ChatPage> {
   ChatMessage? _replyTo;
   ChatMessage? _editing;
 
-  String? _pressedMessageId;
+  final ValueNotifier<String?> _pressedMessageIdN = ValueNotifier<String?>(null);
 
-  bool _selectionMode = false;
-  final Set<String> _selectedMessageIds = {};
+  final ValueNotifier<bool> _selectionModeN = ValueNotifier<bool>(false);
+  final ValueNotifier<Set<String>> _selectedMessageIdsN = ValueNotifier<Set<String>>(<String>{});
 
   final _picker = ImagePicker();
 
@@ -67,6 +74,8 @@ class _ChatPageState extends State<ChatPage> {
 
   bool _isAtBottom = true;
 
+  int _scrollToBottomRequestId = 0;
+
   double _lastViewInsetsBottom = 0;
 
   RealtimeClient? _rt;
@@ -74,10 +83,55 @@ class _ChatPageState extends State<ChatPage> {
 
   Timer? _loadOlderDebounce;
 
+  bool _showVideoRecordingOverlay = false;
+  String _videoRecordingDurationText = '0:00';
+  bool _videoFlashEnabled = false;
+  bool _videoUseFrontCamera = false;
+  bool _videoRecordingLocked = false;
+  CameraController? _videoCameraController;
+  Future<bool> Function(bool enabled)? _setVideoTorch;
+  Future<bool> Function(bool useFront)? _setVideoUseFrontCamera;
+  VoidCallback? _cancelVideoRecording;
+  VoidCallback? _stopVideoRecording;
+  late final AnimationController _videoProgressController;
+  late final AnimationController _videoLockedTransition;
+  late final AnimationController _videoPulse;
+
+  void _setVideoRecordingOverlay({required bool show}) {
+    if (!mounted) return;
+    setState(() {
+      _showVideoRecordingOverlay = show;
+      if (!show) {
+        _videoRecordingDurationText = '0:00';
+        _videoFlashEnabled = false;
+        _videoUseFrontCamera = false;
+        _videoRecordingLocked = false;
+        _videoCameraController = null;
+      }
+    });
+
+    if (show) {
+      _videoProgressController
+        ..reset()
+        ..forward();
+    } else {
+      _videoProgressController
+        ..stop()
+        ..reset();
+    }
+
+    if (!show) {
+      _videoLockedTransition
+        ..stop()
+        ..value = 0;
+    }
+  }
+
   void _reindexMessages() {
-    _messageById
-      ..clear()
-      ..addEntries(_messages.map((m) => MapEntry(m.id, m)));
+    _messageById.clear();
+    for (final m in _messages) {
+      _messageById[m.id] = m;
+    }
   }
 
   String _messageSummary(ChatMessage m) {
@@ -87,10 +141,26 @@ class _ChatPageState extends State<ChatPage> {
       final a = m.attachments.first;
       if (a.isImage) return 'Фото';
       if (a.isVideo) return 'Видео';
+      if (a.mimetype.startsWith('audio/')) return 'Голосовое сообщение';
       final name = a.filename.trim();
       return name.isNotEmpty ? name : 'Файл';
     }
     return '';
+  }
+
+  bool _isVoiceMessage(ChatMessage msg) {
+    if (msg.attachments.length != 1) return false;
+    final att = msg.attachments.first;
+    return att.mimetype.startsWith('audio/');
+  }
+
+  bool _isSquareVideoMessage(ChatMessage msg) {
+    if (msg.attachments.length != 1) return false;
+    final att = msg.attachments.first;
+    if (!att.mimetype.startsWith('video/')) return false;
+    // Проверяем, что это квадратик по имени файла (начинается с video_)
+    final filename = att.filename.toLowerCase();
+    return filename.startsWith('video_') || filename.startsWith('square_');
   }
 
   Future<void> _ensureWsReady(int chatId) async {
@@ -107,9 +177,92 @@ class _ChatPageState extends State<ChatPage> {
     return _messageById[id];
   }
 
+  String _formatTime(DateTime dt) {
+    final local = dt.toLocal();
+    final h = local.hour.toString().padLeft(2, '0');
+    final m = local.minute.toString().padLeft(2, '0');
+    return '$h:$m';
+  }
+
+  Widget _buildMessageBubble({
+    required ChatMessage msg,
+    required String? replyPreview,
+    required bool isDark,
+  }) {
+    if (_isVoiceMessage(msg)) {
+      final audioPath = msg.attachments.first.localPath;
+      return VoiceMessageBubble(
+        audioPath: audioPath,
+        timeLabel: _formatTime(msg.sentAt),
+        isMe: msg.isMe,
+        isDark: isDark,
+      );
+    }
+
+    if (_isSquareVideoMessage(msg)) {
+      final videoPath = msg.attachments.first.localPath;
+      return SquareVideoBubble(
+        videoPath: videoPath,
+        timeLabel: _formatTime(msg.sentAt),
+        isMe: msg.isMe,
+        isDark: isDark,
+      );
+    }
+
+    return ChatMessageBubble(
+      replyPreview: (replyPreview != null && replyPreview.isNotEmpty) ? replyPreview : null,
+      text: msg.text,
+      attachments: msg.attachments,
+      timeLabel: _formatTime(msg.sentAt),
+      isMe: msg.isMe,
+      isDark: isDark,
+      onOpenAttachment: (a) => _openAttachmentSheet(a),
+    );
+  }
+
+  List<ChatAttachment> _allChatAttachments() {
+    final out = <ChatAttachment>[];
+    for (final m in _messages) {
+      if (m.attachments.isEmpty) continue;
+      out.addAll(m.attachments);
+    }
+    return out;
+  }
+
+  Future<void> _openAttachmentSheet(ChatAttachment tapped) async {
+    final items = _allChatAttachments();
+    if (items.isEmpty) return;
+
+    final initial = items.indexWhere((a) => a.localPath == tapped.localPath);
+    final initialIndex = (initial >= 0) ? initial : 0;
+
+    await GlassOverlays.showGlassBottomSheet<void>(
+      context,
+      builder: (ctx) {
+        return ChatAttachmentViewerSheet(
+          items: items,
+          initialIndex: initialIndex,
+        );
+      },
+    );
+  }
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _videoProgressController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 60),
+    );
+    _videoLockedTransition = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 320),
+    );
+    _videoPulse = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 920),
+    )..repeat();
     _peerOnline = widget.chat.user.isOnline;
     _controller.addListener(_onTextChanged);
     _focusNode.addListener(_onFocusChanged);
@@ -117,17 +270,35 @@ class _ChatPageState extends State<ChatPage> {
     _init();
   }
 
+  @override
+  void didChangeMetrics() {
+    final view = WidgetsBinding.instance.platformDispatcher.views.first;
+    final bottom = view.viewInsets.bottom / view.devicePixelRatio;
+    if (_focusNode.hasFocus && _isAtBottom && bottom != _lastViewInsetsBottom) {
+      _lastViewInsetsBottom = bottom;
+      _scheduleScrollToBottom(animated: false);
+    } else {
+      _lastViewInsetsBottom = bottom;
+    }
+  }
+
   void _scheduleScrollToBottom({required bool animated}) {
+    _scrollToBottomRequestId++;
+    final reqId = _scrollToBottomRequestId;
+
     // Scroll can be requested before ListView reports correct maxScrollExtent.
     // Retry a few times after layout to ensure we end up at the bottom.
     void attempt(int left) {
+      if (reqId != _scrollToBottomRequestId) return;
       _scrollToBottom(animated: animated);
       if (left <= 0) return;
 
       Future.delayed(const Duration(milliseconds: 60), () {
         if (!mounted) return;
+        if (reqId != _scrollToBottomRequestId) return;
         if (!_scrollController.hasClients) return;
         final pos = _scrollController.position;
+        if (pos.isScrollingNotifier.value) return;
         final dist = pos.maxScrollExtent - pos.pixels;
         if (dist > 8) {
           attempt(left - 1);
@@ -190,10 +361,9 @@ class _ChatPageState extends State<ChatPage> {
         return;
       }
 
-      final existingIds = _messages.map((e) => e.id).toSet();
       final toAdd = <ChatMessage>[];
       for (final m in list) {
-        if (!existingIds.contains(m.id)) {
+        if (!_messageById.containsKey(m.id)) {
           toAdd.add(m);
         }
       }
@@ -244,6 +414,7 @@ class _ChatPageState extends State<ChatPage> {
       if (!mounted) return;
       if (!_scrollController.hasClients) return;
       final pos = _scrollController.position;
+      if (pos.isScrollingNotifier.value) return;
       final target = pos.maxScrollExtent;
       if (animated) {
         _scrollController.animateTo(
@@ -369,10 +540,16 @@ class _ChatPageState extends State<ChatPage> {
 
         if (!mounted) return;
         setState(() {
-          final idx = _messages.indexWhere((x) => x.id == incomingId);
+          var idx = -1;
+          for (var i = _messages.length - 1; i >= 0; i--) {
+            if (_messages[i].id == incomingId) {
+              idx = i;
+              break;
+            }
+          }
           if (idx < 0) return;
           final old = _messages[idx];
-          _messages[idx] = ChatMessage(
+          final updated = ChatMessage(
             id: old.id,
             chatId: old.chatId,
             isMe: old.isMe,
@@ -382,7 +559,8 @@ class _ChatPageState extends State<ChatPage> {
             replyToMessageId: old.replyToMessageId,
           );
 
-          _reindexMessages();
+          _messages[idx] = updated;
+          _messageById[incomingId] = updated;
 
           if (_editing?.id == incomingId) {
             _editing = null;
@@ -401,13 +579,22 @@ class _ChatPageState extends State<ChatPage> {
 
         if (!mounted) return;
         setState(() {
-          _messages.removeWhere((m) => m.id == messageId.toString());
-          _reindexMessages();
-          _selectedMessageIds.removeWhere((id) => id == messageId.toString());
-          if (_selectedMessageIds.isEmpty) {
-            _selectionMode = false;
+          final idStr = messageId.toString();
+
+          for (var i = _messages.length - 1; i >= 0; i--) {
+            if (_messages[i].id == idStr) {
+              _messages.removeAt(i);
+            }
           }
-          if (_replyTo?.id == messageId.toString()) {
+
+          _messageById.remove(idStr);
+          final nextSelected = Set<String>.from(_selectedMessageIdsN.value);
+          nextSelected.removeWhere((id) => id == idStr);
+          _selectedMessageIdsN.value = nextSelected;
+          if (nextSelected.isEmpty) {
+            _selectionModeN.value = false;
+          }
+          if (_replyTo?.id == idStr) {
             _replyTo = null;
           }
         });
@@ -444,12 +631,16 @@ class _ChatPageState extends State<ChatPage> {
               ),
             );
 
-      debugPrint('WS message keys: ${m.keys.toList()}');
-      final encPreview = (m['message'] is String)
-          ? (m['message'] as String)
-          : (m['body'] is String ? (m['body'] as String) : '');
-      if (encPreview.isNotEmpty) {
-        debugPrint('WS message encrypted preview: ${encPreview.substring(0, encPreview.length > 200 ? 200 : encPreview.length)}');
+      if (kDebugMode) {
+        debugPrint('WS message keys: ${m.keys.toList()}');
+        final encPreview = (m['message'] is String)
+            ? (m['message'] as String)
+            : (m['body'] is String ? (m['body'] as String) : '');
+        if (encPreview.isNotEmpty) {
+          debugPrint(
+            'WS message encrypted preview: ${encPreview.substring(0, encPreview.length > 200 ? 200 : encPreview.length)}',
+          );
+        }
       }
 
       final decoded = await repo.decryptIncomingWsMessageFull(message: m);
@@ -468,12 +659,16 @@ class _ChatPageState extends State<ChatPage> {
       final myId = _myUserId ?? 0;
       final isMe = (myId > 0) ? senderId == myId : senderId != peerId;
 
-      debugPrint('WS message_new chat=$chatId sender=$senderId my=$myId peer=$peerId isMe=$isMe id=${m['id']}');
+      if (kDebugMode) {
+        debugPrint(
+          'WS message_new chat=$chatId sender=$senderId my=$myId peer=$peerId isMe=$isMe id=${m['id']}',
+        );
+      }
 
       if (!mounted) return;
       setState(() {
         final incomingId = '${m['id'] ?? ''}';
-        if (incomingId.isNotEmpty && _messages.any((x) => x.id == incomingId)) {
+        if (incomingId.isNotEmpty && _messageById.containsKey(incomingId)) {
           return;
         }
 
@@ -481,23 +676,22 @@ class _ChatPageState extends State<ChatPage> {
         if (isMe && _messages.isNotEmpty) {
           final last = _messages.last;
           if (last.id.startsWith('local_') && last.text == decoded.text) {
-            _messages.removeLast();
+            final removed = _messages.removeLast();
+            _messageById.remove(removed.id);
           }
         }
 
-        _messages.add(
-          ChatMessage(
-            id: '${m['id'] ?? DateTime.now().millisecondsSinceEpoch}',
-            chatId: chatId.toString(),
-            isMe: isMe,
-            text: decoded.text,
-            attachments: decoded.attachments,
-            sentAt: createdAt,
-            replyToMessageId: (replyId != null && replyId > 0) ? replyId.toString() : null,
-          ),
+        final created = ChatMessage(
+          id: '${m['id'] ?? DateTime.now().millisecondsSinceEpoch}',
+          chatId: chatId.toString(),
+          isMe: isMe,
+          text: decoded.text,
+          attachments: decoded.attachments,
+          sentAt: createdAt,
+          replyToMessageId: (replyId != null && replyId > 0) ? replyId.toString() : null,
         );
-
-        _reindexMessages();
+        _messages.add(created);
+        _messageById[created.id] = created;
       });
 
       if (isMe || _isAtBottom) {
@@ -650,6 +844,17 @@ class _ChatPageState extends State<ChatPage> {
             plaintext: text,
           );
 
+    String wsType = 'send_message';
+    if (hasAttachments) {
+      final hasAudio = pendingCopy.any((p) => p.mimetype.toLowerCase().startsWith('audio/'));
+      final hasVideo = pendingCopy.any((p) => p.mimetype.toLowerCase().startsWith('video/'));
+      if (hasAudio && !hasVideo) {
+        wsType = 'voce_message';
+      } else if (hasVideo && !hasAudio) {
+        wsType = 'video_message';
+      }
+    }
+
     if (!rt.isConnected) {
       await rt.connect();
     }
@@ -658,6 +863,145 @@ class _ChatPageState extends State<ChatPage> {
     rt.sendMessage(
       chatId: chatId,
       message: payload['message'] as String,
+      wsType: wsType,
+      messageType: payload['message_type'] as String?,
+      envelopes: payload['envelopes'] as Map<String, dynamic>?,
+      metadata: payload['metadata'] as List<dynamic>?,
+      replyToMessageId: replyTo == null ? null : int.tryParse(replyTo.id),
+    );
+  }
+
+  Future<void> _sendRecordedVoice(PendingChatAttachment attachment) async {
+    final chatId = int.tryParse(widget.chat.id) ?? 0;
+    final peerId = widget.chat.peerId ?? 0;
+    if (chatId <= 0 || peerId <= 0) return;
+
+    final repo = context.read<ChatsRepository>();
+
+    // optimistic attachment preview
+    final dir = await getTemporaryDirectory();
+    final safeName = attachment.filename.isNotEmpty
+        ? attachment.filename
+        : 'voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
+    final path = '${dir.path}/$safeName';
+    final f = File(path);
+    await f.writeAsBytes(attachment.bytes, flush: true);
+
+    final replyTo = _replyTo;
+    if (mounted) {
+      setState(() {
+        _replyTo = null;
+        _messages.add(
+          ChatMessage(
+            id: 'local_${DateTime.now().millisecondsSinceEpoch}',
+            chatId: chatId.toString(),
+            isMe: true,
+            text: '',
+            attachments: [
+              ChatAttachment(
+                localPath: path,
+                filename: safeName,
+                mimetype: attachment.mimetype,
+                size: attachment.bytes.length,
+              ),
+            ],
+            sentAt: DateTime.now(),
+            replyToMessageId: replyTo?.id,
+          ),
+        );
+        _reindexMessages();
+      });
+    }
+    _scheduleScrollToBottom(animated: true);
+
+    final payload = await repo.buildEncryptedWsMediaMessage(
+      chatId: chatId,
+      peerId: peerId,
+      caption: '',
+      attachments: [
+        OutgoingAttachment(
+          bytes: attachment.bytes,
+          filename: safeName,
+          mimetype: attachment.mimetype,
+        ),
+      ],
+    );
+
+    await _ensureWsReady(chatId);
+    final rt = _rt!;
+    rt.sendMessage(
+      chatId: chatId,
+      message: payload['message'] as String,
+      wsType: 'voce_message',
+      messageType: payload['message_type'] as String?,
+      envelopes: payload['envelopes'] as Map<String, dynamic>?,
+      metadata: payload['metadata'] as List<dynamic>?,
+      replyToMessageId: replyTo == null ? null : int.tryParse(replyTo.id),
+    );
+  }
+
+  Future<void> _sendRecordedVideo(PendingChatAttachment attachment) async {
+    final chatId = int.tryParse(widget.chat.id) ?? 0;
+    final peerId = widget.chat.peerId ?? 0;
+    if (chatId <= 0 || peerId <= 0) return;
+
+    final repo = context.read<ChatsRepository>();
+
+    // optimistic attachment preview
+    final dir = await getTemporaryDirectory();
+    final safeName = attachment.filename.isNotEmpty
+        ? attachment.filename
+        : 'video_${DateTime.now().millisecondsSinceEpoch}.mp4';
+    final path = '${dir.path}/$safeName';
+    final f = File(path);
+    await f.writeAsBytes(attachment.bytes, flush: true);
+
+    final replyTo = _replyTo;
+    if (mounted) {
+      setState(() {
+        _replyTo = null;
+        _messages.add(
+          ChatMessage(
+            id: 'local_${DateTime.now().millisecondsSinceEpoch}',
+            chatId: chatId.toString(),
+            isMe: true,
+            text: '',
+            attachments: [
+              ChatAttachment(
+                localPath: path,
+                filename: safeName,
+                mimetype: attachment.mimetype,
+                size: attachment.bytes.length,
+              ),
+            ],
+            sentAt: DateTime.now(),
+            replyToMessageId: replyTo?.id,
+          ),
+        );
+        _reindexMessages();
+      });
+    }
+    _scheduleScrollToBottom(animated: true);
+
+    final payload = await repo.buildEncryptedWsMediaMessage(
+      chatId: chatId,
+      peerId: peerId,
+      caption: '',
+      attachments: [
+        OutgoingAttachment(
+          bytes: attachment.bytes,
+          filename: safeName,
+          mimetype: attachment.mimetype,
+        ),
+      ],
+    );
+
+    await _ensureWsReady(chatId);
+    final rt = _rt!;
+    rt.sendMessage(
+      chatId: chatId,
+      message: payload['message'] as String,
+      wsType: 'video_message',
       messageType: payload['message_type'] as String?,
       envelopes: payload['envelopes'] as Map<String, dynamic>?,
       metadata: payload['metadata'] as List<dynamic>?,
@@ -770,6 +1114,13 @@ class _ChatPageState extends State<ChatPage> {
   @override
   void dispose() {
     final chatId = int.tryParse(widget.chat.id) ?? 0;
+    WidgetsBinding.instance.removeObserver(this);
+    _videoProgressController.dispose();
+    _videoLockedTransition.dispose();
+    _videoPulse.dispose();
+    _pressedMessageIdN.dispose();
+    _selectionModeN.dispose();
+    _selectedMessageIdsN.dispose();
     _typingDebounce?.cancel();
     _typingDebounce = null;
     _loadOlderDebounce?.cancel();
@@ -792,208 +1143,198 @@ class _ChatPageState extends State<ChatPage> {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
+    final selectionListenable = Listenable.merge([
+      _selectionModeN,
+      _selectedMessageIdsN,
+    ]);
+
     return AppBackground(
       imageOpacity: 1,
       imageBlurSigma: 0,
       imageFit: BoxFit.cover,
       animate: true,
       animationDuration: const Duration(seconds: 20),
-      child: Scaffold(
-        resizeToAvoidBottomInset: false,
-        extendBodyBehindAppBar: true,
-        appBar: ChatPageAppBar(
-          chat: widget.chat,
-          selectionMode: _selectionMode,
-          selectedCount: _selectedMessageIds.length,
-          peerOnline: _peerOnline,
-          peerTyping: _peerTyping,
-          onBack: () {
-            if (_selectionMode) {
-              _exitSelectionMode();
-            } else {
-              Navigator.of(context).maybePop();
-            }
-          },
-          onShareSelected: () async {
-            await _forwardSelected();
-          },
-          onDeleteSelected: () {
-            final ids = Set<String>.from(_selectedMessageIds);
-            _deleteByIds(ids);
-            _deleteRemote(ids);
-          },
-          onMenu: () {},
-        ),
-        body: Builder(
-          builder: (context) {
-            final media = MediaQuery.of(context);
-            const double inputHeight = 44;
-            const double horizontalPadding = 14;
-            const double verticalPadding = 14;
+      child: AnimatedBuilder(
+        animation: selectionListenable,
+        builder: (context, child) {
+          final selectionMode = _selectionModeN.value;
+          final selectedIds = _selectedMessageIdsN.value;
+          return Scaffold(
+            resizeToAvoidBottomInset: false,
+            extendBodyBehindAppBar: true,
+            appBar: ChatPageAppBar(
+              chat: widget.chat,
+              selectionMode: selectionMode,
+              selectedCount: selectedIds.length,
+              peerOnline: _peerOnline,
+              peerTyping: _peerTyping,
+              onBack: () {
+                if (selectionMode) {
+                  _exitSelectionMode();
+                } else {
+                  Navigator.of(context).maybePop();
+                }
+              },
+              onShareSelected: () async {
+                await _forwardSelected();
+              },
+              onDeleteSelected: () {
+                final ids = Set<String>.from(selectedIds);
+                _deleteByIds(ids);
+                _deleteRemote(ids);
+              },
+              onMenu: () {},
+            ),
+            body: Builder(
+              builder: (context) {
+              final media = MediaQuery.of(context);
+              const double inputHeight = 44;
+              const double horizontalPadding = 14;
+              const double verticalPadding = 14;
 
-            final double topInset = media.padding.top;
-            // viewInsets.bottom is already applied via AnimatedPadding below.
-            final double bottomInset = media.padding.bottom;
+              final double topInset = media.padding.top;
+              // viewInsets.bottom is already applied via AnimatedPadding below.
+              final double bottomInset = media.padding.bottom;
 
-            final double listTopPadding = topInset + kToolbarHeight + 12;
-            final double listBottomPadding =
-                bottomInset + inputHeight + verticalPadding + 12;
+              final double listTopPadding = topInset + kToolbarHeight + 12;
+              final double listBottomPadding =
+                  bottomInset + media.viewInsets.bottom + inputHeight + verticalPadding + 12;
 
-            final messages = _messages;
+              final messages = _messages;
 
-            final insetsBottom = media.viewInsets.bottom;
-            if (_focusNode.hasFocus && _isAtBottom && insetsBottom != _lastViewInsetsBottom) {
-              _lastViewInsetsBottom = insetsBottom;
-              _scheduleScrollToBottom(animated: false);
-            } else {
-              _lastViewInsetsBottom = insetsBottom;
-            }
+              final replyText = _replyTo == null ? '' : _messageSummary(_replyTo!);
 
-            final replyText = _replyTo == null ? '' : _messageSummary(_replyTo!);
-
-            return Stack(
-              children: [
-                Positioned.fill(
-                  child: _loading
-                      ? ListView.separated(
-                          padding: EdgeInsets.fromLTRB(
-                            horizontalPadding,
-                            listTopPadding,
-                            horizontalPadding,
-                            listBottomPadding,
-                          ),
-                          itemCount: 10,
-                          separatorBuilder: (_, __) => const SizedBox(height: 10),
-                          itemBuilder: (context, index) {
-                            final alignRight = index.isOdd;
-                            return Align(
-                              alignment: alignRight ? Alignment.centerRight : Alignment.centerLeft,
-                              child: ChatSkeletonMessageBubble(isMe: alignRight),
-                            );
-                          },
-                        )
-                      : ListView.separated(
-                          controller: _scrollController,
-                          padding: EdgeInsets.fromLTRB(
-                            horizontalPadding,
-                            listTopPadding,
-                            horizontalPadding,
-                            listBottomPadding,
-                          ),
-                          itemCount: messages.length,
-                          separatorBuilder: (_, __) => const SizedBox(height: 10),
-                          itemBuilder: (context, index) {
-                            final msg = messages[index];
-                            final replied = _findMessageById(msg.replyToMessageId);
-                            final replyPreview = (replied == null) ? null : _messageSummary(replied).trim();
-                            final selected = _selectionMode && _selectedMessageIds.contains(msg.id);
-                            final pressed = _pressedMessageId == msg.id;
-                            return Align(
-                              alignment: msg.isMe
-                                  ? Alignment.centerRight
-                                  : Alignment.centerLeft,
-                              child: Dismissible(
-                                key: ValueKey('reply_${msg.id}'),
-                                direction: _selectionMode
-                                    ? DismissDirection.none
-                                    : (msg.isMe ? DismissDirection.endToStart : DismissDirection.startToEnd),
-                                movementDuration: const Duration(milliseconds: 260),
-                                dismissThresholds: {
-                                  DismissDirection.startToEnd: 0.22,
-                                  DismissDirection.endToStart: 0.22,
-                                },
-                                confirmDismiss: (_) async {
-                                  if (_selectionMode) return false;
-                                  HapticFeedback.selectionClick();
-                                  if (!mounted) return false;
-                                  setState(() {
-                                    _replyTo = msg;
-                                    _editing = null;
-                                  });
-                                  _focusNode.requestFocus();
-                                  return false;
-                                },
-                                background: Align(
-                                  alignment: msg.isMe ? Alignment.centerRight : Alignment.centerLeft,
-                                  child: Padding(
-                                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                                    child: Icon(
-                                      Icons.reply,
-                                      size: 18,
-                                      color: theme.colorScheme.onSurface.withOpacity(0.55),
-                                    ),
-                                  ),
+              return Stack(
+                children: [
+                  Positioned.fill(
+                    child: _loading ? ListView.separated(
+                      padding: EdgeInsets.fromLTRB(
+                        horizontalPadding,
+                        listTopPadding,
+                        horizontalPadding,
+                        listBottomPadding,
+                      ),
+                      itemCount: 10,
+                      separatorBuilder: (_, __) => const SizedBox(height: 10),
+                      itemBuilder: (context, index) {
+                        final alignRight = index.isOdd;
+                        return Align(
+                          alignment: alignRight ? Alignment.centerRight : Alignment.centerLeft,
+                          child: ChatSkeletonMessageBubble(isMe: alignRight),
+                        );
+                      },
+                    ) : ListView.separated(
+                      controller: _scrollController,
+                      padding: EdgeInsets.fromLTRB(
+                        horizontalPadding,
+                        listTopPadding,
+                        horizontalPadding,
+                        listBottomPadding,
+                      ),
+                      itemCount: messages.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 10),
+                      itemBuilder: (context, index) {
+                        final msg = messages[index];
+                        final replyToId = msg.replyToMessageId;
+                        final replied = (replyToId == null || replyToId.isEmpty)
+                            ? null
+                            : _findMessageById(replyToId);
+                        final replyPreview = (replied == null) ? null : _messageSummary(replied);
+                        final selected = selectionMode && selectedIds.contains(msg.id);
+                        return Align(
+                          alignment: msg.isMe
+                              ? Alignment.centerRight
+                              : Alignment.centerLeft,
+                          child: Dismissible(
+                            key: ValueKey('reply_${msg.id}'),
+                            direction: selectionMode
+                                ? DismissDirection.none
+                                : (msg.isMe ? DismissDirection.endToStart : DismissDirection.startToEnd),
+                            movementDuration: const Duration(milliseconds: 260),
+                            dismissThresholds: {
+                              DismissDirection.startToEnd: 0.22,
+                              DismissDirection.endToStart: 0.22,
+                            },
+                            confirmDismiss: (_) async {
+                              if (selectionMode) return false;
+                              HapticFeedback.selectionClick();
+                              if (!mounted) return false;
+                              setState(() {
+                                _replyTo = msg;
+                                _editing = null;
+                              });
+                              _focusNode.requestFocus();
+                              return false;
+                            },
+                            background: Align(
+                              alignment: msg.isMe ? Alignment.centerRight : Alignment.centerLeft,
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 12),
+                                child: Icon(
+                                  Icons.reply,
+                                  size: 18,
+                                  color: theme.colorScheme.onSurface.withOpacity(0.55),
                                 ),
-                                secondaryBackground: Align(
-                                  alignment: msg.isMe ? Alignment.centerRight : Alignment.centerLeft,
-                                  child: Padding(
-                                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                                    child: Icon(
-                                      Icons.reply,
-                                      size: 18,
-                                      color: theme.colorScheme.onSurface.withOpacity(0.55),
-                                    ),
-                                  ),
+                              ),
+                            ),
+                            secondaryBackground: Align(
+                              alignment: msg.isMe ? Alignment.centerRight : Alignment.centerLeft,
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 12),
+                                child: Icon(
+                                  Icons.reply,
+                                  size: 18,
+                                  color: theme.colorScheme.onSurface.withOpacity(0.55),
                                 ),
-                                child: GestureDetector(
-                                  onTapDown: (_) {
-                                    if (!mounted) return;
-                                    setState(() {
-                                      _pressedMessageId = msg.id;
-                                    });
-                                  },
-                                  onTapCancel: () {
-                                    if (!mounted) return;
-                                    setState(() {
-                                      if (_pressedMessageId == msg.id) {
-                                        _pressedMessageId = null;
-                                      }
-                                    });
-                                  },
-                                  onTapUp: (_) {
-                                    if (!mounted) return;
-                                    setState(() {
-                                      if (_pressedMessageId == msg.id) {
-                                        _pressedMessageId = null;
-                                      }
-                                    });
-                                  },
-                                  onTap: () {
-                                    if (_selectionMode) {
-                                      _toggleSelected(msg);
-                                    }
-                                  },
-                                  onLongPressStart: (d) async {
-                                    HapticFeedback.selectionClick();
-                                    if (mounted) {
-                                      setState(() {
-                                        _pressedMessageId = msg.id;
-                                      });
-                                    }
-                                    if (_selectionMode) {
-                                      _toggleSelected(msg);
-                                    } else {
-                                      await _showMessageContextMenu(msg, d.globalPosition);
-                                    }
+                              ),
+                            ),
+                            child: GestureDetector(
+                              onTapDown: (_) {
+                                if (!mounted) return;
+                                if (_pressedMessageIdN.value == msg.id) return;
+                                _pressedMessageIdN.value = msg.id;
+                              },
+                              onTapCancel: () {
+                                if (!mounted) return;
+                                if (_pressedMessageIdN.value != msg.id) return;
+                                _pressedMessageIdN.value = null;
+                              },
+                              onTapUp: (_) {
+                                if (!mounted) return;
+                                if (_pressedMessageIdN.value != msg.id) return;
+                                _pressedMessageIdN.value = null;
+                              },
+                              onTap: () {
+                                if (selectionMode) {
+                                  _toggleSelected(msg);
+                                }
+                              },
+                              onLongPressStart: (d) async {
+                                HapticFeedback.selectionClick();
+                                if (mounted && _pressedMessageIdN.value != msg.id) {
+                                  _pressedMessageIdN.value = msg.id;
+                                }
+                                if (selectionMode) {
+                                  _toggleSelected(msg);
+                                } else {
+                                  await _showMessageContextMenu(msg, d.globalPosition);
+                                }
 
-                                    if (mounted) {
-                                      setState(() {
-                                        if (_pressedMessageId == msg.id) {
-                                          _pressedMessageId = null;
-                                        }
-                                      });
-                                    }
-                                  },
-                                  onLongPressEnd: (_) {
-                                    if (!mounted) return;
-                                    setState(() {
-                                      if (_pressedMessageId == msg.id) {
-                                        _pressedMessageId = null;
-                                      }
-                                    });
-                                  },
-                                  child: AnimatedScale(
-                                    scale: pressed ? 0.985 : (selected ? 1.3 : 1.0),
+                                if (mounted && _pressedMessageIdN.value == msg.id) {
+                                  _pressedMessageIdN.value = null;
+                                }
+                              },
+                              onLongPressEnd: (_) {
+                                if (!mounted) return;
+                                if (_pressedMessageIdN.value != msg.id) return;
+                                _pressedMessageIdN.value = null;
+                              },
+                              child: ValueListenableBuilder<String?>(
+                                valueListenable: _pressedMessageIdN,
+                                builder: (context, pressedId, child) {
+                                  final pressed = pressedId == msg.id;
+                                  return AnimatedScale(
+                                    scale: pressed ? 0.985 : (selected ? 1.05 : 1.0),
                                     duration: const Duration(milliseconds: 110),
                                     curve: Curves.easeOut,
                                     child: Stack(
@@ -1019,16 +1360,10 @@ class _ChatPageState extends State<ChatPage> {
                                           child: Padding(
                                             padding: const EdgeInsets.all(2),
                                             child: RepaintBoundary(
-                                              child: ChatMessageBubble(
-                                                replyPreview: (replyPreview != null && replyPreview.isNotEmpty)
-                                                    ? replyPreview
-                                                    : null,
-                                                text: msg.text,
-                                                attachments: msg.attachments,
-                                                timeLabel: _formatTime(msg.sentAt),
-                                                isMe: msg.isMe,
+                                              child: _buildMessageBubble(
+                                                msg: msg,
+                                                replyPreview: replyPreview,
                                                 isDark: isDark,
-                                                onOpenAttachment: (a) => _openAttachmentSheet(a),
                                               ),
                                             ),
                                           ),
@@ -1066,137 +1401,496 @@ class _ChatPageState extends State<ChatPage> {
                                         ),
                                       ],
                                     ),
-                                  ),
-                                ),
+                                  );
+                                },
                               ),
-                            );
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: AnimatedPadding(
+                      duration: const Duration(milliseconds: 200),
+                      curve: Curves.easeOut,
+                      padding: EdgeInsets.only(bottom: media.viewInsets.bottom),
+                      child: SafeArea(
+                        top: false,
+                        child: ChatInputBar(
+                          controller: _controller,
+                          focusNode: _focusNode,
+                          isDark: isDark,
+                          isEditing: _editing != null,
+                          onCancelEditing: () {
+                            setState(() {
+                              _editing = null;
+                            });
+                            _controller.clear();
+                          },
+                          hasReply: _replyTo != null,
+                          replyText: replyText,
+                          onCancelReply: () {
+                            setState(() {
+                              _replyTo = null;
+                            });
+                          },
+                          pending: _pending,
+                          onRemovePending: (index) {
+                            setState(() {
+                              _pending.removeAt(index);
+                            });
+                          },
+                          onPickPhotos: () async => await _pickPhotos(),
+                          onPickFiles: () async => await _pickFiles(),
+                          onTakePhoto: () async => await _takePhoto(),
+                          onSend: _send,
+                          onRecordingChanged: (mode, isRecording) {
+                            if (mode == RecorderMode.video) {
+                              _setVideoRecordingOverlay(show: isRecording);
+                            }
+                          },
+                          onRecordingDurationChanged: (t) {
+                            if (!_showVideoRecordingOverlay) return;
+                            if (!mounted) return;
+                            setState(() {
+                              _videoRecordingDurationText = t;
+                            });
+                          },
+                          onRecordingLockedChanged: (mode, locked) {
+                            if (mode != RecorderMode.video) return;
+                            if (!mounted) return;
+                            setState(() {
+                              _videoRecordingLocked = locked;
+                            });
+
+                            if (locked) {
+                              _videoLockedTransition.forward();
+                            } else {
+                              _videoLockedTransition.reverse();
+                            }
+                          },
+                          onRecorderController: (cancel, stop) {
+                            _cancelVideoRecording = cancel;
+                            _stopVideoRecording = stop;
+                          },
+                          onVideoControllerChanged: (controller) {
+                            if (!mounted) return;
+                            setState(() {
+                              _videoCameraController = controller;
+                            });
+                          },
+                          onVideoActionsController: (setTorch, setUseFrontCamera) {
+                            _setVideoTorch = setTorch;
+                            _setVideoUseFrontCamera = setUseFrontCamera;
+                          },
+                          onAddRecordedFile: (attachment) async {
+                            if (!mounted) return;
+                            if ((attachment.mimetype).toLowerCase().startsWith('audio/')) {
+                              await _sendRecordedVoice(attachment);
+                              return;
+                            }
+                            if ((attachment.mimetype).toLowerCase().startsWith('video/')) {
+                              await _sendRecordedVideo(attachment);
+                              return;
+                            }
+                            setState(() {
+                              _pending.add(attachment);
+                            });
                           },
                         ),
-                ),
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  child: AnimatedPadding(
-                    duration: const Duration(milliseconds: 200),
-                    curve: Curves.easeOut,
-                    padding: EdgeInsets.only(bottom: media.viewInsets.bottom),
-                    child: SafeArea(
-                      top: false,
-                      child: ChatInputBar(
-                        controller: _controller,
-                        focusNode: _focusNode,
-                        isDark: isDark,
-                        isEditing: _editing != null,
-                        onCancelEditing: () {
-                          setState(() {
-                            _editing = null;
-                          });
-                          _controller.clear();
-                        },
-                        hasReply: _replyTo != null,
-                        replyText: replyText,
-                        onCancelReply: () {
-                          setState(() {
-                            _replyTo = null;
-                          });
-                        },
-                        pending: _pending,
-                        onRemovePending: (index) {
-                          setState(() {
-                            _pending.removeAt(index);
-                          });
-                        },
-                        onPickPhotos: () async => await _pickPhotos(),
-                        onPickFiles: () async => await _pickFiles(),
-                        onTakePhoto: () async => await _takePhoto(),
-                        onSend: _send,
                       ),
                     ),
                   ),
-                ),
-              ],
-            );
-          },
-        ),
+
+                  if (_showVideoRecordingOverlay)
+                    Positioned.fill(
+                      child: Stack(
+                        children: [
+                          Positioned.fill(
+                            child: IgnorePointer(
+                              ignoring: !_videoRecordingLocked,
+                              child: AnimatedBuilder(
+                                animation: _videoLockedTransition,
+                                builder: (context, _) {
+                                  final t = Curves.easeOut.transform(_videoLockedTransition.value);
+                                  if (t <= 0) return const SizedBox();
+                                  return ClipRect(
+                                    child: BackdropFilter(
+                                      filter: ImageFilter.blur(
+                                        sigmaX: 14 * t,
+                                        sigmaY: 14 * t,
+                                      ),
+                                      child: Container(
+                                        color: Colors.black.withOpacity(
+                                          (isDark ? 0.25 : 0.10) * t,
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                          ),
+                          Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                AnimatedBuilder(
+                                  animation: _videoLockedTransition,
+                                  builder: (context, _) {
+                                    final t = Curves.easeOutBack.transform(_videoLockedTransition.value);
+                                    final pulse = _videoPulse.value;
+                                    final breathe = math.sin(pulse * math.pi * 2);
+                                    final breathingScale = 1 + 0.006 * breathe;
+                                    final scale = (1 - 0.02 * t) * breathingScale;
+                                    final dy = -8.0 * t;
+                                    return Transform.translate(
+                                      offset: Offset(0, dy),
+                                      child: Transform.scale(
+                                        scale: scale,
+                                        child: ClipRRect(
+                                          borderRadius: BorderRadius.circular(32),
+                                          child: Container(
+                                            width: 320,
+                                            height: 320,
+                                            color: theme.colorScheme.surface.withOpacity(isDark ? 0.55 : 0.80),
+                                            child: Stack(
+                                              children: [
+                                                if (_videoCameraController != null &&
+                                                    _videoCameraController!.value.isInitialized)
+                                                  Positioned.fill(
+                                                    child: ClipRRect(
+                                                      borderRadius: BorderRadius.circular(32),
+                                                      child: FittedBox(
+                                                        fit: BoxFit.cover,
+                                                        child: SizedBox(
+                                                          width: _videoCameraController!.value.previewSize?.height ?? 320,
+                                                          height: _videoCameraController!.value.previewSize?.width ?? 320,
+                                                          child: CameraPreview(_videoCameraController!),
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  )
+                                                else
+                                                  Center(
+                                                    child: HugeIcon(
+                                                      icon: HugeIcons.strokeRoundedVideo01,
+                                                      size: 92,
+                                                      color: theme.colorScheme.onSurface.withOpacity(0.85),
+                                                    ),
+                                                  ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                ),
+                                const SizedBox(height: 14),
+                                AnimatedBuilder(
+                                  animation: _videoLockedTransition,
+                                  builder: (context, _) {
+                                    final t = Curves.easeOut.transform(_videoLockedTransition.value);
+                                    final capsuleScale = 1 + 0.01 * t;
+                                    final capsuleDy = -4.0 * t;
+                                    return Transform.translate(
+                                      offset: Offset(0, capsuleDy),
+                                      child: Transform.scale(
+                                        scale: capsuleScale,
+                                        child: GlassSurface(
+                                          borderRadius: 999,
+                                          blurSigma: 12,
+                                          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                                          child: SizedBox(
+                                            width: 320,
+                                            child: Row(
+                                              children: [
+                                                AnimatedSwitcher(
+                                                  duration: const Duration(milliseconds: 220),
+                                                  switchInCurve: Curves.easeOut,
+                                                  switchOutCurve: Curves.easeOut,
+                                                  transitionBuilder: (child, anim) {
+                                                    final curved = CurvedAnimation(parent: anim, curve: Curves.easeOut);
+                                                    return FadeTransition(
+                                                      opacity: curved,
+                                                      child: ScaleTransition(
+                                                        scale: Tween<double>(begin: 0.92, end: 1.0).animate(curved),
+                                                        child: SlideTransition(
+                                                          position: Tween<Offset>(
+                                                            begin: const Offset(-0.10, 0),
+                                                            end: Offset.zero,
+                                                          ).animate(curved),
+                                                          child: child,
+                                                        ),
+                                                      ),
+                                                    );
+                                                  },
+                                                  child: _videoRecordingLocked
+                                                      ? Row(
+                                                          key: const ValueKey('locked_cancel'),
+                                                          mainAxisSize: MainAxisSize.min,
+                                                          children: [
+                                                            GestureDetector(
+                                                              onTap: () {
+                                                                _cancelVideoRecording?.call();
+                                                              },
+                                                              child: GlassSurface(
+                                                                borderRadius: 12,
+                                                                blurSigma: 12,
+                                                                width: 32,
+                                                                height: 32,
+                                                                child: Center(
+                                                                  child: HugeIcon(
+                                                                    icon: HugeIcons.strokeRoundedCancel01,
+                                                                    size: 20,
+                                                                    color: theme.colorScheme.onSurface.withOpacity(0.9),
+                                                                  ),
+                                                                ),
+                                                              ),
+                                                            ),
+                                                            const SizedBox(width: 10),
+                                                          ],
+                                                        )
+                                                      : const SizedBox(
+                                                          key: ValueKey('hold_cancel_spacer'),
+                                                        ),
+                                                ),
+                                                AnimatedBuilder(
+                                                  animation: _videoPulse,
+                                                  builder: (context, _) {
+                                                    final p = Curves.easeInOut.transform(_videoPulse.value);
+                                                    final s = 1.0 + 0.18 * p;
+                                                    final o = 0.55 + 0.45 * (1 - p);
+                                                    return Transform.scale(
+                                                      scale: s,
+                                                      child: Container(
+                                                        width: 8,
+                                                        height: 8,
+                                                        decoration: BoxDecoration(
+                                                          color: theme.colorScheme.error.withOpacity(o),
+                                                          shape: BoxShape.circle,
+                                                          boxShadow: [
+                                                            BoxShadow(
+                                                              color: theme.colorScheme.error.withOpacity(0.35 * o),
+                                                              blurRadius: 10 + 10 * p,
+                                                              spreadRadius: 0.5 + 0.8 * p,
+                                                            ),
+                                                          ],
+                                                        ),
+                                                      ),
+                                                    );
+                                                  },
+                                                ),
+                                                const SizedBox(width: 8),
+                                                Text(
+                                                  _videoRecordingDurationText,
+                                                  style: theme.textTheme.titleSmall?.copyWith(
+                                                    fontWeight: FontWeight.w800,
+                                                    color: theme.colorScheme.onSurface,
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 10),
+                                                Expanded(
+                                                  child: AnimatedBuilder(
+                                                    animation: _videoProgressController,
+                                                    builder: (context, _) {
+                                                      return ClipRRect(
+                                                        borderRadius: BorderRadius.circular(999),
+                                                        child: Container(
+                                                          height: 4,
+                                                          color: theme.colorScheme.onSurface.withOpacity(isDark ? 0.18 : 0.12),
+                                                          alignment: Alignment.centerLeft,
+                                                          child: FractionallySizedBox(
+                                                            widthFactor: _videoProgressController.value.clamp(0.0, 1.0),
+                                                            child: Container(
+                                                              color: theme.colorScheme.primary,
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      );
+                                                    },
+                                                  ),
+                                                ),
+                                                AnimatedSwitcher(
+                                                  duration: const Duration(milliseconds: 220),
+                                                  switchInCurve: Curves.easeOut,
+                                                  switchOutCurve: Curves.easeOut,
+                                                  transitionBuilder: (child, anim) {
+                                                    final curved = CurvedAnimation(parent: anim, curve: Curves.easeOut);
+                                                    return FadeTransition(
+                                                      opacity: curved,
+                                                      child: ScaleTransition(
+                                                        scale: Tween<double>(begin: 0.92, end: 1.0).animate(curved),
+                                                        child: SlideTransition(
+                                                          position: Tween<Offset>(
+                                                            begin: const Offset(0.12, 0),
+                                                            end: Offset.zero,
+                                                          ).animate(curved),
+                                                          child: child,
+                                                        ),
+                                                      ),
+                                                    );
+                                                  },
+                                                  child: _videoRecordingLocked
+                                                      ? Row(
+                                                          key: const ValueKey('locked_actions'),
+                                                          mainAxisSize: MainAxisSize.min,
+                                                          children: [
+                                                            const SizedBox(width: 10),
+                                                            GestureDetector(
+                                                              onTap: () async {
+                                                                if (!mounted) return;
+                                                                final next = !_videoFlashEnabled;
+                                                                setState(() {
+                                                                  _videoFlashEnabled = next;
+                                                                });
+                                                                final ok = await _setVideoTorch?.call(next);
+                                                                if (ok != true && mounted) {
+                                                                  setState(() {
+                                                                    _videoFlashEnabled = !next;
+                                                                  });
+                                                                }
+                                                              },
+                                                              child: GlassSurface(
+                                                                borderRadius: 12,
+                                                                blurSigma: 12,
+                                                                width: 32,
+                                                                height: 32,
+                                                                child: Center(
+                                                                  child: HugeIcon(
+                                                                    icon: _videoFlashEnabled
+                                                                        ? HugeIcons.strokeRoundedFlash
+                                                                        : HugeIcons.strokeRoundedFlashOff,
+                                                                    size: 20,
+                                                                    color: theme.colorScheme.onSurface.withOpacity(0.9),
+                                                                  ),
+                                                                ),
+                                                              ),
+                                                            ),
+                                                            const SizedBox(width: 8),
+                                                            GestureDetector(
+                                                              onTap: () async {
+                                                                if (!mounted) return;
+                                                                final next = !_videoUseFrontCamera;
+                                                                setState(() {
+                                                                  _videoUseFrontCamera = next;
+                                                                });
+                                                                final ok = await _setVideoUseFrontCamera?.call(next);
+                                                                if (ok != true && mounted) {
+                                                                  setState(() {
+                                                                    _videoUseFrontCamera = !next;
+                                                                  });
+                                                                }
+                                                              },
+                                                              child: GlassSurface(
+                                                                borderRadius: 12,
+                                                                blurSigma: 12,
+                                                                width: 32,
+                                                                height: 32,
+                                                                child: Center(
+                                                                  child: HugeIcon(
+                                                                    icon: HugeIcons.strokeRoundedExchange01,
+                                                                    size: 20,
+                                                                    color: theme.colorScheme.onSurface.withOpacity(0.9),
+                                                                  ),
+                                                                ),
+                                                              ),
+                                                            ),
+                                                            const SizedBox(width: 8),
+                                                            GestureDetector(
+                                                              onTap: () {
+                                                                _stopVideoRecording?.call();
+                                                              },
+                                                              child: GlassSurface(
+                                                                borderRadius: 12,
+                                                                blurSigma: 12,
+                                                                width: 32,
+                                                                height: 32,
+                                                                child: Center(
+                                                                  child: HugeIcon(
+                                                                    icon: HugeIcons.strokeRoundedSent,
+                                                                    size: 20,
+                                                                    color: theme.colorScheme.onSurface.withOpacity(0.9),
+                                                                  ),
+                                                                ),
+                                                              ),
+                                                            ),
+                                                          ],
+                                                        )
+                                                      : const SizedBox(
+                                                          key: ValueKey('hold_actions_spacer'),
+                                                        ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                )
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          );
+        },
       ),
     );
   }
 
-  String _formatTime(DateTime dt) {
-    final local = dt.toLocal();
-    final h = local.hour.toString().padLeft(2, '0');
-    final m = local.minute.toString().padLeft(2, '0');
-    return '$h:$m';
-  }
-
-  List<ChatAttachment> _allChatAttachments() {
-    final out = <ChatAttachment>[];
-    for (final m in _messages) {
-      if (m.attachments.isEmpty) continue;
-      out.addAll(m.attachments);
-    }
-    return out;
-  }
-
-  Future<void> _openAttachmentSheet(ChatAttachment tapped) async {
-    final items = _allChatAttachments();
-    if (items.isEmpty) return;
-
-    final initial = items.indexWhere((a) => a.localPath == tapped.localPath);
-    final initialIndex = (initial >= 0) ? initial : 0;
-
-    await GlassOverlays.showGlassBottomSheet<void>(
-      context,
-      builder: (ctx) {
-        return ChatAttachmentViewerSheet(
-          items: items,
-          initialIndex: initialIndex,
-        );
-      },
-    );
-  }
-
-
   void _enterSelectionMode({ChatMessage? initial}) {
     if (!mounted) return;
-    setState(() {
-      _selectionMode = true;
-      if (initial != null) {
-        _selectedMessageIds.add(initial.id);
-      }
-    });
+    _selectionModeN.value = true;
+    if (initial != null) {
+      final next = Set<String>.from(_selectedMessageIdsN.value);
+      next.add(initial.id);
+      _selectedMessageIdsN.value = next;
+    }
   }
 
   void _exitSelectionMode() {
     if (!mounted) return;
-    setState(() {
-      _selectionMode = false;
-      _selectedMessageIds.clear();
-    });
+    _selectionModeN.value = false;
+    if (_selectedMessageIdsN.value.isNotEmpty) {
+      _selectedMessageIdsN.value = <String>{};
+    }
   }
 
   void _toggleSelected(ChatMessage msg) {
     if (!mounted) return;
-    setState(() {
-      if (_selectedMessageIds.contains(msg.id)) {
-        _selectedMessageIds.remove(msg.id);
-      } else {
-        _selectedMessageIds.add(msg.id);
-      }
-      if (_selectedMessageIds.isEmpty) {
-        _selectionMode = false;
-      }
-    });
+    final next = Set<String>.from(_selectedMessageIdsN.value);
+    if (next.contains(msg.id)) {
+      next.remove(msg.id);
+    } else {
+      next.add(msg.id);
+    }
+    _selectedMessageIdsN.value = next;
+    if (next.isEmpty) {
+      _selectionModeN.value = false;
+    }
   }
 
   void _deleteByIds(Set<String> ids) {
     if (!mounted) return;
     setState(() {
       _messages.removeWhere((m) => ids.contains(m.id));
-      _selectedMessageIds.removeWhere((id) => !_messages.any((m) => m.id == id));
-      if (_selectedMessageIds.isEmpty) {
-        _selectionMode = false;
+      final nextSelected = Set<String>.from(_selectedMessageIdsN.value);
+      nextSelected.removeWhere((id) => !_messages.any((m) => m.id == id));
+      _selectedMessageIdsN.value = nextSelected;
+      if (nextSelected.isEmpty) {
+        _selectionModeN.value = false;
       }
       if (_replyTo != null && ids.contains(_replyTo!.id)) {
         _replyTo = null;
@@ -1272,7 +1966,7 @@ class _ChatPageState extends State<ChatPage> {
     _rt ??= context.read<RealtimeClient>();
     final rt = _rt!;
 
-    final ids = List<String>.from(_selectedMessageIds);
+    final ids = List<String>.from(_selectedMessageIdsN.value);
     ids.sort((a, b) => a.compareTo(b));
 
     for (final id in ids) {

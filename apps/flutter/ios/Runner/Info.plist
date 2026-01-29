@@ -30,6 +30,8 @@
 	<string>Нужен доступ к фото, чтобы выбирать изображения для отправки в чат.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Нужен доступ к фото, чтобы сохранять файлы из чата в галерею.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Нужен доступ к микрофону, чтобы делать записи для отправки в чат.</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>

@@ -89,3 +89,4 @@ secrets.json
 
 Ren-SDK/android-libs/
 Ren-SDK/pkg/
+apps/flutter/ios/Podfile.lock

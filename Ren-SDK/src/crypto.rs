@@ -213,6 +213,14 @@ pub fn decrypt_message(ciphertext_b64: &str, nonce_b64: &str, key: &AeadKey) -> 
     Ok(s)
 }
 
+/// AEAD-дешифрование файла, когда ciphertext уже в виде raw bytes (без base64).
+pub fn decrypt_file_raw(ciphertext: &[u8], nonce_b64: &str, key: &AeadKey) -> Result<Vec<u8>, CryptoError> {
+    let nonce = nonce_from_b64(nonce_b64)?;
+    let cipher = ChaCha20Poly1305::new(&key.0);
+    let pt = cipher.decrypt(&nonce, ciphertext)?;
+    Ok(pt)
+}
+
 /// AEAD-шифрование произвольных байт файла. Возвращает Base64 ciphertext и nonce.
 pub fn encrypt_file(bytes: &[u8], filename: &str, mimetype: &str, key: &AeadKey) -> Result<EncryptedFile, CryptoError> {
     let cipher = ChaCha20Poly1305::new(&key.0);
@@ -230,6 +238,16 @@ pub fn decrypt_file(ciphertext_b64: &str, nonce_b64: &str, key: &AeadKey) -> Res
     let cipher = ChaCha20Poly1305::new(&key.0);
     let pt = cipher.decrypt(&nonce, ct.as_ref())?;
     Ok(pt)
+}
+
+/// AEAD-шифрование произвольных байт файла. Возвращает raw ciphertext bytes + nonce (base64).
+pub fn encrypt_file_raw(bytes: &[u8], key: &AeadKey) -> Result<(Vec<u8> /*ciphertext*/, String /*nonce*/ ), CryptoError> {
+    let cipher = ChaCha20Poly1305::new(&key.0);
+    let mut nonce_bytes = [0u8; 12];
+    getrandom::getrandom(&mut nonce_bytes).expect("rand");
+    let nonce = Nonce::from(nonce_bytes);
+    let ct = cipher.encrypt(&nonce, bytes)?;
+    Ok((ct, b64_encode(&nonce_bytes)))
 }
 
 /// Удобный вариант: шифрует файл и сообщение под один nonce/ключ.

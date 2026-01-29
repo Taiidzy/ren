@@ -78,6 +78,11 @@ struct REN_RenEncryptedMessage ren_encrypt_message(const char *aMessage, const c
 
 char *ren_decrypt_message(const char *aCiphertextB64, const char *aNonceB64, const char *aKeyB64);
 
+char *ren_decrypt_message_with_key_bytes(const char *aCiphertextB64,
+                                         const char *aNonceB64,
+                                         const uint8_t *aKeyPtr,
+                                         uintptr_t aKeyLen);
+
 struct REN_RenEncryptedFile ren_encrypt_file(const uint8_t *aData,
                                              uintptr_t aLen,
                                              const char *aFilename,
@@ -89,6 +94,19 @@ uint8_t *ren_decrypt_file(const char *aCiphertextB64,
                           const char *aKeyB64,
                           uintptr_t *aOutLen);
 
+uint8_t *ren_decrypt_file_raw(const uint8_t *aCiphertextPtr,
+                              uintptr_t aCiphertextLen,
+                              const char *aNonceB64,
+                              const char *aKeyB64,
+                              uintptr_t *aOutLen);
+
+uint8_t *ren_decrypt_file_raw_with_key_bytes(const uint8_t *aCiphertextPtr,
+                                             uintptr_t aCiphertextLen,
+                                             const char *aNonceB64,
+                                             const uint8_t *aKeyPtr,
+                                             uintptr_t aKeyLen,
+                                             uintptr_t *aOutLen);
+
 struct REN_RenWrappedKey ren_wrap_symmetric_key(const char *aKeyB64,
                                                 const char *aReceiverPublicKeyB64);
 
@@ -96,6 +114,12 @@ char *ren_unwrap_symmetric_key(const char *aWrappedKeyB64,
                                const char *aEphemeralPublicKeyB64,
                                const char *aNonceB64,
                                const char *aReceiverPrivateKeyB64);
+
+uint8_t *ren_unwrap_symmetric_key_bytes(const char *aWrappedKeyB64,
+                                        const char *aEphemeralPublicKeyB64,
+                                        const char *aNonceB64,
+                                        const char *aReceiverPrivateKeyB64,
+                                        uintptr_t *aOutLen);
 
 #ifdef __cplusplus
 }  // extern "C"
