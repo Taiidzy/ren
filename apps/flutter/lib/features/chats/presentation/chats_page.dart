@@ -28,6 +28,26 @@ class ChatsPage extends StatefulWidget {
   State<ChatsPage> createState() => _HomePageState();
 }
 
+enum _CreateChatKind {
+  private,
+  group,
+  channel,
+}
+
+class _CreateChatKindOption {
+  final _CreateChatKind kind;
+  final String title;
+  final String subtitle;
+  final IconData icon;
+
+  const _CreateChatKindOption({
+    required this.kind,
+    required this.title,
+    required this.subtitle,
+    required this.icon,
+  });
+}
+
 class _UserSearchTile extends StatelessWidget {
   final ChatUser user;
   final VoidCallback onTap;
@@ -148,6 +168,151 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
         _runUserSearch(next);
       });
     });
+  }
+
+  Future<_CreateChatKind?> _pickCreateKind() {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final baseInk = isDark ? Colors.white : Colors.black;
+
+    const options = <_CreateChatKindOption>[
+      _CreateChatKindOption(
+        kind: _CreateChatKind.private,
+        title: 'Личный чат',
+        subtitle: 'Написать одному пользователю',
+        icon: Icons.person,
+      ),
+      _CreateChatKindOption(
+        kind: _CreateChatKind.group,
+        title: 'Группа',
+        subtitle: 'Чат для нескольких участников',
+        icon: Icons.group,
+      ),
+      _CreateChatKindOption(
+        kind: _CreateChatKind.channel,
+        title: 'Канал',
+        subtitle: 'Публиковать могут только админы',
+        icon: Icons.campaign,
+      ),
+    ];
+
+    return GlassOverlays.showGlassBottomSheet<_CreateChatKind>(
+      context,
+      builder: (ctx) {
+        return GlassSurface(
+          child: SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Создать',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w800,
+                      color: theme.colorScheme.onSurface,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  for (final opt in options) ...[
+                    GlassSurface(
+                      borderRadius: 18,
+                      blurSigma: 14,
+                      borderColor: baseInk.withOpacity(isDark ? 0.18 : 0.10),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(18),
+                        onTap: () => Navigator.of(ctx).pop(opt.kind),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 40,
+                              height: 40,
+                              decoration: BoxDecoration(
+                                color: theme.colorScheme.primary.withOpacity(0.10),
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                              child: Icon(
+                                opt.icon,
+                                color: theme.colorScheme.primary,
+                                size: 20,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Text(
+                                    opt.title,
+                                    style: theme.textTheme.titleSmall?.copyWith(
+                                      fontWeight: FontWeight.w800,
+                                      color: theme.colorScheme.onSurface,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    opt.subtitle,
+                                    style: theme.textTheme.bodySmall?.copyWith(
+                                      color: theme.colorScheme.onSurface.withOpacity(0.7),
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Icon(
+                              Icons.chevron_right,
+                              color: theme.colorScheme.onSurface.withOpacity(0.6),
+                              size: 18,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _createGroupOrChannelFlow(_CreateChatKind kind) async {
+    final created = await Navigator.of(context).push<ChatPreview>(
+      adaptivePageRoute(
+        (_) => _CreateGroupOrChannelPage(kind: kind),
+      ),
+    );
+
+    if (!mounted) return;
+    if (created == null) return;
+
+    await _reloadChats();
+    if (!mounted) return;
+    Navigator.of(context).push(
+      adaptivePageRoute((_) => ChatPage(chat: created)),
+    );
+  }
+
+  Future<void> _createChatEntryFlow() async {
+    final kind = await _pickCreateKind();
+    if (!mounted) return;
+    if (kind == null) return;
+
+    if (kind == _CreateChatKind.private) {
+      await _createChatFlow();
+      return;
+    }
+
+    await _createGroupOrChannelFlow(kind);
   }
 
   @override
@@ -943,6 +1108,310 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                 ),
               );
             },
+          ),
+        ),
+        floatingActionButton: FloatingActionButton(
+          onPressed: _createChatEntryFlow,
+          child: HugeIcon(
+            icon: HugeIcons.strokeRoundedAdd01,
+            color: theme.colorScheme.onPrimary,
+            size: 22,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CreateGroupOrChannelPage extends StatefulWidget {
+  final _CreateChatKind kind;
+
+  const _CreateGroupOrChannelPage({
+    required this.kind,
+  });
+
+  @override
+  State<_CreateGroupOrChannelPage> createState() => _CreateGroupOrChannelPageState();
+}
+
+class _CreateGroupOrChannelPageState extends State<_CreateGroupOrChannelPage> {
+  final _titleCtrl = TextEditingController();
+  final _searchCtrl = TextEditingController();
+
+  Timer? _debounce;
+  int _seq = 0;
+
+  bool _searching = false;
+  String? _searchError;
+  List<ChatUser> _results = const [];
+
+  final Map<String, ChatUser> _selected = <String, ChatUser>{};
+
+  bool _saving = false;
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _debounce = null;
+    _titleCtrl.dispose();
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  bool get _isGroup => widget.kind == _CreateChatKind.group;
+  bool get _isChannel => widget.kind == _CreateChatKind.channel;
+
+  void _onSearchChanged() {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 250), _runSearch);
+  }
+
+  void _runSearch() {
+    final q = _searchCtrl.text.trim();
+    final seq = ++_seq;
+
+    if (q.isEmpty) {
+      setState(() {
+        _searching = false;
+        _searchError = null;
+        _results = const [];
+      });
+      return;
+    }
+
+    setState(() {
+      _searching = true;
+      _searchError = null;
+    });
+
+    final repo = context.read<ChatsRepository>();
+    repo.searchUsers(q).then((list) {
+      if (!mounted) return;
+      if (seq != _seq) return;
+      setState(() {
+        _searching = false;
+        _searchError = null;
+        _results = list;
+      });
+    }).catchError((e) {
+      if (!mounted) return;
+      if (seq != _seq) return;
+      setState(() {
+        _searching = false;
+        _searchError = e.toString();
+        _results = const [];
+      });
+    });
+  }
+
+  void _toggle(ChatUser u) {
+    setState(() {
+      if (_selected.containsKey(u.id)) {
+        _selected.remove(u.id);
+      } else {
+        _selected[u.id] = u;
+      }
+    });
+  }
+
+  Future<void> _create() async {
+    if (_saving) return;
+
+    final title = _titleCtrl.text.trim();
+    if (title.isEmpty) {
+      showGlassSnack(context, 'Укажите название', kind: GlassSnackKind.error);
+      return;
+    }
+
+    if (_isGroup && _selected.isEmpty) {
+      showGlassSnack(context, 'Добавьте участников', kind: GlassSnackKind.error);
+      return;
+    }
+
+    setState(() {
+      _saving = true;
+    });
+
+    try {
+      final repo = context.read<ChatsRepository>();
+      final ids = _selected.keys.map((s) => int.tryParse(s) ?? 0).where((e) => e > 0).toList();
+
+      final chat = _isGroup
+          ? await repo.createGroupChat(title: title, userIds: ids)
+          : await repo.createChannel(title: title, userIds: ids);
+
+      if (!mounted) return;
+      Navigator.of(context).pop(chat);
+    } catch (e) {
+      if (!mounted) return;
+      showGlassSnack(context, e.toString(), kind: GlassSnackKind.error);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _saving = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final baseInk = isDark ? Colors.white : Colors.black;
+
+    final title = _isChannel ? 'Новый канал' : 'Новая группа';
+    final actionTitle = _isChannel ? 'Создать канал' : 'Создать группу';
+
+    final selectedList = _selected.values.toList(growable: false);
+    final selectedIds = _selected.keys.toSet();
+    final visibleResults = _results.where((u) => !selectedIds.contains(u.id)).toList(growable: false);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(title),
+        actions: [
+          TextButton(
+            onPressed: _saving ? null : _create,
+            child: _saving
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Text(actionTitle),
+          ),
+        ],
+      ),
+      body: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              GlassSurface(
+                borderRadius: 18,
+                blurSigma: 14,
+                borderColor: baseInk.withOpacity(isDark ? 0.18 : 0.10),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                child: TextField(
+                  controller: _titleCtrl,
+                  textInputAction: TextInputAction.next,
+                  decoration: InputDecoration(
+                    hintText: _isChannel ? 'Название канала' : 'Название группы',
+                    border: InputBorder.none,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                _isChannel ? 'Подписчики' : 'Участники',
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w800,
+                  color: theme.colorScheme.onSurface,
+                ),
+              ),
+              const SizedBox(height: 10),
+              if (selectedList.isNotEmpty) ...[
+                SizedBox(
+                  height: 44,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: selectedList.length,
+                    separatorBuilder: (_, __) => const SizedBox(width: 10),
+                    itemBuilder: (context, index) {
+                      final u = selectedList[index];
+                      return GlassSurface(
+                        borderRadius: 999,
+                        blurSigma: 12,
+                        borderColor: baseInk.withOpacity(isDark ? 0.18 : 0.10),
+                        padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(999),
+                          onTap: () => _toggle(u),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                u.name,
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  fontWeight: FontWeight.w700,
+                                  color: theme.colorScheme.onSurface,
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Icon(
+                                Icons.close,
+                                size: 16,
+                                color: theme.colorScheme.onSurface.withOpacity(0.6),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(height: 12),
+              ],
+              GlassSurface(
+                borderRadius: 18,
+                blurSigma: 14,
+                borderColor: baseInk.withOpacity(isDark ? 0.18 : 0.10),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                child: TextField(
+                  controller: _searchCtrl,
+                  onChanged: (_) => _onSearchChanged(),
+                  decoration: const InputDecoration(
+                    hintText: 'Поиск пользователей...',
+                    border: InputBorder.none,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Expanded(
+                child: _searching
+                    ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
+                    : (_searchError != null)
+                        ? Center(
+                            child: Text(
+                              _searchError ?? '',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.error,
+                              ),
+                            ),
+                          )
+                        : (visibleResults.isEmpty)
+                            ? Center(
+                                child: Text(
+                                  'Ничего не найдено',
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: theme.colorScheme.onSurface.withOpacity(0.6),
+                                  ),
+                                ),
+                              )
+                            : ListView.separated(
+                                itemCount: visibleResults.length,
+                                separatorBuilder: (_, __) => const SizedBox(height: 10),
+                                itemBuilder: (context, index) {
+                                  final u = visibleResults[index];
+                                  return _UserSearchTile(
+                                    user: u,
+                                    onTap: () => _toggle(u),
+                                  );
+                                },
+                              ),
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: _saving ? null : _create,
+                  child: Text(actionTitle),
+                ),
+              ),
+            ],
           ),
         ),
       ),

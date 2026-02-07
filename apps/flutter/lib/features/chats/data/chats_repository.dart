@@ -315,20 +315,27 @@ class ChatsRepository {
     for (final it in raw) {
       final m = (it as Map).cast<String, dynamic>();
       final id = (m['id'] is int) ? m['id'] as int : int.tryParse('${m['id']}') ?? 0;
+      final kind = (m['kind'] as String?) ?? 'private';
       final peerId = (m['peer_id'] is int)
           ? m['peer_id'] as int
           : int.tryParse('${m['peer_id']}');
       final peerUsername = (m['peer_username'] as String?) ?? '';
       final peerAvatar = (m['peer_avatar'] as String?) ?? '';
+      final title = (m['title'] as String?) ?? '';
       final isFavorite = (m['is_favorite'] == true) || (m['isFavorite'] == true);
       final updatedAtStr = (m['updated_at'] as String?) ?? '';
 
       final updatedAt = DateTime.tryParse(updatedAtStr) ?? DateTime.now();
 
+      final isGroupOrChannel = kind == 'group' || kind == 'channel';
+      final name = isGroupOrChannel
+          ? (title.trim().isNotEmpty ? title.trim() : (kind == 'channel' ? 'Канал' : 'Группа'))
+          : (peerUsername.isNotEmpty ? peerUsername : 'User');
+
       final user = ChatUser(
-        id: (peerId ?? 0).toString(),
-        name: peerUsername.isNotEmpty ? peerUsername : 'User',
-        avatarUrl: _avatarUrl(peerAvatar),
+        id: isGroupOrChannel ? id.toString() : (peerId ?? 0).toString(),
+        name: name,
+        avatarUrl: isGroupOrChannel ? '' : _avatarUrl(peerAvatar),
         isOnline: false,
       );
 
@@ -336,7 +343,7 @@ class ChatsRepository {
         ChatPreview(
           id: id.toString(),
           peerId: peerId,
-          kind: (m['kind'] as String?) ?? 'private',
+          kind: kind,
           user: user,
           isFavorite: isFavorite,
           lastMessage: '',
@@ -702,6 +709,72 @@ class ChatsRepository {
         id: peerId.toString(),
         name: (json['peer_username'] as String?) ?? 'User',
         avatarUrl: _avatarUrl((json['peer_avatar'] as String?) ?? ''),
+        isOnline: false,
+      ),
+      isFavorite: isFavorite,
+      lastMessage: '',
+      lastMessageAt: DateTime.now(),
+    );
+  }
+
+  Future<ChatPreview> createGroupChat({
+    required String title,
+    required List<int> userIds,
+  }) async {
+    final myUserId = await _getMyUserId();
+    final uniq = <int>{...userIds}..add(myUserId);
+
+    final json = await api.createChat(
+      kind: 'group',
+      title: title.trim().isEmpty ? null : title.trim(),
+      userIds: uniq.where((e) => e > 0).toList(),
+    );
+
+    final id = (json['id'] is int) ? json['id'] as int : int.tryParse('${json['id']}') ?? 0;
+    final isFavorite = (json['is_favorite'] == true) || (json['isFavorite'] == true);
+    final resolvedTitle = ((json['title'] as String?) ?? title).trim();
+
+    return ChatPreview(
+      id: id.toString(),
+      peerId: null,
+      kind: (json['kind'] as String?) ?? 'group',
+      user: ChatUser(
+        id: id.toString(),
+        name: resolvedTitle.isNotEmpty ? resolvedTitle : 'Группа',
+        avatarUrl: '',
+        isOnline: false,
+      ),
+      isFavorite: isFavorite,
+      lastMessage: '',
+      lastMessageAt: DateTime.now(),
+    );
+  }
+
+  Future<ChatPreview> createChannel({
+    required String title,
+    required List<int> userIds,
+  }) async {
+    final myUserId = await _getMyUserId();
+    final uniq = <int>{...userIds}..add(myUserId);
+
+    final json = await api.createChat(
+      kind: 'channel',
+      title: title.trim().isEmpty ? null : title.trim(),
+      userIds: uniq.where((e) => e > 0).toList(),
+    );
+
+    final id = (json['id'] is int) ? json['id'] as int : int.tryParse('${json['id']}') ?? 0;
+    final isFavorite = (json['is_favorite'] == true) || (json['isFavorite'] == true);
+    final resolvedTitle = ((json['title'] as String?) ?? title).trim();
+
+    return ChatPreview(
+      id: id.toString(),
+      peerId: null,
+      kind: (json['kind'] as String?) ?? 'channel',
+      user: ChatUser(
+        id: id.toString(),
+        name: resolvedTitle.isNotEmpty ? resolvedTitle : 'Канал',
+        avatarUrl: '',
         isOnline: false,
       ),
       isFavorite: isFavorite,
