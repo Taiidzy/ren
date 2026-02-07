@@ -24,6 +24,7 @@ use crate::route::ws::{publish_chat, publish_user};
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/chats", post(create_chat).get(list_chats))
+        .route("/chats/search", get(search_chats))
         .route("/chats/:chat_id/messages", get(get_messages))
         .route("/chats/:chat_id/participants", get(get_participants))
         .route("/chats/:chat_id/participants", post(add_participant))
@@ -75,6 +76,13 @@ struct GetMessagesQuery {
     limit: Option<i64>,
     before_id: Option<i64>,
     after_id: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct SearchChatsQuery {
+    q: String,
+    kind: Option<String>,
+    limit: Option<i64>,
 }
 
 // ---------------------------
@@ -366,6 +374,73 @@ async fn list_chats(
         .collect();
 
     Ok(Json(items))
+}
+
+// ---------------------------
+// GET /chats/search — глобальный поиск групп/каналов по названию
+// ---------------------------
+async fn search_chats(
+    State(state): State<AppState>,
+    CurrentUser { id: _my_id }: CurrentUser,
+    Query(params): Query<SearchChatsQuery>,
+) -> Result<Json<Vec<Chat>>, (StatusCode, String)> {
+    let q = params.q.trim();
+    if q.is_empty() {
+        return Ok(Json(vec![]));
+    }
+
+    let limit = params.limit.unwrap_or(15).clamp(1, 50);
+    let like = format!("%{}%", q);
+
+    let kind = params.kind.unwrap_or_else(|| "".to_string()).to_lowercase();
+    let kind_filter: Option<&str> = match kind.as_str() {
+        "group" => Some("group"),
+        "channel" => Some("channel"),
+        _ => None,
+    };
+
+    let rows = sqlx::query(
+        r#"
+        SELECT id, kind, title, created_at, updated_at, is_archived, key_version
+        FROM chats
+        WHERE kind IN ('group', 'channel')
+          AND ($2::text IS NULL OR kind = $2::text)
+          AND COALESCE(title, '') ILIKE $1
+        ORDER BY updated_at DESC
+        LIMIT $3
+        "#,
+    )
+    .bind(like)
+    .bind(kind_filter)
+    .bind(limit)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        out.push(Chat {
+            id: row.try_get("id").unwrap_or_default(),
+            kind: row.try_get::<String,_>("kind").unwrap_or_default(),
+            title: row.try_get("title").ok(),
+            created_at: row
+                .try_get::<chrono::DateTime<chrono::Utc>, _>("created_at")
+                .map(|t| t.to_rfc3339())
+                .unwrap_or_default(),
+            updated_at: row
+                .try_get::<chrono::DateTime<chrono::Utc>, _>("updated_at")
+                .map(|t| t.to_rfc3339())
+                .unwrap_or_default(),
+            is_archived: row.try_get("is_archived").ok(),
+            is_favorite: Some(false),
+            peer_id: None,
+            peer_username: None,
+            peer_avatar: None,
+            key_version: row.try_get("key_version").ok(),
+        });
+    }
+
+    Ok(Json(out))
 }
 
 // ---------------------------

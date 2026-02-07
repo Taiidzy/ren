@@ -377,6 +377,44 @@ class ChatsRepository {
     return out;
   }
 
+  Future<List<ChatPreview>> searchGroupsAndChannels(String query, {int limit = 15}) async {
+    final raw = await api.searchChats(query, limit: limit);
+    final out = <ChatPreview>[];
+
+    for (final it in raw) {
+      if (it is! Map) continue;
+      final m = it.cast<String, dynamic>();
+      final id = (m['id'] is int) ? m['id'] as int : int.tryParse('${m['id']}') ?? 0;
+      final kind = (m['kind'] as String?) ?? '';
+      if (id <= 0) continue;
+      if (kind != 'group' && kind != 'channel') continue;
+
+      final title = (m['title'] as String?) ?? '';
+      final resolvedTitle = title.trim().isNotEmpty
+          ? title.trim()
+          : (kind == 'channel' ? 'Канал' : 'Группа');
+
+      out.add(
+        ChatPreview(
+          id: id.toString(),
+          peerId: null,
+          kind: kind,
+          user: ChatUser(
+            id: id.toString(),
+            name: resolvedTitle,
+            avatarUrl: '',
+            isOnline: false,
+          ),
+          isFavorite: false,
+          lastMessage: '',
+          lastMessageAt: DateTime.now(),
+        ),
+      );
+    }
+
+    return out;
+  }
+
   Future<List<ChatUser>> favorites() async {
     final chats = await fetchChats();
     final out = <ChatUser>[];
@@ -661,9 +699,17 @@ class ChatsRepository {
     required int chatId,
     required String plaintext,
   }) async {
-    final keyBytes = await _getChatKeyBytesLatest(chatId);
+    Uint8List? keyBytes = await _getChatKeyBytesLatest(chatId);
     if (keyBytes == null || keyBytes.isEmpty) {
-      throw Exception('Не найден ключ чата');
+      try {
+        await rotateChatKey(chatId);
+      } catch (_) {
+        // ignore: rethrow original error below
+      }
+      keyBytes = await _getChatKeyBytesLatest(chatId);
+      if (keyBytes == null || keyBytes.isEmpty) {
+        throw Exception('Не найден ключ чата');
+      }
     }
 
     final keyB64 = base64Encode(keyBytes);
@@ -731,6 +777,9 @@ class ChatsRepository {
     );
 
     final id = (json['id'] is int) ? json['id'] as int : int.tryParse('${json['id']}') ?? 0;
+    if (id > 0) {
+      await rotateChatKey(id);
+    }
     final isFavorite = (json['is_favorite'] == true) || (json['isFavorite'] == true);
     final resolvedTitle = ((json['title'] as String?) ?? title).trim();
 
@@ -764,6 +813,9 @@ class ChatsRepository {
     );
 
     final id = (json['id'] is int) ? json['id'] as int : int.tryParse('${json['id']}') ?? 0;
+    if (id > 0) {
+      await rotateChatKey(id);
+    }
     final isFavorite = (json['is_favorite'] == true) || (json['isFavorite'] == true);
     final resolvedTitle = ((json['title'] as String?) ?? title).trim();
 

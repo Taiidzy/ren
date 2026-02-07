@@ -141,6 +141,11 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
   String? _userSearchError;
   int _userSearchSeq = 0;
 
+  List<ChatPreview> _groupChannelResults = const [];
+  bool _isSearchingGroupsChannels = false;
+  String? _groupChannelSearchError;
+  int _groupChannelSearchSeq = 0;
+
   bool _isForeground = true;
 
   OverlayEntry? _topBanner;
@@ -166,6 +171,7 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
           _query = next;
         });
         _runUserSearch(next);
+        _runGroupChannelSearch(next);
       });
     });
   }
@@ -483,6 +489,44 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
     });
   }
 
+  void _runGroupChannelSearch(String query) {
+    final q = query.trim();
+    final seq = ++_groupChannelSearchSeq;
+
+    if (q.isEmpty) {
+      setState(() {
+        _isSearchingGroupsChannels = false;
+        _groupChannelSearchError = null;
+        _groupChannelResults = const [];
+      });
+      return;
+    }
+
+    setState(() {
+      _isSearchingGroupsChannels = true;
+      _groupChannelSearchError = null;
+    });
+
+    final repo = context.read<ChatsRepository>();
+    repo.searchGroupsAndChannels(q).then((items) {
+      if (!mounted) return;
+      if (seq != _groupChannelSearchSeq) return;
+      setState(() {
+        _isSearchingGroupsChannels = false;
+        _groupChannelSearchError = null;
+        _groupChannelResults = items;
+      });
+    }).catchError((e) {
+      if (!mounted) return;
+      if (seq != _groupChannelSearchSeq) return;
+      setState(() {
+        _isSearchingGroupsChannels = false;
+        _groupChannelSearchError = e.toString();
+        _groupChannelResults = const [];
+      });
+    });
+  }
+
   Future<void> _createChatFlow() async {
     final controller = TextEditingController();
     final peerId = await GlassOverlays.showGlassDialog<int>(
@@ -689,8 +733,14 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
 
         final rot = evt.data['rotation_required'];
         final rotationRequired = rot == true || rot == 1 || rot == '1' || rot == 'true';
-        if (evt.type == 'participants_changed' && !rotationRequired) {
-          return;
+
+        if (evt.type == 'participants_changed') {
+          if (mounted) {
+            await _reloadChats();
+          }
+          if (!rotationRequired) {
+            return;
+          }
         }
 
         repo.invalidateChatKey(chatId);
@@ -905,6 +955,11 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                   .where((u) => !chatUserIds.contains(u.id))
                   .toList(growable: false);
 
+              final chatIds = decoratedChats.map((c) => c.id).toSet();
+              final visibleGroupsChannels = _groupChannelResults
+                  .where((c) => !chatIds.contains(c.id))
+                  .toList(growable: false);
+
               final favoriteChats = decoratedChats.where((c) => c.isFavorite).take(5).toList();
               final favorites = favoriteChats.map((c) => c.user).toList();
 
@@ -1095,6 +1150,64 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                                               kind: GlassSnackKind.error,
                                             );
                                           }
+                                        },
+                                      ),
+                                      const SizedBox(height: 10),
+                                    ],
+                                  ],
+
+                                  Divider(
+                                    height: 28,
+                                    color: theme.colorScheme.onSurface.withOpacity(0.18),
+                                  ),
+                                  Text(
+                                    'Группы и каналы',
+                                    style: theme.textTheme.titleSmall?.copyWith(
+                                      fontWeight: FontWeight.w700,
+                                      color: theme.colorScheme.onSurface,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 10),
+                                  if (_isSearchingGroupsChannels) ...[
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(vertical: 10),
+                                      child: Center(
+                                        child: SizedBox(
+                                          width: 20,
+                                          height: 20,
+                                          child: CircularProgressIndicator(strokeWidth: 2),
+                                        ),
+                                      ),
+                                    ),
+                                  ] else if (_groupChannelSearchError != null) ...[
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(vertical: 10),
+                                      child: Text(
+                                        _groupChannelSearchError ?? '',
+                                        style: theme.textTheme.bodySmall?.copyWith(
+                                          color: theme.colorScheme.error,
+                                        ),
+                                      ),
+                                    ),
+                                  ] else if (visibleGroupsChannels.isEmpty) ...[
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(vertical: 10),
+                                      child: Text(
+                                        'Ничего не найдено',
+                                        style: theme.textTheme.bodySmall?.copyWith(
+                                          color: theme.colorScheme.onSurface.withOpacity(0.6),
+                                        ),
+                                      ),
+                                    ),
+                                  ] else ...[
+                                    for (final chat in visibleGroupsChannels) ...[
+                                      _ChatTile(
+                                        chat: chat,
+                                        onLongPressAt: (pos) => _showChatActionsAt(chat, pos),
+                                        onTap: () {
+                                          Navigator.of(context).push(
+                                            adaptivePageRoute((_) => ChatPage(chat: chat)),
+                                          );
                                         },
                                       ),
                                       const SizedBox(height: 10),

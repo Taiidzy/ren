@@ -172,8 +172,7 @@ class _ChatParticipantsPageState extends State<ChatParticipantsPage> {
       final repo = context.read<ChatsRepository>();
       await repo.api.addParticipant(chatId, uid);
 
-      repo.invalidateChatKey(chatId);
-      await repo.prefetchLatestChatKey(chatId);
+      await repo.rotateChatKey(chatId);
 
       if (!mounted) return;
       showGlassSnack(context, 'Участник добавлен', kind: GlassSnackKind.success);
@@ -215,8 +214,7 @@ class _ChatParticipantsPageState extends State<ChatParticipantsPage> {
     try {
       await repo.api.removeParticipant(chatId, userId);
 
-      repo.invalidateChatKey(chatId);
-      await repo.prefetchLatestChatKey(chatId);
+      await repo.rotateChatKey(chatId);
 
       if (!mounted) return;
       showGlassSnack(context, 'Участник удалён', kind: GlassSnackKind.success);

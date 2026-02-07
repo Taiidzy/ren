@@ -67,6 +67,33 @@ class ChatsApi {
     }
   }
 
+  Future<List<dynamic>> searchChats(
+    String query, {
+    String? kind,
+    int limit = 15,
+  }) async {
+    final token = await _requireToken();
+    try {
+      final resp = await dio.get(
+        '${Apiurl.api}/chats/search',
+        queryParameters: {
+          'q': query,
+          if (kind != null && kind.trim().isNotEmpty) 'kind': kind.trim(),
+          'limit': limit,
+        },
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+      return (resp.data as List<dynamic>?) ?? const [];
+    } on DioException catch (e) {
+      throw ApiException(
+        (e.response?.data is String)
+            ? e.response?.data as String
+            : 'Ошибка поиска чатов',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
   Future<void> addFavorite(int chatId) async {
     final token = await _requireToken();
     try {
