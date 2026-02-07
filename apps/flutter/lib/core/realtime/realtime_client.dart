@@ -138,6 +138,7 @@ class RealtimeClient {
     String? messageType,
     List<dynamic>? metadata,
     int? replyToMessageId,
+    int? keyVersion,
   }) {
     _send({
       'type': wsType,
@@ -147,6 +148,7 @@ class RealtimeClient {
       'envelopes': envelopes,
       'metadata': metadata,
       'reply_to_message_id': replyToMessageId,
+      if (keyVersion != null) 'key_version': keyVersion,
     });
   }
 

@@ -19,6 +19,7 @@ import 'package:ren/features/chats/data/chats_repository.dart';
 import 'package:ren/features/chats/domain/chat_models.dart';
 import 'package:ren/core/realtime/realtime_client.dart';
 import 'package:ren/shared/widgets/background.dart';
+import 'package:ren/shared/widgets/adaptive_page_route.dart';
 import 'package:ren/shared/widgets/glass_overlays.dart';
 import 'package:ren/shared/widgets/glass_surface.dart';
 import 'package:ren/shared/widgets/glass_snackbar.dart';
@@ -34,6 +35,7 @@ import 'package:ren/features/chats/presentation/widgets/chat_skeleton_message_bu
 import 'package:ren/features/chats/presentation/widgets/chat_recorder_ui.dart';
 import 'package:ren/features/chats/presentation/widgets/voice_message_bubble.dart';
 import 'package:ren/features/chats/presentation/widgets/square_video_bubble.dart';
+import 'package:ren/features/chats/presentation/chat_participants_page.dart';
 
 class ChatPage extends StatefulWidget {
   final ChatPreview chat;
@@ -67,6 +69,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
   final List<PendingChatAttachment> _pending = [];
 
   int? _myUserId;
+  bool _isAdminInChat = false;
+  bool _rotationRequired = false;
 
   bool _peerOnline = false;
   bool _peerTyping = false;
@@ -476,6 +480,10 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
     }
 
     await _ensureRealtime();
+
+    if (widget.chat.kind == 'channel') {
+      await _refreshMyRole(repo: repo, chatId: chatId);
+    }
   }
 
   Future<void> _ensureRealtime() async {
@@ -499,6 +507,46 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
     rt.joinChat(chatId);
 
     _rtSub ??= rt.events.listen((evt) async {
+      if (evt.type == 'chat_key_rotated' || evt.type == 'participants_changed') {
+        final evtChatId = evt.data['chat_id'] ?? evt.data['chatId'];
+        if ('$evtChatId' != '$chatId') return;
+
+        final rot = evt.data['rotation_required'];
+        final rotationRequired = rot == true || rot == 1 || rot == '1' || rot == 'true';
+
+        if (evt.type == 'participants_changed') {
+          if (widget.chat.kind == 'group') {
+            if (mounted && _rotationRequired != rotationRequired) {
+              setState(() {
+                _rotationRequired = rotationRequired;
+              });
+            }
+          }
+
+          if (rotationRequired) {
+            repo.invalidateChatKey(chatId);
+            await repo.prefetchLatestChatKey(chatId);
+          }
+
+          if (widget.chat.kind == 'channel') {
+            await _refreshMyRole(repo: repo, chatId: chatId);
+          }
+          return;
+        }
+
+        if (evt.type == 'chat_key_rotated') {
+          if (mounted && _rotationRequired) {
+            setState(() {
+              _rotationRequired = false;
+            });
+          }
+
+          repo.invalidateChatKey(chatId);
+          await repo.prefetchLatestChatKey(chatId);
+          return;
+        }
+      }
+
       if (evt.type == 'presence') {
         final peerId = widget.chat.peerId ?? 0;
         final userId = evt.data['user_id'] ?? evt.data['userId'] ?? evt.data['id'];
@@ -522,7 +570,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
       }
 
       if (evt.type == 'message_updated') {
-        final evtChatId = evt.data['chat_id'];
+        final evtChatId = evt.data['chat_id'] ?? evt.data['chatId'];
         if ('$evtChatId' != '$chatId') return;
 
         final msg = evt.data['message'];
@@ -570,11 +618,14 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
       }
 
       if (evt.type == 'message_deleted') {
-        final evtChatId = evt.data['chat_id'];
+        final evtChatId = evt.data['chat_id'] ?? evt.data['chatId'];
         if ('$evtChatId' != '$chatId') return;
 
         final mid = evt.data['message_id'];
-        final messageId = (mid is int) ? mid : int.tryParse('$mid') ?? 0;
+        final messageId = (mid is int)
+            ? mid
+            : int.tryParse('$mid') ?? 0;
+
         if (messageId <= 0) return;
 
         if (!mounted) return;
@@ -603,8 +654,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
 
       if (evt.type == 'typing') {
         final peerId = widget.chat.peerId ?? 0;
-        final evtChatId = evt.data['chat_id'];
-        final userId = evt.data['user_id'];
+        final evtChatId = evt.data['chat_id'] ?? evt.data['chatId'];
+        final userId = evt.data['user_id'] ?? evt.data['userId'] ?? evt.data['id'];
         if ('$evtChatId' == '$chatId' && '$userId' == '$peerId') {
           final isTyping = evt.data['is_typing'] == true;
           if (isTyping != _peerTyping && mounted) {
@@ -617,7 +668,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
       }
 
       if (evt.type != 'message_new') return;
-      final evtChatId = evt.data['chat_id'];
+      final evtChatId = evt.data['chat_id'] ?? evt.data['chatId'];
       if ('$evtChatId' != '$chatId') return;
 
       final msg = evt.data['message'];
@@ -657,7 +708,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
           : int.tryParse('${replyDyn ?? ''}');
 
       final myId = _myUserId ?? 0;
-      final isMe = (myId > 0) ? senderId == myId : senderId != peerId;
+      final isMe = (myId > 0) ? senderId == myId : false;
 
       if (kDebugMode) {
         debugPrint(
@@ -711,7 +762,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
     final text = _controller.text.trim();
     final hasAttachments = _pending.isNotEmpty;
     if (text.isEmpty && !hasAttachments) return;
-    if (peerId <= 0) return;
+    final isPrivate = widget.chat.kind == 'private';
+    if (isPrivate && peerId <= 0) return;
+    if (!isPrivate && hasAttachments) return;
 
     final repo = context.read<ChatsRepository>();
     _rt ??= context.read<RealtimeClient>();
@@ -756,11 +809,16 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
         }
       });
 
-      final payload = await repo.buildEncryptedWsMessage(
-        chatId: chatId,
-        peerId: peerId,
-        plaintext: text,
-      );
+      final payload = isPrivate
+          ? await repo.buildEncryptedWsMessage(
+              chatId: chatId,
+              peerId: peerId,
+              plaintext: text,
+            )
+          : await repo.buildEncryptedWsGroupMessage(
+              chatId: chatId,
+              plaintext: text,
+            );
 
       if (!rt.isConnected) {
         await rt.connect();
@@ -838,11 +896,16 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
                 )
                 .toList(),
           )
-        : await repo.buildEncryptedWsMessage(
-            chatId: chatId,
-            peerId: peerId,
-            plaintext: text,
-          );
+        : (isPrivate
+            ? await repo.buildEncryptedWsMessage(
+                chatId: chatId,
+                peerId: peerId,
+                plaintext: text,
+              )
+            : await repo.buildEncryptedWsGroupMessage(
+                chatId: chatId,
+                plaintext: text,
+              ));
 
     String wsType = 'send_message';
     if (hasAttachments) {
@@ -860,6 +923,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
     }
     rt.joinChat(chatId);
 
+    final kvDyn = payload['key_version'] ?? payload['keyVersion'];
+    final keyVersion = (kvDyn is int) ? kvDyn : int.tryParse('$kvDyn');
+
     rt.sendMessage(
       chatId: chatId,
       message: payload['message'] as String,
@@ -868,6 +934,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
       envelopes: payload['envelopes'] as Map<String, dynamic>?,
       metadata: payload['metadata'] as List<dynamic>?,
       replyToMessageId: replyTo == null ? null : int.tryParse(replyTo.id),
+      keyVersion: keyVersion,
     );
   }
 
@@ -1110,6 +1177,80 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
     }
   }
 
+  Future<void> _refreshMyRole({
+    required ChatsRepository repo,
+    required int chatId,
+  }) async {
+    if (chatId <= 0) return;
+
+    _myUserId ??= await _readMyUserId();
+    final myId = _myUserId ?? 0;
+    if (myId <= 0) return;
+
+    try {
+      final list = await repo.api.getParticipants(chatId);
+
+      String? myRole;
+      for (final it in list) {
+        if (it is! Map) continue;
+        final dynId = it['user_id'] ?? it['userId'] ?? it['id'];
+        final uid = (dynId is int) ? dynId : int.tryParse('${dynId ?? ''}') ?? 0;
+        if (uid != myId) continue;
+        myRole = (it['role'] ?? '').toString().trim().toLowerCase();
+        break;
+      }
+
+      final isAdmin = myRole == 'admin';
+      if (mounted && isAdmin != _isAdminInChat) {
+        setState(() {
+          _isAdminInChat = isAdmin;
+        });
+      }
+    } catch (_) {
+      // ignore
+    }
+  }
+
+  Future<void> _rotateKeyFromBanner() async {
+    final chatId = int.tryParse(widget.chat.id) ?? 0;
+    if (chatId <= 0) return;
+
+    final repo = context.read<ChatsRepository>();
+
+    final ok = await GlassOverlays.showGlassDialog<bool>(
+      context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Text('Ротация ключа?'),
+          content: const Text('Ключ будет обновлён для всех участников.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Отмена'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Ротировать'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (ok != true) return;
+
+    try {
+      await repo.rotateChatKey(chatId);
+      if (!mounted) return;
+      setState(() {
+        _rotationRequired = false;
+      });
+      showGlassSnack(context, 'Ключ обновлён', kind: GlassSnackKind.success);
+    } catch (e) {
+      if (!mounted) return;
+      showGlassSnack(context, e.toString(), kind: GlassSnackKind.error);
+    }
+  }
 
   @override
   void dispose() {
@@ -1183,330 +1324,389 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
                 _deleteByIds(ids);
                 _deleteRemote(ids);
               },
-              onMenu: () {},
+              onMenu: () {
+                final kind = widget.chat.kind;
+                final isGroupOrChannel = kind == 'group' || kind == 'channel';
+                if (!isGroupOrChannel) {
+                  showGlassSnack(
+                    context,
+                    'Доступно только для групп/каналов',
+                    kind: GlassSnackKind.info,
+                  );
+                  return;
+                }
+                Navigator.of(context).push(
+                  adaptivePageRoute((_) => ChatParticipantsPage(chat: widget.chat)),
+                );
+              },
             ),
             body: Builder(
               builder: (context) {
-              final media = MediaQuery.of(context);
-              const double inputHeight = 44;
-              const double horizontalPadding = 14;
-              const double verticalPadding = 14;
+                final media = MediaQuery.of(context);
+                const double inputHeight = 44;
+                const double horizontalPadding = 14;
+                const double verticalPadding = 14;
 
-              final double topInset = media.padding.top;
-              // viewInsets.bottom is already applied via AnimatedPadding below.
-              final double bottomInset = media.padding.bottom;
+                final double topInset = media.padding.top;
+                // viewInsets.bottom is already applied via AnimatedPadding below.
+                final double bottomInset = media.padding.bottom;
 
-              final double listTopPadding = topInset + kToolbarHeight + 12;
-              final double listBottomPadding =
-                  bottomInset + media.viewInsets.bottom + inputHeight + verticalPadding + 12;
+                final double listTopPadding = topInset + kToolbarHeight + 12;
+                final double listBottomPadding =
+                    bottomInset + media.viewInsets.bottom + inputHeight + verticalPadding + 12;
 
-              final messages = _messages;
+                final messages = _messages;
 
-              final replyText = _replyTo == null ? '' : _messageSummary(_replyTo!);
+                final isChannel = widget.chat.kind == 'channel';
+                final isReadOnlyChannel = isChannel && !_isAdminInChat;
+                final isGroupOrChannel = widget.chat.kind == 'group' || widget.chat.kind == 'channel';
+                final showRotationBanner = isGroupOrChannel && _rotationRequired;
 
-              return Stack(
-                children: [
-                  Positioned.fill(
-                    child: _loading ? ListView.separated(
-                      padding: EdgeInsets.fromLTRB(
-                        horizontalPadding,
-                        listTopPadding,
-                        horizontalPadding,
-                        listBottomPadding,
-                      ),
-                      itemCount: 10,
-                      separatorBuilder: (_, __) => const SizedBox(height: 10),
-                      itemBuilder: (context, index) {
-                        final alignRight = index.isOdd;
-                        return Align(
-                          alignment: alignRight ? Alignment.centerRight : Alignment.centerLeft,
-                          child: ChatSkeletonMessageBubble(isMe: alignRight),
-                        );
-                      },
-                    ) : ListView.separated(
-                      controller: _scrollController,
-                      padding: EdgeInsets.fromLTRB(
-                        horizontalPadding,
-                        listTopPadding,
-                        horizontalPadding,
-                        listBottomPadding,
-                      ),
-                      itemCount: messages.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 10),
-                      itemBuilder: (context, index) {
-                        final msg = messages[index];
-                        final replyToId = msg.replyToMessageId;
-                        final replied = (replyToId == null || replyToId.isEmpty)
-                            ? null
-                            : _findMessageById(replyToId);
-                        final replyPreview = (replied == null) ? null : _messageSummary(replied);
-                        final selected = selectionMode && selectedIds.contains(msg.id);
-                        return Align(
-                          alignment: msg.isMe
-                              ? Alignment.centerRight
-                              : Alignment.centerLeft,
-                          child: Dismissible(
-                            key: ValueKey('reply_${msg.id}'),
-                            direction: selectionMode
-                                ? DismissDirection.none
-                                : (msg.isMe ? DismissDirection.endToStart : DismissDirection.startToEnd),
-                            movementDuration: const Duration(milliseconds: 260),
-                            dismissThresholds: {
-                              DismissDirection.startToEnd: 0.22,
-                              DismissDirection.endToStart: 0.22,
-                            },
-                            confirmDismiss: (_) async {
-                              if (selectionMode) return false;
-                              HapticFeedback.selectionClick();
-                              if (!mounted) return false;
-                              setState(() {
-                                _replyTo = msg;
-                                _editing = null;
-                              });
-                              _focusNode.requestFocus();
-                              return false;
-                            },
-                            background: Align(
-                              alignment: msg.isMe ? Alignment.centerRight : Alignment.centerLeft,
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: 12),
-                                child: Icon(
-                                  Icons.reply,
-                                  size: 18,
-                                  color: theme.colorScheme.onSurface.withOpacity(0.55),
+                final replyText = _replyTo == null ? '' : _messageSummary(_replyTo!);
+
+                return Stack(
+                  children: [
+                    if (showRotationBanner)
+                      Positioned(
+                        left: horizontalPadding,
+                        right: horizontalPadding,
+                        top: listTopPadding,
+                        child: GlassSurface(
+                          borderRadius: 18,
+                          blurSigma: 12,
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                          child: Row(
+                            children: [
+                              HugeIcon(
+                                icon: HugeIcons.strokeRoundedKey01,
+                                color: theme.colorScheme.primary,
+                                size: 20,
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  _isAdminInChat
+                                      ? 'Требуется ротация ключа'
+                                      : 'Требуется ротация ключа (нужен admin)',
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: theme.colorScheme.onSurface.withOpacity(0.8),
+                                    fontWeight: FontWeight.w600,
+                                  ),
                                 ),
                               ),
-                            ),
-                            secondaryBackground: Align(
-                              alignment: msg.isMe ? Alignment.centerRight : Alignment.centerLeft,
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: 12),
-                                child: Icon(
-                                  Icons.reply,
-                                  size: 18,
-                                  color: theme.colorScheme.onSurface.withOpacity(0.55),
+                              if (_isAdminInChat)
+                                TextButton(
+                                  onPressed: _rotateKeyFromBanner,
+                                  child: const Text('Rotate'),
                                 ),
-                              ),
-                            ),
-                            child: GestureDetector(
-                              onTapDown: (_) {
-                                if (!mounted) return;
-                                if (_pressedMessageIdN.value == msg.id) return;
-                                _pressedMessageIdN.value = msg.id;
+                            ],
+                          ),
+                        ),
+                      ),
+                    Positioned.fill(
+                      child: _loading ? ListView.separated(
+                        padding: EdgeInsets.fromLTRB(
+                          horizontalPadding,
+                          listTopPadding + (showRotationBanner ? 62 : 0),
+                          horizontalPadding,
+                          listBottomPadding,
+                        ),
+                        itemCount: 10,
+                        separatorBuilder: (_, __) => const SizedBox(height: 10),
+                        itemBuilder: (context, index) {
+                          final alignRight = index.isOdd;
+                          return Align(
+                            alignment: alignRight ? Alignment.centerRight : Alignment.centerLeft,
+                            child: ChatSkeletonMessageBubble(isMe: alignRight),
+                          );
+                        },
+                      ) : ListView.separated(
+                        controller: _scrollController,
+                        padding: EdgeInsets.fromLTRB(
+                          horizontalPadding,
+                          listTopPadding + (showRotationBanner ? 62 : 0),
+                          horizontalPadding,
+                          listBottomPadding,
+                        ),
+                        itemCount: messages.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 10),
+                        itemBuilder: (context, index) {
+                          final msg = messages[index];
+                          final replyToId = msg.replyToMessageId;
+                          final replied = (replyToId == null || replyToId.isEmpty)
+                              ? null
+                              : _findMessageById(replyToId);
+                          final replyPreview = (replied == null) ? null : _messageSummary(replied);
+                          final selected = selectionMode && selectedIds.contains(msg.id);
+                          return Align(
+                            alignment: msg.isMe
+                                ? Alignment.centerRight
+                                : Alignment.centerLeft,
+                            child: Dismissible(
+                              key: ValueKey('reply_${msg.id}'),
+                              direction: selectionMode
+                                  ? DismissDirection.none
+                                  : (isReadOnlyChannel
+                                      ? DismissDirection.none
+                                      : (msg.isMe
+                                          ? DismissDirection.endToStart
+                                          : DismissDirection.startToEnd)),
+                              movementDuration: const Duration(milliseconds: 260),
+                              dismissThresholds: {
+                                DismissDirection.startToEnd: 0.22,
+                                DismissDirection.endToStart: 0.22,
                               },
-                              onTapCancel: () {
-                                if (!mounted) return;
-                                if (_pressedMessageIdN.value != msg.id) return;
-                                _pressedMessageIdN.value = null;
-                              },
-                              onTapUp: (_) {
-                                if (!mounted) return;
-                                if (_pressedMessageIdN.value != msg.id) return;
-                                _pressedMessageIdN.value = null;
-                              },
-                              onTap: () {
-                                if (selectionMode) {
-                                  _toggleSelected(msg);
-                                }
-                              },
-                              onLongPressStart: (d) async {
+                              confirmDismiss: (_) async {
+                                if (selectionMode) return false;
                                 HapticFeedback.selectionClick();
-                                if (mounted && _pressedMessageIdN.value != msg.id) {
+                                if (!mounted) return false;
+                                setState(() {
+                                  _replyTo = msg;
+                                  _editing = null;
+                                });
+                                _focusNode.requestFocus();
+                                return false;
+                              },
+                              background: Align(
+                                alignment: msg.isMe ? Alignment.centerRight : Alignment.centerLeft,
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                                  child: Icon(
+                                    Icons.reply,
+                                    size: 18,
+                                    color: theme.colorScheme.onSurface.withOpacity(0.55),
+                                  ),
+                                ),
+                              ),
+                              secondaryBackground: Align(
+                                alignment: msg.isMe ? Alignment.centerRight : Alignment.centerLeft,
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                                  child: Icon(
+                                    Icons.reply,
+                                    size: 18,
+                                    color: theme.colorScheme.onSurface.withOpacity(0.55),
+                                  ),
+                                ),
+                              ),
+                              child: GestureDetector(
+                                onTapDown: (_) {
+                                  if (!mounted) return;
+                                  if (_pressedMessageIdN.value == msg.id) return;
                                   _pressedMessageIdN.value = msg.id;
-                                }
-                                if (selectionMode) {
-                                  _toggleSelected(msg);
-                                } else {
-                                  await _showMessageContextMenu(msg, d.globalPosition);
-                                }
-
-                                if (mounted && _pressedMessageIdN.value == msg.id) {
+                                },
+                                onTapCancel: () {
+                                  if (!mounted) return;
+                                  if (_pressedMessageIdN.value != msg.id) return;
                                   _pressedMessageIdN.value = null;
-                                }
-                              },
-                              onLongPressEnd: (_) {
-                                if (!mounted) return;
-                                if (_pressedMessageIdN.value != msg.id) return;
-                                _pressedMessageIdN.value = null;
-                              },
-                              child: ValueListenableBuilder<String?>(
-                                valueListenable: _pressedMessageIdN,
-                                builder: (context, pressedId, child) {
-                                  final pressed = pressedId == msg.id;
-                                  return AnimatedScale(
-                                    scale: pressed ? 0.985 : (selected ? 1.05 : 1.0),
-                                    duration: const Duration(milliseconds: 110),
-                                    curve: Curves.easeOut,
-                                    child: Stack(
-                                      clipBehavior: Clip.none,
-                                      children: [
-                                        AnimatedContainer(
-                                          duration: const Duration(milliseconds: 110),
-                                          curve: Curves.easeOut,
-                                          decoration: BoxDecoration(
-                                            borderRadius: BorderRadius.circular(16),
-                                            color: pressed
-                                                ? theme.colorScheme.onSurface.withOpacity(isDark ? 0.10 : 0.06)
-                                                : (selected
-                                                    ? theme.colorScheme.primary.withOpacity(isDark ? 0.12 : 0.10)
-                                                    : Colors.transparent),
-                                            border: selected
-                                                ? Border.all(
-                                                    color: theme.colorScheme.primary.withOpacity(0.8),
-                                                    width: 1.2,
-                                                  )
-                                                : null,
-                                          ),
-                                          child: Padding(
-                                            padding: const EdgeInsets.all(2),
-                                            child: RepaintBoundary(
-                                              child: _buildMessageBubble(
-                                                msg: msg,
-                                                replyPreview: replyPreview,
-                                                isDark: isDark,
+                                },
+                                onTapUp: (_) {
+                                  if (!mounted) return;
+                                  if (_pressedMessageIdN.value != msg.id) return;
+                                  _pressedMessageIdN.value = null;
+                                },
+                                onTap: () {
+                                  if (selectionMode) {
+                                    _toggleSelected(msg);
+                                  }
+                                },
+                                onLongPressStart: (d) async {
+                                  HapticFeedback.selectionClick();
+                                  if (mounted && _pressedMessageIdN.value != msg.id) {
+                                    _pressedMessageIdN.value = msg.id;
+                                  }
+                                  if (selectionMode) {
+                                    _toggleSelected(msg);
+                                  } else {
+                                    await _showMessageContextMenu(msg, d.globalPosition);
+                                  }
+
+                                  if (mounted && _pressedMessageIdN.value == msg.id) {
+                                    _pressedMessageIdN.value = null;
+                                  }
+                                },
+                                onLongPressEnd: (_) {
+                                  if (!mounted) return;
+                                  if (_pressedMessageIdN.value != msg.id) return;
+                                  _pressedMessageIdN.value = null;
+                                },
+                                child: ValueListenableBuilder<String?>(
+                                  valueListenable: _pressedMessageIdN,
+                                  builder: (context, pressedId, child) {
+                                    final pressed = pressedId == msg.id;
+                                    return AnimatedScale(
+                                      scale: pressed ? 0.985 : (selected ? 1.05 : 1.0),
+                                      duration: const Duration(milliseconds: 110),
+                                      curve: Curves.easeOut,
+                                      child: Stack(
+                                        clipBehavior: Clip.none,
+                                        children: [
+                                          AnimatedContainer(
+                                            duration: const Duration(milliseconds: 110),
+                                            curve: Curves.easeOut,
+                                            decoration: BoxDecoration(
+                                              borderRadius: BorderRadius.circular(16),
+                                              color: pressed
+                                                  ? theme.colorScheme.onSurface.withOpacity(isDark ? 0.10 : 0.06)
+                                                  : (selected
+                                                      ? theme.colorScheme.primary.withOpacity(isDark ? 0.12 : 0.10)
+                                                      : Colors.transparent),
+                                              border: selected
+                                                  ? Border.all(
+                                                      color: theme.colorScheme.primary.withOpacity(0.8),
+                                                      width: 1.2,
+                                                    )
+                                                  : null,
+                                            ),
+                                            child: Padding(
+                                              padding: const EdgeInsets.all(2),
+                                              child: RepaintBoundary(
+                                                child: _buildMessageBubble(
+                                                  msg: msg,
+                                                  replyPreview: replyPreview,
+                                                  isDark: isDark,
+                                                ),
                                               ),
                                             ),
                                           ),
-                                        ),
-                                        Positioned(
-                                          right: -6,
-                                          top: -6,
-                                          child: AnimatedOpacity(
-                                            opacity: selected ? 1 : 0,
-                                            duration: const Duration(milliseconds: 120),
-                                            curve: Curves.easeOut,
-                                            child: AnimatedScale(
-                                              scale: selected ? 1 : 0.9,
+                                          Positioned(
+                                            right: -6,
+                                            top: -6,
+                                            child: AnimatedOpacity(
+                                              opacity: selected ? 1 : 0,
                                               duration: const Duration(milliseconds: 120),
                                               curve: Curves.easeOut,
-                                              child: Container(
-                                                width: 20,
-                                                height: 20,
-                                                decoration: BoxDecoration(
-                                                  color: theme.colorScheme.primary,
-                                                  shape: BoxShape.circle,
-                                                  border: Border.all(
-                                                    color: theme.colorScheme.surface.withOpacity(0.9),
-                                                    width: 1,
+                                              child: AnimatedScale(
+                                                scale: selected ? 1 : 0.9,
+                                                duration: const Duration(milliseconds: 120),
+                                                curve: Curves.easeOut,
+                                                child: Container(
+                                                  width: 20,
+                                                  height: 20,
+                                                  decoration: BoxDecoration(
+                                                    color: theme.colorScheme.primary,
+                                                    shape: BoxShape.circle,
+                                                    border: Border.all(
+                                                      color: theme.colorScheme.surface.withOpacity(0.9),
+                                                      width: 1,
+                                                    ),
                                                   ),
-                                                ),
-                                                child: Icon(
-                                                  Icons.check,
-                                                  size: 14,
-                                                  color: theme.colorScheme.onPrimary,
+                                                  child: Icon(
+                                                    Icons.check,
+                                                    size: 14,
+                                                    color: theme.colorScheme.onPrimary,
+                                                  ),
                                                 ),
                                               ),
                                             ),
                                           ),
-                                        ),
-                                      ],
-                                    ),
-                                  );
-                                },
+                                        ],
+                                      ),
+                                    );
+                                  },
+                                ),
                               ),
                             ),
-                          ),
-                        );
-                      },
+                          );
+                        },
+                      ),
                     ),
-                  ),
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    child: AnimatedPadding(
-                      duration: const Duration(milliseconds: 200),
-                      curve: Curves.easeOut,
-                      padding: EdgeInsets.only(bottom: media.viewInsets.bottom),
-                      child: SafeArea(
-                        top: false,
-                        child: ChatInputBar(
-                          controller: _controller,
-                          focusNode: _focusNode,
-                          isDark: isDark,
-                          isEditing: _editing != null,
-                          onCancelEditing: () {
-                            setState(() {
-                              _editing = null;
-                            });
-                            _controller.clear();
-                          },
-                          hasReply: _replyTo != null,
-                          replyText: replyText,
-                          onCancelReply: () {
-                            setState(() {
-                              _replyTo = null;
-                            });
-                          },
-                          pending: _pending,
-                          onRemovePending: (index) {
-                            setState(() {
-                              _pending.removeAt(index);
-                            });
-                          },
-                          onPickPhotos: () async => await _pickPhotos(),
-                          onPickFiles: () async => await _pickFiles(),
-                          onTakePhoto: () async => await _takePhoto(),
-                          onSend: _send,
-                          onRecordingChanged: (mode, isRecording) {
-                            if (mode == RecorderMode.video) {
-                              _setVideoRecordingOverlay(show: isRecording);
-                            }
-                          },
-                          onRecordingDurationChanged: (t) {
-                            if (!_showVideoRecordingOverlay) return;
-                            if (!mounted) return;
-                            setState(() {
-                              _videoRecordingDurationText = t;
-                            });
-                          },
-                          onRecordingLockedChanged: (mode, locked) {
-                            if (mode != RecorderMode.video) return;
-                            if (!mounted) return;
-                            setState(() {
-                              _videoRecordingLocked = locked;
-                            });
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      child: AnimatedPadding(
+                        duration: const Duration(milliseconds: 200),
+                        curve: Curves.easeOut,
+                        padding: EdgeInsets.only(bottom: media.viewInsets.bottom),
+                        child: SafeArea(
+                          top: false,
+                          child: isReadOnlyChannel ? const SizedBox.shrink() : ChatInputBar(
+                            controller: _controller,
+                            focusNode: _focusNode,
+                            isDark: isDark,
+                            isEditing: _editing != null,
+                            onCancelEditing: () {
+                              setState(() {
+                                _editing = null;
+                              });
+                              _controller.clear();
+                            },
+                            hasReply: _replyTo != null,
+                            replyText: replyText,
+                            onCancelReply: () {
+                              setState(() {
+                                _replyTo = null;
+                              });
+                            },
+                            pending: _pending,
+                            onRemovePending: (index) {
+                              setState(() {
+                                _pending.removeAt(index);
+                              });
+                            },
+                            onPickPhotos: () async => await _pickPhotos(),
+                            onPickFiles: () async => await _pickFiles(),
+                            onTakePhoto: () async => await _takePhoto(),
+                            onSend: _send,
+                            onRecordingChanged: (mode, isRecording) {
+                              if (mode == RecorderMode.video) {
+                                _setVideoRecordingOverlay(show: isRecording);
+                              }
+                            },
+                            onRecordingDurationChanged: (t) {
+                              if (!_showVideoRecordingOverlay) return;
+                              if (!mounted) return;
+                              setState(() {
+                                _videoRecordingDurationText = t;
+                              });
+                            },
+                            onRecordingLockedChanged: (mode, locked) {
+                              if (mode != RecorderMode.video) return;
+                              if (!mounted) return;
+                              setState(() {
+                                _videoRecordingLocked = locked;
+                              });
 
-                            if (locked) {
-                              _videoLockedTransition.forward();
-                            } else {
-                              _videoLockedTransition.reverse();
-                            }
-                          },
-                          onRecorderController: (cancel, stop) {
-                            _cancelVideoRecording = cancel;
-                            _stopVideoRecording = stop;
-                          },
-                          onVideoControllerChanged: (controller) {
-                            if (!mounted) return;
-                            setState(() {
-                              _videoCameraController = controller;
-                            });
-                          },
-                          onVideoActionsController: (setTorch, setUseFrontCamera) {
-                            _setVideoTorch = setTorch;
-                            _setVideoUseFrontCamera = setUseFrontCamera;
-                          },
-                          onAddRecordedFile: (attachment) async {
-                            if (!mounted) return;
-                            if ((attachment.mimetype).toLowerCase().startsWith('audio/')) {
-                              await _sendRecordedVoice(attachment);
-                              return;
-                            }
-                            if ((attachment.mimetype).toLowerCase().startsWith('video/')) {
-                              await _sendRecordedVideo(attachment);
-                              return;
-                            }
-                            setState(() {
-                              _pending.add(attachment);
-                            });
-                          },
+                              if (locked) {
+                                _videoLockedTransition.forward();
+                              } else {
+                                _videoLockedTransition.reverse();
+                              }
+                            },
+                            onRecorderController: (cancel, stop) {
+                              _cancelVideoRecording = cancel;
+                              _stopVideoRecording = stop;
+                            },
+                            onVideoControllerChanged: (controller) {
+                              if (!mounted) return;
+                              setState(() {
+                                _videoCameraController = controller;
+                              });
+                            },
+                            onVideoActionsController: (setTorch, setUseFrontCamera) {
+                              _setVideoTorch = setTorch;
+                              _setVideoUseFrontCamera = setUseFrontCamera;
+                            },
+                            onAddRecordedFile: (attachment) async {
+                              if (!mounted) return;
+                              if ((attachment.mimetype).toLowerCase().startsWith('audio/')) {
+                                await _sendRecordedVoice(attachment);
+                                return;
+                              }
+                              if ((attachment.mimetype).toLowerCase().startsWith('video/')) {
+                                await _sendRecordedVideo(attachment);
+                                return;
+                              }
+                              setState(() {
+                                _pending.add(attachment);
+                              });
+                            },
+                          ),
                         ),
                       ),
                     ),
-                  ),
-
-                  if (_showVideoRecordingOverlay)
+                    if (_showVideoRecordingOverlay)
                     Positioned.fill(
                       child: Stack(
                         children: [
@@ -1560,8 +1760,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
                                             color: theme.colorScheme.surface.withOpacity(isDark ? 0.55 : 0.80),
                                             child: Stack(
                                               children: [
-                                                if (_videoCameraController != null &&
-                                                    _videoCameraController!.value.isInitialized)
+                                                if (_videoCameraController != null && _videoCameraController!.value.isInitialized)
                                                   Positioned.fill(
                                                     child: ClipRRect(
                                                       borderRadius: BorderRadius.circular(32),
@@ -1630,35 +1829,31 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
                                                       ),
                                                     );
                                                   },
-                                                  child: _videoRecordingLocked
-                                                      ? Row(
-                                                          key: const ValueKey('locked_cancel'),
-                                                          mainAxisSize: MainAxisSize.min,
-                                                          children: [
-                                                            GestureDetector(
-                                                              onTap: () {
-                                                                _cancelVideoRecording?.call();
-                                                              },
-                                                              child: GlassSurface(
-                                                                borderRadius: 12,
-                                                                blurSigma: 12,
-                                                                width: 32,
-                                                                height: 32,
-                                                                child: Center(
-                                                                  child: HugeIcon(
-                                                                    icon: HugeIcons.strokeRoundedCancel01,
-                                                                    size: 20,
-                                                                    color: theme.colorScheme.onSurface.withOpacity(0.9),
-                                                                  ),
-                                                                ),
-                                                              ),
+                                                  child: _videoRecordingLocked ? Row(
+                                                    key: const ValueKey('locked_cancel'),
+                                                    mainAxisSize: MainAxisSize.min,
+                                                    children: [
+                                                      GestureDetector(
+                                                        onTap: () {
+                                                          _cancelVideoRecording?.call();
+                                                        },
+                                                        child: GlassSurface(
+                                                          borderRadius: 12,
+                                                          blurSigma: 12,
+                                                          width: 32,
+                                                          height: 32,
+                                                          child: Center(
+                                                            child: HugeIcon(
+                                                              icon: HugeIcons.strokeRoundedCancel01,
+                                                              size: 20,
+                                                              color: theme.colorScheme.onSurface.withOpacity(0.9),
                                                             ),
-                                                            const SizedBox(width: 10),
-                                                          ],
-                                                        )
-                                                      : const SizedBox(
-                                                          key: ValueKey('hold_cancel_spacer'),
+                                                          ),
                                                         ),
+                                                      ),
+                                                      const SizedBox(width: 10),
+                                                    ],
+                                                  ) : const SizedBox(key: ValueKey('hold_cancel_spacer')),
                                                 ),
                                                 AnimatedBuilder(
                                                   animation: _videoPulse,
@@ -1736,95 +1931,91 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
                                                       ),
                                                     );
                                                   },
-                                                  child: _videoRecordingLocked
-                                                      ? Row(
-                                                          key: const ValueKey('locked_actions'),
-                                                          mainAxisSize: MainAxisSize.min,
-                                                          children: [
-                                                            const SizedBox(width: 10),
-                                                            GestureDetector(
-                                                              onTap: () async {
-                                                                if (!mounted) return;
-                                                                final next = !_videoFlashEnabled;
-                                                                setState(() {
-                                                                  _videoFlashEnabled = next;
-                                                                });
-                                                                final ok = await _setVideoTorch?.call(next);
-                                                                if (ok != true && mounted) {
-                                                                  setState(() {
-                                                                    _videoFlashEnabled = !next;
-                                                                  });
-                                                                }
-                                                              },
-                                                              child: GlassSurface(
-                                                                borderRadius: 12,
-                                                                blurSigma: 12,
-                                                                width: 32,
-                                                                height: 32,
-                                                                child: Center(
-                                                                  child: HugeIcon(
-                                                                    icon: _videoFlashEnabled
-                                                                        ? HugeIcons.strokeRoundedFlash
-                                                                        : HugeIcons.strokeRoundedFlashOff,
-                                                                    size: 20,
-                                                                    color: theme.colorScheme.onSurface.withOpacity(0.9),
-                                                                  ),
-                                                                ),
-                                                              ),
+                                                  child: _videoRecordingLocked ? Row(
+                                                    key: const ValueKey('locked_actions'),
+                                                    mainAxisSize: MainAxisSize.min,
+                                                    children: [
+                                                      const SizedBox(width: 10),
+                                                      GestureDetector(
+                                                        onTap: () async {
+                                                          if (!mounted) return;
+                                                          final next = !_videoFlashEnabled;
+                                                          setState(() {
+                                                            _videoFlashEnabled = next;
+                                                          });
+                                                          final ok = await _setVideoTorch?.call(next);
+                                                          if (ok != true && mounted) {
+                                                            setState(() {
+                                                              _videoFlashEnabled = !next;
+                                                            });
+                                                          }
+                                                        },
+                                                        child: GlassSurface(
+                                                          borderRadius: 12,
+                                                          blurSigma: 12,
+                                                          width: 32,
+                                                          height: 32,
+                                                          child: Center(
+                                                            child: HugeIcon(
+                                                              icon: _videoFlashEnabled
+                                                                  ? HugeIcons.strokeRoundedFlash
+                                                                  : HugeIcons.strokeRoundedFlashOff,
+                                                              size: 20,
+                                                              color: theme.colorScheme.onSurface.withOpacity(0.9),
                                                             ),
-                                                            const SizedBox(width: 8),
-                                                            GestureDetector(
-                                                              onTap: () async {
-                                                                if (!mounted) return;
-                                                                final next = !_videoUseFrontCamera;
-                                                                setState(() {
-                                                                  _videoUseFrontCamera = next;
-                                                                });
-                                                                final ok = await _setVideoUseFrontCamera?.call(next);
-                                                                if (ok != true && mounted) {
-                                                                  setState(() {
-                                                                    _videoUseFrontCamera = !next;
-                                                                  });
-                                                                }
-                                                              },
-                                                              child: GlassSurface(
-                                                                borderRadius: 12,
-                                                                blurSigma: 12,
-                                                                width: 32,
-                                                                height: 32,
-                                                                child: Center(
-                                                                  child: HugeIcon(
-                                                                    icon: HugeIcons.strokeRoundedExchange01,
-                                                                    size: 20,
-                                                                    color: theme.colorScheme.onSurface.withOpacity(0.9),
-                                                                  ),
-                                                                ),
-                                                              ),
-                                                            ),
-                                                            const SizedBox(width: 8),
-                                                            GestureDetector(
-                                                              onTap: () {
-                                                                _stopVideoRecording?.call();
-                                                              },
-                                                              child: GlassSurface(
-                                                                borderRadius: 12,
-                                                                blurSigma: 12,
-                                                                width: 32,
-                                                                height: 32,
-                                                                child: Center(
-                                                                  child: HugeIcon(
-                                                                    icon: HugeIcons.strokeRoundedSent,
-                                                                    size: 20,
-                                                                    color: theme.colorScheme.onSurface.withOpacity(0.9),
-                                                                  ),
-                                                                ),
-                                                              ),
-                                                            ),
-                                                          ],
-                                                        )
-                                                      : const SizedBox(
-                                                          key: ValueKey('hold_actions_spacer'),
+                                                          ),
                                                         ),
+                                                      ),
+                                                      const SizedBox(width: 8),
+                                                      GestureDetector(
+                                                        onTap: () async {
+                                                          if (!mounted) return;
+                                                          final next = !_videoUseFrontCamera;
+                                                          setState(() {
+                                                            _videoUseFrontCamera = next;
+                                                          });
+                                                          final ok = await _setVideoUseFrontCamera?.call(next);
+                                                          if (ok != true && mounted) {
+                                                            setState(() {
+                                                              _videoUseFrontCamera = !next;
+                                                            });
+                                                          }
+                                                        },
+                                                        child: GlassSurface(
+                                                          borderRadius: 12,
+                                                          blurSigma: 12,
+                                                          width: 32,
+                                                          height: 32,
+                                                          child: Center(
+                                                            child: HugeIcon(
+                                                              icon: HugeIcons.strokeRoundedExchange01,
+                                                              size: 20,
+                                                              color: theme.colorScheme.onSurface.withOpacity(0.9),
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      ),
+                                                      const SizedBox(width: 8),
+                                                      GestureDetector(
+                                                        onTap: () {
+                                                          _stopVideoRecording?.call();
+                                                        },
+                                                        child: GlassSurface(
+                                                          borderRadius: 12,
+                                                          blurSigma: 12,
+                                                          width: 32,
+                                                          height: 32,
+                                                          child: Center(
+                                                            child: HugeIcon(
+                                                              icon: HugeIcons.strokeRoundedSent,
+                                                              size: 20,
+                                                              color: theme.colorScheme.onSurface.withOpacity(0.9),
+                                                            ),
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ) : const SizedBox(key: ValueKey('hold_actions_spacer')),
                                                 ),
                                               ],
                                             ),
@@ -1833,14 +2024,14 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
                                       ),
                                     );
                                   },
-                                )
+                                ),
                               ],
                             ),
                           ),
                         ],
                       ),
                     ),
-                  ],
+                  ]
                 );
               },
             ),
@@ -2023,12 +2214,14 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
       _focusNode.requestFocus();
     }
 
+    final isChannel = widget.chat.kind == 'channel';
+    final isReadOnlyChannel = isChannel && !_isAdminInChat;
     final canEdit = msg.isMe && msg.attachments.isEmpty;
     final selected = await RenContextMenu.show<String>(
       context,
       globalPosition: globalPosition,
       entries: [
-        if (canEdit)
+        if (!isReadOnlyChannel && canEdit)
           RenContextMenuEntry.action(
             RenContextMenuAction<String>(
               icon: HugeIcon(icon: HugeIcons.strokeRoundedEdit02),
@@ -2036,13 +2229,14 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
               value: 'edit',
             ),
           ),
-        RenContextMenuEntry.action(
-          RenContextMenuAction<String>(
-            icon: HugeIcon(icon: HugeIcons.strokeRoundedArrowTurnBackward),
-            label: 'Ответить',
-            value: 'reply',
+        if (!isReadOnlyChannel)
+          RenContextMenuEntry.action(
+            RenContextMenuAction<String>(
+              icon: HugeIcon(icon: HugeIcons.strokeRoundedArrowTurnBackward),
+              label: 'Ответить',
+              value: 'reply',
+            ),
           ),
-        ),
         RenContextMenuEntry.action(
           RenContextMenuAction<String>(
             icon: HugeIcon(icon: HugeIcons.strokeRoundedCopy01),
@@ -2057,21 +2251,23 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
             value: 'share',
           ),
         ),
-        RenContextMenuEntry.action(
-          RenContextMenuAction<String>(
-            icon: HugeIcon(icon: HugeIcons.strokeRoundedTickDouble03),
-            label: 'Выбрать',
-            value: 'select',
+        if (!isReadOnlyChannel)
+          RenContextMenuEntry.action(
+            RenContextMenuAction<String>(
+              icon: HugeIcon(icon: HugeIcons.strokeRoundedTickDouble03),
+              label: 'Выбрать',
+              value: 'select',
+            ),
           ),
-        ),
-        RenContextMenuEntry.action(
-          RenContextMenuAction<String>(
-            icon: HugeIcon(icon: HugeIcons.strokeRoundedDelete02),
-            label: 'Удалить',
-            danger: true,
-            value: 'delete',
+        if (!isReadOnlyChannel)
+          RenContextMenuEntry.action(
+            RenContextMenuAction<String>(
+              icon: HugeIcon(icon: HugeIcons.strokeRoundedDelete02),
+              label: 'Удалить',
+              danger: true,
+              value: 'delete',
+            ),
           ),
-        ),
       ],
     );
 

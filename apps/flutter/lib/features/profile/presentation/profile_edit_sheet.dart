@@ -522,6 +522,7 @@ class _AvatarCropEditorState extends State<AvatarCropEditor> {
 
     try {
       final bytes = await widget.imageFile.readAsBytes();
+      if (!mounted) return;
       img.Image? originalImage = img.decodeImage(bytes);
 
       if (originalImage == null) {
@@ -532,6 +533,7 @@ class _AvatarCropEditorState extends State<AvatarCropEditor> {
       final imageHeight = originalImage.height.toDouble();
 
       // Получаем размер виджета
+      if (!mounted) return;
       final renderBox = context.findRenderObject() as RenderBox?;
       if (renderBox == null) throw Exception('Не удалось получить размер виджета');
 

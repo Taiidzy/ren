@@ -122,23 +122,23 @@ class MyApp extends StatelessWidget {
       ],
       child: Consumer<ThemeSettings>(
         builder: (context, settings, _) {
+          final chatsRepo = context.read<ChatsRepository>();
           LocalNotifications.instance.setOnOpenChat((chatId) async {
             // Ensure tree is ready
             for (var i = 0; i < 20; i++) {
-              final ctx = rootNavigatorKey.currentContext;
-              if (ctx == null) {
+              final nav = rootNavigatorKey.currentState;
+              if (nav == null) {
                 await Future<void>.delayed(const Duration(milliseconds: 50));
                 continue;
               }
 
-              final repo = Provider.of<ChatsRepository>(ctx, listen: false);
-              final chats = await repo.fetchChats();
+              final chats = await chatsRepo.fetchChats();
               final chat = chats.firstWhere(
                 (c) => (int.tryParse(c.id) ?? 0) == chatId,
                 orElse: () => throw Exception('chat not found'),
               );
 
-              rootNavigatorKey.currentState?.push(
+              nav.push(
                 MaterialPageRoute(builder: (_) => ChatPage(chat: chat)),
               );
               return;

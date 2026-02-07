@@ -16,6 +16,26 @@ use crate::AppState;
 use crate::middleware::{CurrentUser, ensure_member};
 use crate::models::chats::{FileMetadata, Message};
 
+pub fn publish_chat(state: &AppState, chat_id: i32, payload: String) {
+    if let Some(entry) = state.ws_hub.get(&chat_id) {
+        let _ = entry.send(payload);
+        return;
+    }
+    let (tx, _rx) = broadcast::channel::<String>(200);
+    let _ = tx.send(payload);
+    state.ws_hub.insert(chat_id, tx);
+}
+
+pub fn publish_user(state: &AppState, user_id: i32, payload: String) {
+    if let Some(entry) = state.user_hub.get(&user_id) {
+        let _ = entry.send(payload);
+        return;
+    }
+    let (tx, _rx) = broadcast::channel::<String>(200);
+    let _ = tx.send(payload);
+    state.user_hub.insert(user_id, tx);
+}
+
 pub fn router() -> Router<AppState> {
     Router::new().route("/ws", get(ws_handler))
 }
@@ -41,6 +61,7 @@ enum ClientEvent {
         envelopes: Option<Value>,      // JSON объект с конвертами для каждого участника
         metadata: Option<Vec<FileMetadata>>, // метаданные файлов
         reply_to_message_id: Option<i64>,
+        key_version: Option<i32>,
     },
     voce_message {
         chat_id: i32,
@@ -49,6 +70,7 @@ enum ClientEvent {
         envelopes: Option<Value>,
         metadata: Option<Vec<FileMetadata>>,
         reply_to_message_id: Option<i64>,
+        key_version: Option<i32>,
     },
     video_message {
         chat_id: i32,
@@ -57,6 +79,7 @@ enum ClientEvent {
         envelopes: Option<Value>,
         metadata: Option<Vec<FileMetadata>>,
         reply_to_message_id: Option<i64>,
+        key_version: Option<i32>,
     },
     edit_message {
         chat_id: i32,
@@ -127,19 +150,9 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
     // Отмечаем, что пользователь онлайн (сразу после апгрейда)
     state.online_users.insert(user_id);
 
-    // Хелпер: публикация события в конкретный чат
-    let publish = |state: &AppState, chat_id: i32, payload: String| {
-        if let Some(entry) = state.ws_hub.get(&chat_id) {
-            let _ = entry.send(payload);
-        }
-    };
-
-    // Хелпер: публикация события в личный канал пользователя
-    let publish_user = |state: &AppState, target_user_id: i32, payload: String| {
-        if let Some(entry) = state.user_hub.get(&target_user_id) {
-            let _ = entry.send(payload);
-        }
-    };
+    // Хелперы: публикация событий
+    let publish_evt = |state: &AppState, chat_id: i32, payload: String| publish_chat(state, chat_id, payload);
+    let publish_user_evt = |state: &AppState, user_id: i32, payload: String| publish_user(state, user_id, payload);
 
     // Обработка входящих сообщений клиента
     while let Some(Ok(msg)) = ws_receiver.next().await {
@@ -185,7 +198,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                                 let (txc, _rx) = broadcast::channel::<String>(200);
                                 state.user_hub.insert(*cid, txc);
                             }
-                            publish_user(&state, *cid, presence_evt.clone());
+                            publish_user_evt(&state, *cid, presence_evt.clone());
                         }
                         let ok_msg = serde_json::to_string(&ServerEvent::ok)
                             .unwrap_or_else(|_| "{\"type\":\"ok\"}".to_string());
@@ -235,13 +248,13 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                     Ok(ClientEvent::typing { chat_id, is_typing }) => {
                         if subs.joined.contains(&chat_id) {
                             if let Ok(evt) = serde_json::to_string(&ServerEvent::typing { chat_id, user_id, is_typing }) {
-                                publish(&state, chat_id, evt);
+                                publish_evt(&state, chat_id, evt);
                             }
                         }
                     }
-                    Ok(ClientEvent::send_message { chat_id, message, message_type, envelopes, metadata, reply_to_message_id })
-                    | Ok(ClientEvent::voce_message { chat_id, message, message_type, envelopes, metadata, reply_to_message_id })
-                    | Ok(ClientEvent::video_message { chat_id, message, message_type, envelopes, metadata, reply_to_message_id }) => {
+                    Ok(ClientEvent::send_message { chat_id, message, message_type, envelopes, metadata, reply_to_message_id, key_version })
+                    | Ok(ClientEvent::voce_message { chat_id, message, message_type, envelopes, metadata, reply_to_message_id, key_version })
+                    | Ok(ClientEvent::video_message { chat_id, message, message_type, envelopes, metadata, reply_to_message_id, key_version }) => {
                         if !subs.joined.contains(&chat_id) {
                             // safety: проверка членства
                             if let Err(e) = ensure_member(&state, chat_id, user_id).await {
@@ -253,6 +266,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                         }
                         
                         let msg_type = message_type.unwrap_or_else(|| "text".to_string());
+                        let key_version = key_version.unwrap_or(0);
                         let has_files = metadata.as_ref().map(|m| !m.is_empty());
                         
                         // Сериализуем envelopes и metadata в JSON
@@ -262,8 +276,8 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                         // Сохраняем сообщение в БД
                         let row = match sqlx::query(
                             r#"
-                            INSERT INTO messages (chat_id, sender_id, message, message_type, envelopes, metadata, reply_to_message_id)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7)
+                            INSERT INTO messages (chat_id, sender_id, message, message_type, envelopes, metadata, reply_to_message_id, key_version)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                             RETURNING
                                 id::INT8 AS id,
                                 chat_id::INT8 AS chat_id,
@@ -279,6 +293,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                                 deleted_at,
                                 deleted_by::INT8 AS deleted_by,
                                 is_read,
+                                key_version,
                                 envelopes,
                                 metadata
                             "#,
@@ -290,6 +305,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                         .bind(&envelopes_json)
                         .bind(&metadata_json)
                         .bind(reply_to_message_id.map(|v| v as i32))
+                        .bind(key_version)
                         .fetch_one(&state.pool)
                         .await {
                             Ok(r) => r,
@@ -335,6 +351,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                             metadata: metadata_vec,
                             envelopes: envelopes_value,
                             status: Some("sent".to_string()),
+                            key_version: row.try_get::<i32,_>("key_version").ok(),
                         };
                         // Реальные получатели: участники чата кроме отправителя.
                         // Если пользователь онлайн и находится в этом чате -> отправляем message_new (через ws_hub).
@@ -363,11 +380,11 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
 
                                 if state.in_chat.contains(&(chat_id, uid)) {
                                     if let Ok(evt) = serde_json::to_string(&ServerEvent::message_new { chat_id, message: msg.clone() }) {
-                                        publish(&state, chat_id, evt);
+                                        publish_evt(&state, chat_id, evt);
                                     }
                                 } else {
                                     if let Ok(evt) = serde_json::to_string(&ServerEvent::notification_new { chat_id, message: msg.clone() }) {
-                                        publish_user(&state, uid, evt);
+                                        publish_user_evt(&state, uid, evt);
                                     }
                                 }
                             }
@@ -376,7 +393,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                         // Эхо отправителю: только если он подписан на чат.
                         if subs.joined.contains(&chat_id) {
                             if let Ok(evt) = serde_json::to_string(&ServerEvent::message_new { chat_id, message: msg }) {
-                                publish(&state, chat_id, evt);
+                                publish_evt(&state, chat_id, evt);
                             }
                         }
                     }
@@ -425,6 +442,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                                 deleted_at,
                                 deleted_by::INT8 AS deleted_by,
                                 is_read,
+                                key_version,
                                 envelopes,
                                 metadata
                             "#,
@@ -489,6 +507,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                             metadata: metadata_vec,
                             envelopes: envelopes_value,
                             status: Some("sent".to_string()),
+                            key_version: row.try_get::<i32,_>("key_version").ok(),
                         };
 
                         let evt = match serde_json::to_string(&ServerEvent::message_updated { chat_id, message: msg }) {
@@ -501,7 +520,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                             }
                         };
 
-                        publish(&state, chat_id, evt.clone());
+                        publish_evt(&state, chat_id, evt.clone());
 
                         let participants = sqlx::query(
                             r#"
@@ -522,7 +541,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                                     let (txc, _rx) = broadcast::channel::<String>(200);
                                     state.user_hub.insert(uid, txc);
                                 }
-                                publish_user(&state, uid, evt.clone());
+                                publish_user_evt(&state, uid, evt.clone());
                             }
                         }
                     }
@@ -589,7 +608,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                         };
 
                         // 1) realtime для тех, кто подписан на чат
-                        publish(&state, chat_id, evt.clone());
+                        publish_evt(&state, chat_id, evt.clone());
 
                         // 2) realtime всем участникам чата через личные каналы (на случай отсутствия join_chat)
                         let participants = sqlx::query(
@@ -611,7 +630,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                                     let (txc, _rx) = broadcast::channel::<String>(200);
                                     state.user_hub.insert(uid, txc);
                                 }
-                                publish_user(&state, uid, evt.clone());
+                                publish_user_evt(&state, uid, evt.clone());
                             }
                         }
                     }
@@ -680,9 +699,10 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                                 metadata,
                                 forwarded_from_message_id,
                                 forwarded_from_chat_id,
-                                forwarded_from_sender_id
+                                forwarded_from_sender_id,
+                                key_version
                             )
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                             RETURNING
                                 id::INT8 AS id,
                                 chat_id::INT8 AS chat_id,
@@ -698,6 +718,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                                 deleted_at,
                                 deleted_by::INT8 AS deleted_by,
                                 is_read,
+                                key_version,
                                 envelopes,
                                 metadata
                             "#,
@@ -711,6 +732,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                         .bind(message_id as i32)
                         .bind(from_chat_id)
                         .bind(original_sender_id as i32)
+                        .bind(0i32)
                         .fetch_one(&state.pool)
                         .await {
                             Ok(r) => r,
@@ -755,10 +777,11 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                             metadata: metadata_vec,
                             envelopes: envelopes_value,
                             status: Some("sent".to_string()),
+                            key_version: row.try_get::<i32,_>("key_version").ok(),
                         };
 
                         if let Ok(evt) = serde_json::to_string(&ServerEvent::message_new { chat_id: to_chat_id, message: msg }) {
-                            publish(&state, to_chat_id, evt);
+                            publish_evt(&state, to_chat_id, evt);
                         }
                     }
                     Err(_) => {

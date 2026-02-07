@@ -106,8 +106,18 @@ build_windows() {
     cargo build --release --features ffi,crypto
     
     mkdir -p pkg/windows
-    cp target/x86_64-pc-windows-gnu/release/ren_sdk.dll pkg/windows/
-    
+
+    if [ -f target/release/ren_sdk.dll ]; then
+        cp target/release/ren_sdk.dll pkg/windows/
+    elif [ -f target/x86_64-pc-windows-msvc/release/ren_sdk.dll ]; then
+        cp target/x86_64-pc-windows-msvc/release/ren_sdk.dll pkg/windows/
+    elif [ -f target/x86_64-pc-windows-gnu/release/ren_sdk.dll ]; then
+        cp target/x86_64-pc-windows-gnu/release/ren_sdk.dll pkg/windows/
+    else
+        echo "Windows DLL not found (expected target/release/ren_sdk.dll or target/<triple>/release/ren_sdk.dll)"
+        exit 1
+    fi
+
     echo -e "${GREEN}✓ Windows build complete${NC}\n"
 }
 

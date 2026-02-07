@@ -137,7 +137,10 @@ class ProfileMenuPage extends StatelessWidget {
 
     final store = context.watch<ProfileStore>();
     if (store.user == null && !store.isLoading && store.error == null) {
-      Future.microtask(() => context.read<ProfileStore>().loadMe());
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!context.mounted) return;
+        context.read<ProfileStore>().loadMe();
+      });
     }
 
     return AppBackground(

@@ -97,9 +97,11 @@ class _SplashPageState extends State<SplashPage>
   void _initApp() async {
     try {
       final token = await SecureStorage.readKey(Keys.Token);
+      if (!mounted) return;
 
       if (token == null || token.isEmpty) {
         await SecureStorage.deleteAllKeys();
+        if (!mounted) return;
         Navigator.of(context).pushReplacement(
           adaptivePageRoute((_) => const AuthPage()),
         );
@@ -108,6 +110,7 @@ class _SplashPageState extends State<SplashPage>
 
       final repo = context.read<SplashRepository>();
       final userJson = await repo.checkAuth(token);
+      if (!mounted) return;
 
       final hasUser = userJson['id'] != null;
 
@@ -117,6 +120,7 @@ class _SplashPageState extends State<SplashPage>
         );
       } else {
         await SecureStorage.deleteAllKeys();
+        if (!mounted) return;
         Navigator.of(context).pushReplacement(
           adaptivePageRoute((_) => const AuthPage()),
         );

@@ -478,6 +478,8 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
     _rt ??= context.read<RealtimeClient>();
     final rt = _rt!;
 
+    final repo = context.read<ChatsRepository>();
+
     _chatIndex
       ..clear()
       ..addEntries(
@@ -497,10 +499,17 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
 
     _rtSub ??= rt.events.listen((evt) async {
       if (evt.type == 'presence') {
-        final userId = evt.data['user_id'];
-        final status = (evt.data['status'] as String?) ?? '';
+        final userId = evt.data['user_id'] ?? evt.data['userId'] ?? evt.data['id'];
+        final statusRaw = (evt.data['status'] ??
+                evt.data['state'] ??
+                evt.data['online'] ??
+                evt.data['is_online'] ??
+                evt.data['isOnline'])
+            .toString()
+            .trim()
+            .toLowerCase();
         final idStr = '$userId';
-        final isOnline = status == 'online';
+        final isOnline = statusRaw == 'online' || statusRaw == 'true' || statusRaw == '1';
         if (_online[idStr] != isOnline) {
           setState(() {
             _online[idStr] = isOnline;
@@ -508,8 +517,23 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
         }
       }
 
+      if (evt.type == 'chat_key_rotated' || evt.type == 'participants_changed') {
+        final chatIdDyn = evt.data['chat_id'] ?? evt.data['chatId'];
+        final chatId = (chatIdDyn is int) ? chatIdDyn : int.tryParse('$chatIdDyn') ?? 0;
+        if (chatId <= 0) return;
+
+        final rot = evt.data['rotation_required'];
+        final rotationRequired = rot == true || rot == 1 || rot == '1' || rot == 'true';
+        if (evt.type == 'participants_changed' && !rotationRequired) {
+          return;
+        }
+
+        repo.invalidateChatKey(chatId);
+        await repo.prefetchLatestChatKey(chatId);
+        return;
+      }
+
       if (evt.type == 'notification_new') {
-        final repo = context.read<ChatsRepository>();
         final chatIdDyn = evt.data['chat_id'] ?? evt.data['chatId'];
         final chatId = (chatIdDyn is int) ? chatIdDyn : int.tryParse('$chatIdDyn') ?? 0;
         if (chatId <= 0) return;

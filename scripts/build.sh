@@ -8,7 +8,7 @@ source "${SCRIPT_DIR}/common.sh"
 usage() {
   cat <<'EOF'
 Usage:
-  ./scripts/build.sh <ios|macos|windows|linux> [options] [-- <extra flutter args>]
+  ./scripts/build.sh <ios|android|macos|windows|linux> [options] [-- <extra flutter args>]
 
 Options:
   --sdk              Build Ren-SDK before building the app
@@ -72,6 +72,12 @@ if [ "$build_sdk" -eq 1 ]; then
   build_rensdk "$platform"
   if [ "$platform" = "ios" ]; then
     sync_rensdk_ios_xcframework
+  elif [ "$platform" = "android" ]; then
+    sync_rensdk_android_jnilibs
+  elif [ "$platform" = "windows" ]; then
+    sync_rensdk_windows_dll
+  elif [ "$platform" = "linux" ]; then
+    sync_rensdk_linux_so
   fi
 fi
 
@@ -79,6 +85,8 @@ host="$(host_os)"
 case "$platform" in
   ios|macos)
     [ "$host" = "macos" ] || die "Building for '${platform}' requires macOS host"
+    ;;
+  android)
     ;;
   windows)
     [ "$host" = "windows" ] || log_warn "Host is '${host}'. 'flutter build windows' usually requires Windows."
@@ -118,6 +126,10 @@ case "$platform" in
   macos)
     run_in "${FLUTTER_APP_DIR}" flutter build macos --"${mode}" "${extra_args[@]}"
     artifact="${FLUTTER_APP_DIR}/build/macos/Build/Products/${mode_cap}"
+    ;;
+  android)
+    run_in "${FLUTTER_APP_DIR}" flutter build apk --"${mode}" "${extra_args[@]}"
+    artifact="${FLUTTER_APP_DIR}/build/app/outputs/flutter-apk"
     ;;
   windows)
     run_in "${FLUTTER_APP_DIR}" flutter build windows --"${mode}" "${extra_args[@]}"

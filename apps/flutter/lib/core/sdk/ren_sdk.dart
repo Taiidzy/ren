@@ -449,6 +449,111 @@ class RenSdk {
     }
   }
 
+  Map<String, dynamic> envelopeFromWrappedKeyParts({
+    required String wrappedB64,
+    required String ephemeralPublicKeyB64,
+    required String nonceB64,
+  }) {
+    return {
+      'key': wrappedB64,
+      'ephem_pub_key': ephemeralPublicKeyB64,
+      'iv': nonceB64,
+    };
+  }
+
+  Map<String, dynamic>? envelopeFromWrappedKeyMap(Map<String, String> wrapped) {
+    final w = (wrapped['wrapped'] ?? '').trim();
+    final eph = (wrapped['ephemeral_public_key'] ?? '').trim();
+    final nonce = (wrapped['nonce'] ?? '').trim();
+    if (w.isEmpty || eph.isEmpty || nonce.isEmpty) return null;
+    return envelopeFromWrappedKeyParts(
+      wrappedB64: w,
+      ephemeralPublicKeyB64: eph,
+      nonceB64: nonce,
+    );
+  }
+
+  Map<String, dynamic>? wrapSymmetricKeyEnvelope(
+    String keyB64,
+    String receiverPublicKeyB64,
+  ) {
+    final wrapped = wrapSymmetricKey(keyB64, receiverPublicKeyB64);
+    if (wrapped == null) return null;
+    return envelopeFromWrappedKeyMap(wrapped);
+  }
+
+  Map<String, dynamic> wrapSymmetricKeyEnvelopes({
+    required String keyB64,
+    required Map<int, String> publicKeysByUserId,
+  }) {
+    final out = <String, dynamic>{};
+    for (final e in publicKeysByUserId.entries) {
+      final uid = e.key;
+      final pk = e.value.trim();
+      if (uid <= 0 || pk.isEmpty) continue;
+      final env = wrapSymmetricKeyEnvelope(keyB64, pk);
+      if (env == null) continue;
+      out['$uid'] = env;
+    }
+    return out;
+  }
+
+  Uint8List? unwrapSymmetricKeyEnvelopeBytes(
+    dynamic envelope,
+    String receiverPrivateKeyB64,
+  ) {
+    final env = envelope is Map ? envelope : null;
+    if (env == null) return null;
+
+    String? asString(dynamic v) {
+      if (v is String) {
+        final t = v.trim();
+        return t.isEmpty ? null : t;
+      }
+      return null;
+    }
+
+    final wrapped = asString(env['key']) ?? asString(env['wrapped']);
+    final eph = asString(env['ephem_pub_key']) ?? asString(env['ephemeral_public_key']);
+    final nonce = asString(env['iv']) ?? asString(env['nonce']);
+    if (wrapped == null || eph == null || nonce == null) return null;
+
+    return unwrapSymmetricKeyBytes(
+      wrapped,
+      eph,
+      nonce,
+      receiverPrivateKeyB64,
+    );
+  }
+
+  String? unwrapSymmetricKeyEnvelope(
+    dynamic envelope,
+    String receiverPrivateKeyB64,
+  ) {
+    final env = envelope is Map ? envelope : null;
+    if (env == null) return null;
+
+    String? asString(dynamic v) {
+      if (v is String) {
+        final t = v.trim();
+        return t.isEmpty ? null : t;
+      }
+      return null;
+    }
+
+    final wrapped = asString(env['key']) ?? asString(env['wrapped']);
+    final eph = asString(env['ephem_pub_key']) ?? asString(env['ephemeral_public_key']);
+    final nonce = asString(env['iv']) ?? asString(env['nonce']);
+    if (wrapped == null || eph == null || nonce == null) return null;
+
+    return unwrapSymmetricKey(
+      wrapped,
+      eph,
+      nonce,
+      receiverPrivateKeyB64,
+    );
+  }
+
   Uint8List? unwrapSymmetricKeyBytes(
     String wrappedB64,
     String ephemeralPublicKeyB64,

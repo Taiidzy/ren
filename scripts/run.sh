@@ -8,7 +8,7 @@ source "${SCRIPT_DIR}/common.sh"
 usage() {
   cat <<'EOF'
 Usage:
-  ./scripts/run.sh <ios|macos|windows|linux> [options] [-- <extra flutter args>]
+  ./scripts/run.sh <ios|android|macos|windows|linux> [options] [-- <extra flutter args>]
 
 Options:
   --sdk              Build Ren-SDK before running
@@ -19,6 +19,7 @@ Options:
 
 Examples:
   ./scripts/run.sh ios --sdk
+  ./scripts/run.sh android --sdk
   ./scripts/run.sh macos --device macos
   ./scripts/run.sh linux -- --verbose
 EOF
@@ -71,6 +72,12 @@ if [ "$build_sdk" -eq 1 ]; then
   build_rensdk "$platform"
   if [ "$platform" = "ios" ]; then
     sync_rensdk_ios_xcframework
+  elif [ "$platform" = "android" ]; then
+    sync_rensdk_android_jnilibs
+  elif [ "$platform" = "windows" ]; then
+    sync_rensdk_windows_dll
+  elif [ "$platform" = "linux" ]; then
+    sync_rensdk_linux_so
   fi
 fi
 
@@ -78,6 +85,8 @@ host="$(host_os)"
 case "$platform" in
   ios|macos)
     [ "$host" = "macos" ] || die "Running for '${platform}' requires macOS host"
+    ;;
+  android)
     ;;
   windows)
     [ "$host" = "windows" ] || log_warn "Host is '${host}'. 'flutter run -d windows' usually requires Windows."
@@ -98,6 +107,9 @@ else
   case "$platform" in
     macos|windows|linux)
       args+=("-d" "$platform")
+      ;;
+    android)
+      args+=("-d" "android")
       ;;
     ios)
       ;;

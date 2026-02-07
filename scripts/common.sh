@@ -77,6 +77,60 @@ sync_rensdk_ios_xcframework() {
   cp -R "${src}" "${dest}"
 }
 
+sync_rensdk_android_jnilibs() {
+  ensure_flutter_app
+  ensure_rensdk
+
+  local src="${RENSDK_DIR}/target/android/jniLibs"
+  local dest="${FLUTTER_APP_DIR}/android/app/src/main/jniLibs"
+
+  [ -d "$src" ] || die "Ren-SDK Android artifact not found: ${src} (run Ren-SDK build.sh android)"
+  require_dir "${FLUTTER_APP_DIR}/android/app/src/main"
+
+  log_info "==> Sync Android jniLibs -> ${dest}"
+  rm -rf "${dest}"
+  mkdir -p "${dest}"
+  cp -R "${src}/." "${dest}/"
+}
+
+sync_rensdk_windows_dll() {
+  ensure_flutter_app
+  ensure_rensdk
+
+  local src1="${RENSDK_DIR}/pkg/windows/ren_sdk.dll"
+  local src2="${RENSDK_DIR}/target/release/ren_sdk.dll"
+  local dest="${FLUTTER_APP_DIR}/ren_sdk.dll"
+
+  if [ -f "$src1" ]; then
+    log_info "==> Sync ren_sdk.dll -> ${dest}"
+    cp "$src1" "$dest"
+  elif [ -f "$src2" ]; then
+    log_info "==> Sync ren_sdk.dll -> ${dest}"
+    cp "$src2" "$dest"
+  else
+    die "Ren-SDK Windows DLL not found: ${src1} or ${src2}"
+  fi
+}
+
+sync_rensdk_linux_so() {
+  ensure_flutter_app
+  ensure_rensdk
+
+  local src1="${RENSDK_DIR}/target/linux/libren_sdk.so"
+  local src2="${RENSDK_DIR}/target/release/libren_sdk.so"
+  local dest="${FLUTTER_APP_DIR}/libren_sdk.so"
+
+  if [ -f "$src1" ]; then
+    log_info "==> Sync libren_sdk.so -> ${dest}"
+    cp "$src1" "$dest"
+  elif [ -f "$src2" ]; then
+    log_info "==> Sync libren_sdk.so -> ${dest}"
+    cp "$src2" "$dest"
+  else
+    die "Ren-SDK Linux SO not found: ${src1} or ${src2}"
+  fi
+}
+
 flutter_pub_get_if_needed() {
   ensure_flutter_app
   if [ ! -d "${FLUTTER_APP_DIR}/.dart_tool" ]; then

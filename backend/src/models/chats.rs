@@ -15,6 +15,7 @@ pub struct Chat {
     pub peer_id: Option<i32>,
     pub peer_username: Option<String>,
     pub peer_avatar: Option<String>,
+    pub key_version: Option<i32>,
 }
 
 // Конверт для E2EE (зашифрованный ключ для конкретного пользователя)
@@ -61,6 +62,7 @@ pub struct Message {
     pub metadata: Option<Vec<FileMetadata>>, // метаданные файлов
     pub envelopes: Option<Value>,           // JSON объект: {"userId": Envelope}
     pub status: Option<String>,              // "pending" | "sent" (для клиента)
+    pub key_version: Option<i32>,            // версия ключа (для group/channel), null/0 для private
 }
 
 // Для обратной совместимости: body теперь алиас для message

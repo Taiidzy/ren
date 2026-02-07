@@ -5,13 +5,14 @@ use axum::{
     Json, Router,
 };
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 use sqlx::{Postgres, Row, Transaction};
 
 use crate::{AppState};
 use crate::models::chats::{Chat, Message, CreateChatRequest, FileMetadata};
 use crate::middleware::CurrentUser; // экстрактор текущего пользователя
 use crate::middleware::{ensure_member};
+use crate::route::ws::{publish_chat, publish_user};
 
 // Модели вынесены в crate::models::chats
 
@@ -24,8 +25,49 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/chats", post(create_chat).get(list_chats))
         .route("/chats/:chat_id/messages", get(get_messages))
+        .route("/chats/:chat_id/participants", get(get_participants))
+        .route("/chats/:chat_id/participants", post(add_participant))
+        .route(
+            "/chats/:chat_id/participants/:user_id",
+            delete(remove_participant),
+        )
+        .route("/chats/:chat_id/leave", post(leave_chat))
+        .route("/chats/:chat_id/keys/latest", get(get_latest_key))
+        .route("/chats/:chat_id/keys/rotate", post(rotate_key))
         .route("/chats/:id/favorite", post(add_favorite).delete(remove_favorite))
         .route("/chats/:id", delete(delete_or_leave_chat))
+}
+
+#[derive(Deserialize)]
+struct RotateKeyRequest {
+    envelopes: Value,
+}
+
+#[derive(serde::Serialize)]
+struct ParticipantItem {
+    user_id: i32,
+    role: String,
+    username: String,
+    avatar: Option<String>,
+    pubk: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct LatestKeyResponse {
+    chat_id: i32,
+    key_version: i32,
+    envelope: Option<Value>,
+}
+
+#[derive(serde::Serialize)]
+struct ParticipantChangeResponse {
+    chat_id: i32,
+    rotation_required: bool,
+}
+
+#[derive(Deserialize)]
+struct AddParticipantRequest {
+    user_id: i32,
 }
 
 #[derive(Deserialize)]
@@ -61,7 +103,7 @@ async fn create_chat(
         // Сначала пробуем найти по canonical-паре user_a/user_b (новая схема)
         let existing = sqlx::query(
             r#"
-            SELECT id, kind, title, created_at, updated_at, is_archived
+            SELECT id, kind, title, created_at, updated_at, is_archived, key_version
             FROM chats
             WHERE kind = 'private' AND user_a = $1 AND user_b = $2
             LIMIT 1
@@ -85,6 +127,7 @@ async fn create_chat(
                 peer_id: None,
                 peer_username: None,
                 peer_avatar: None,
+                key_version: row.try_get("key_version").ok(),
             };
             // Гарантируем, что текущий пользователь числится участником (если выходил ранее — вернём в чат)
             sqlx::query(
@@ -104,7 +147,7 @@ async fn create_chat(
         // Fallback: если в старых данных user_a/user_b ещё не заполнены, найдём по участникам
         let existing_old = sqlx::query(
             r#"
-            SELECT c.id, c.kind, c.title, c.created_at, c.updated_at, c.is_archived
+            SELECT c.id, c.kind, c.title, c.created_at, c.updated_at, c.is_archived, c.key_version
             FROM chats c
             JOIN chat_participants p1 ON p1.chat_id = c.id AND p1.user_id = $1
             JOIN chat_participants p2 ON p2.chat_id = c.id AND p2.user_id = $2
@@ -149,6 +192,7 @@ async fn create_chat(
                 peer_id: None,
                 peer_username: None,
                 peer_avatar: None,
+                key_version: row.try_get("key_version").ok(),
             };
             tx.commit().await.ok();
             return Ok(Json(chat));
@@ -165,7 +209,7 @@ async fn create_chat(
             r#"
             INSERT INTO chats (kind, title, user_a, user_b)
             VALUES ($1, $2, $3, $4)
-            RETURNING id, kind, title, created_at, updated_at, is_archived
+            RETURNING id, kind, title, created_at, updated_at, is_archived, key_version
             "#,
         )
         .bind(&body.kind)
@@ -180,7 +224,7 @@ async fn create_chat(
             r#"
             INSERT INTO chats (kind, title)
             VALUES ($1, $2)
-            RETURNING id, kind, title, created_at, updated_at, is_archived
+            RETURNING id, kind, title, created_at, updated_at, is_archived, key_version
             "#,
         )
         .bind(&body.kind)
@@ -200,7 +244,11 @@ async fn create_chat(
             )
             .bind(chat_id)
             .bind(uid)
-            .bind(if body.kind == "group" && uid == current_user_id { "admin" } else { "member" })
+            .bind(if (body.kind == "group" || body.kind == "channel") && uid == current_user_id {
+                "admin"
+            } else {
+                "member"
+            })
             .execute(&mut *tx)
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка добавления участника: {}", e)))?;
@@ -233,6 +281,7 @@ async fn create_chat(
         peer_id: None,
         peer_username: None,
         peer_avatar: None,
+        key_version: row.try_get("key_version").ok(),
     };
 
     Ok(Json(chat))
@@ -254,6 +303,7 @@ async fn list_chats(
             c.created_at,
             c.updated_at,
             c.is_archived,
+            c.key_version,
             EXISTS(
                 SELECT 1
                 FROM chat_favorites cf
@@ -311,10 +361,371 @@ async fn list_chats(
             peer_id: row.try_get("peer_id").ok(),
             peer_username: row.try_get("peer_username").ok(),
             peer_avatar: row.try_get("peer_avatar").ok(),
+            key_version: row.try_get("key_version").ok(),
         })
         .collect();
 
     Ok(Json(items))
+}
+
+// ---------------------------
+// GET /chats/{chat_id}/participants — участники чата (для E2EE key distribution)
+// ---------------------------
+async fn get_participants(
+    State(state): State<AppState>,
+    CurrentUser { id: current_user_id }: CurrentUser,
+    Path(chat_id): Path<i32>,
+) -> Result<Json<Vec<ParticipantItem>>, (StatusCode, String)> {
+    ensure_member(&state, chat_id, current_user_id).await?;
+
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            p.user_id,
+            COALESCE(p.role, 'member') AS role,
+            COALESCE(u.username, u.login) AS username,
+            u.avatar,
+            u.pubk
+        FROM chat_participants p
+        JOIN users u ON u.id = p.user_id
+        WHERE p.chat_id = $1
+        ORDER BY
+          CASE WHEN p.role = 'admin' THEN 0 ELSE 1 END,
+          u.username ASC
+        "#,
+    )
+    .bind(chat_id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        out.push(ParticipantItem {
+            user_id: row.try_get("user_id").unwrap_or_default(),
+            role: row.try_get::<String,_>("role").unwrap_or_else(|_| "member".to_string()),
+            username: row.try_get::<String,_>("username").unwrap_or_default(),
+            avatar: row.try_get("avatar").ok(),
+            pubk: row.try_get("pubk").ok(),
+        });
+    }
+
+    Ok(Json(out))
+}
+
+// ---------------------------
+// POST /chats/{chat_id}/participants — добавить участника (group/channel: только admin)
+// body: { user_id }
+// ---------------------------
+async fn add_participant(
+    State(state): State<AppState>,
+    CurrentUser { id: current_user_id }: CurrentUser,
+    Path(chat_id): Path<i32>,
+    Json(body): Json<AddParticipantRequest>,
+) -> Result<Json<ParticipantChangeResponse>, (StatusCode, String)> {
+    // Определяем тип чата
+    let kind: Option<String> = sqlx::query_scalar("SELECT kind FROM chats WHERE id = $1")
+        .bind(chat_id)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+
+    let Some(kind) = kind else {
+        return Err((StatusCode::NOT_FOUND, "Чат не найден".into()));
+    };
+
+    // Добавлять участников можно только в group/channel и только админом
+    if kind != "group" && kind != "channel" {
+        return Err((StatusCode::BAD_REQUEST, "Добавление участников поддерживается только для group/channel".into()));
+    }
+    crate::middleware::ensure_admin(&state, chat_id, current_user_id).await?;
+
+    // Убедимся, что пользователь существует (иначе внешний ключ даст 500)
+    let exists: Option<i32> = sqlx::query_scalar("SELECT id FROM users WHERE id = $1")
+        .bind(body.user_id)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+    if exists.is_none() {
+        return Err((StatusCode::NOT_FOUND, "Пользователь не найден".into()));
+    }
+
+    sqlx::query(
+        r#"INSERT INTO chat_participants (chat_id, user_id, role)
+           VALUES ($1, $2, 'member')
+           ON CONFLICT DO NOTHING"#,
+    )
+    .bind(chat_id)
+    .bind(body.user_id)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка добавления участника: {}", e)))?;
+
+    let evt = json!({
+        "type": "participants_changed",
+        "chat_id": chat_id,
+        "action": "added",
+        "user_id": body.user_id,
+        "rotation_required": kind == "group",
+    })
+    .to_string();
+    publish_chat(&state, chat_id, evt.clone());
+    publish_user(&state, body.user_id, evt);
+
+    Ok(Json(ParticipantChangeResponse {
+        chat_id,
+        rotation_required: kind == "group",
+    }))
+}
+
+// ---------------------------
+// DELETE /chats/{chat_id}/participants/{user_id} — удалить участника (group/channel: только admin)
+// ---------------------------
+async fn remove_participant(
+    State(state): State<AppState>,
+    CurrentUser { id: current_user_id }: CurrentUser,
+    Path((chat_id, user_id)): Path<(i32, i32)>,
+) -> Result<Json<ParticipantChangeResponse>, (StatusCode, String)> {
+    let kind: Option<String> = sqlx::query_scalar("SELECT kind FROM chats WHERE id = $1")
+        .bind(chat_id)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+
+    let Some(kind) = kind else {
+        return Err((StatusCode::NOT_FOUND, "Чат не найден".into()));
+    };
+
+    if kind != "group" && kind != "channel" {
+        return Err((StatusCode::BAD_REQUEST, "Удаление участников поддерживается только для group/channel".into()));
+    }
+    crate::middleware::ensure_admin(&state, chat_id, current_user_id).await?;
+
+    // Нельзя удалить последнего админа
+    let role: Option<String> = sqlx::query_scalar(
+        "SELECT role FROM chat_participants WHERE chat_id = $1 AND user_id = $2",
+    )
+    .bind(chat_id)
+    .bind(user_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+
+    let Some(role) = role else {
+        return Ok(Json(ParticipantChangeResponse {
+            chat_id,
+            rotation_required: false,
+        }));
+    };
+
+    if role == "admin" {
+        let admin_cnt: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::INT8 FROM chat_participants WHERE chat_id = $1 AND role = 'admin'",
+        )
+        .bind(chat_id)
+        .fetch_one(&state.pool)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+        if admin_cnt <= 1 {
+            return Err((StatusCode::BAD_REQUEST, "Нельзя удалить последнего admin".into()));
+        }
+    }
+
+    sqlx::query("DELETE FROM chat_participants WHERE chat_id = $1 AND user_id = $2")
+        .bind(chat_id)
+        .bind(user_id)
+        .execute(&state.pool)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка удаления участника: {}", e)))?;
+
+    let evt = json!({
+        "type": "participants_changed",
+        "chat_id": chat_id,
+        "action": "removed",
+        "user_id": user_id,
+        "rotation_required": kind == "group",
+    })
+    .to_string();
+    publish_chat(&state, chat_id, evt.clone());
+    publish_user(&state, user_id, evt);
+
+    Ok(Json(ParticipantChangeResponse {
+        chat_id,
+        rotation_required: kind == "group",
+    }))
+}
+
+// ---------------------------
+// POST /chats/{chat_id}/leave — покинуть чат (group/channel)
+// ---------------------------
+async fn leave_chat(
+    State(state): State<AppState>,
+    CurrentUser { id: current_user_id }: CurrentUser,
+    Path(chat_id): Path<i32>,
+) -> Result<Json<ParticipantChangeResponse>, (StatusCode, String)> {
+    ensure_member(&state, chat_id, current_user_id).await?;
+
+    let kind: Option<String> = sqlx::query_scalar("SELECT kind FROM chats WHERE id = $1")
+        .bind(chat_id)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+
+    let Some(kind) = kind else {
+        return Err((StatusCode::NOT_FOUND, "Чат не найден".into()));
+    };
+    if kind != "group" && kind != "channel" {
+        return Err((StatusCode::BAD_REQUEST, "leave поддерживается только для group/channel".into()));
+    }
+
+    // Если админов больше нет — запрещаем уход последнего админа
+    let my_role: Option<String> = sqlx::query_scalar(
+        "SELECT role FROM chat_participants WHERE chat_id = $1 AND user_id = $2",
+    )
+    .bind(chat_id)
+    .bind(current_user_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+
+    if my_role.as_deref() == Some("admin") {
+        let admin_cnt: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*)::INT8 FROM chat_participants WHERE chat_id = $1 AND role = 'admin'",
+        )
+        .bind(chat_id)
+        .fetch_one(&state.pool)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+        if admin_cnt <= 1 {
+            return Err((StatusCode::BAD_REQUEST, "Нельзя покинуть чат: вы последний admin".into()));
+        }
+    }
+
+    sqlx::query("DELETE FROM chat_participants WHERE chat_id = $1 AND user_id = $2")
+        .bind(chat_id)
+        .bind(current_user_id)
+        .execute(&state.pool)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка выхода из чата: {}", e)))?;
+
+    let evt = json!({
+        "type": "participants_changed",
+        "chat_id": chat_id,
+        "action": "left",
+        "user_id": current_user_id,
+        "rotation_required": kind == "group",
+    })
+    .to_string();
+    publish_chat(&state, chat_id, evt);
+
+    Ok(Json(ParticipantChangeResponse {
+        chat_id,
+        rotation_required: kind == "group",
+    }))
+}
+
+// ---------------------------
+// GET /chats/{chat_id}/keys/latest — получить конверт текущего ключа для себя
+// ---------------------------
+async fn get_latest_key(
+    State(state): State<AppState>,
+    CurrentUser { id: current_user_id }: CurrentUser,
+    Path(chat_id): Path<i32>,
+) -> Result<Json<LatestKeyResponse>, (StatusCode, String)> {
+    ensure_member(&state, chat_id, current_user_id).await?;
+
+    let row = sqlx::query(
+        r#"
+        SELECT ck.key_version, ck.envelopes
+        FROM chat_keys ck
+        WHERE ck.chat_id = $1
+        ORDER BY ck.key_version DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(chat_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+
+    let Some(row) = row else {
+        return Ok(Json(LatestKeyResponse { chat_id, key_version: 0, envelope: None }));
+    };
+
+    let key_version: i32 = row.try_get("key_version").unwrap_or(0);
+    let envelopes: Value = row.try_get("envelopes").unwrap_or(Value::Null);
+
+    let envelope = envelopes
+        .get(current_user_id.to_string())
+        .cloned();
+
+    Ok(Json(LatestKeyResponse { chat_id, key_version, envelope }))
+}
+
+// ---------------------------
+// POST /chats/{chat_id}/keys/rotate — ротация ключа (только admin, group only)
+// body: { envelopes: {"userId": {key, ephem_pub_key, iv}, ...} }
+// ---------------------------
+async fn rotate_key(
+    State(state): State<AppState>,
+    CurrentUser { id: current_user_id }: CurrentUser,
+    Path(chat_id): Path<i32>,
+    Json(body): Json<RotateKeyRequest>,
+) -> Result<Json<LatestKeyResponse>, (StatusCode, String)> {
+    crate::middleware::ensure_admin(&state, chat_id, current_user_id).await?;
+
+    // Only group chats require rotation; channels are static.
+    let kind: Option<String> = sqlx::query_scalar("SELECT kind FROM chats WHERE id = $1")
+        .bind(chat_id)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+
+    let Some(kind) = kind else {
+        return Err((StatusCode::NOT_FOUND, "Чат не найден".into()));
+    };
+    if kind != "group" {
+        return Err((StatusCode::BAD_REQUEST, "Ротация ключа поддерживается только для group-чата".into()));
+    }
+
+    if !body.envelopes.is_object() {
+        return Err((StatusCode::BAD_REQUEST, "envelopes должен быть JSON-объектом".into()));
+    }
+
+    let mut tx: Transaction<'_, Postgres> = state.pool.begin().await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Не удалось начать транзакцию: {}", e)))?;
+
+    let new_version: i32 = sqlx::query_scalar(
+        "UPDATE chats SET key_version = key_version + 1 WHERE id = $1 RETURNING key_version",
+    )
+    .bind(chat_id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+
+    sqlx::query(
+        r#"INSERT INTO chat_keys (chat_id, key_version, envelopes) VALUES ($1, $2, $3)"#,
+    )
+    .bind(chat_id)
+    .bind(new_version)
+    .bind(&body.envelopes)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+
+    tx.commit().await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Не удалось зафиксировать транзакцию: {}", e)))?;
+
+    let evt = json!({
+        "type": "chat_key_rotated",
+        "chat_id": chat_id,
+        "key_version": new_version,
+    })
+    .to_string();
+    publish_chat(&state, chat_id, evt);
+
+    let envelope = body.envelopes.get(current_user_id.to_string()).cloned();
+    Ok(Json(LatestKeyResponse { chat_id, key_version: new_version, envelope }))
 }
 
 // ---------------------------
@@ -351,6 +762,7 @@ async fn get_messages(
                 deleted_at,
                 deleted_by::INT8 AS deleted_by,
                 COALESCE(is_read, false) AS is_read,
+                COALESCE(key_version, 0) AS key_version,
                 envelopes,
                 metadata
             FROM messages
@@ -403,6 +815,7 @@ async fn get_messages(
                 metadata: metadata_vec,
                 envelopes: row.try_get("envelopes").ok().flatten(),
                 status: None,
+                key_version: row.try_get::<i32,_>("key_version").ok(),
             }
         })
         .collect();
@@ -439,7 +852,7 @@ async fn delete_or_leave_chat(
     let kind: String = row.try_get("kind").unwrap_or_default();
     let _role: String = row.try_get("role").unwrap_or_else(|_| "member".to_string());
 
-    if kind == "group" {
+    if kind == "group" || kind == "channel" {
         // Удалять весь чат может только администратор — проверяем через общую утилиту
         crate::middleware::ensure_admin(&state, id, current_user_id).await?;
         sqlx::query("DELETE FROM chats WHERE id = $1")

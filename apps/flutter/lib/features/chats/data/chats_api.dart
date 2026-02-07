@@ -174,6 +174,119 @@ class ChatsApi {
     }
   }
 
+  Future<List<dynamic>> getParticipants(int chatId) async {
+    final token = await _requireToken();
+    try {
+      final resp = await dio.get(
+        '${Apiurl.api}/chats/$chatId/participants',
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+      return (resp.data as List<dynamic>?) ?? const [];
+    } on DioException catch (e) {
+      throw ApiException(
+        (e.response?.data is String)
+            ? e.response?.data as String
+            : 'Ошибка загрузки участников',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
+  Future<Map<String, dynamic>> addParticipant(int chatId, int userId) async {
+    final token = await _requireToken();
+    try {
+      final resp = await dio.post(
+        '${Apiurl.api}/chats/$chatId/participants',
+        data: {'user_id': userId},
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+      return (resp.data as Map<String, dynamic>?) ?? <String, dynamic>{};
+    } on DioException catch (e) {
+      throw ApiException(
+        (e.response?.data is String)
+            ? e.response?.data as String
+            : 'Ошибка добавления участника',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
+  Future<Map<String, dynamic>> removeParticipant(int chatId, int userId) async {
+    final token = await _requireToken();
+    try {
+      final resp = await dio.delete(
+        '${Apiurl.api}/chats/$chatId/participants/$userId',
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+      return (resp.data as Map<String, dynamic>?) ?? <String, dynamic>{};
+    } on DioException catch (e) {
+      throw ApiException(
+        (e.response?.data is String)
+            ? e.response?.data as String
+            : 'Ошибка удаления участника',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
+  Future<Map<String, dynamic>> leaveChat(int chatId) async {
+    final token = await _requireToken();
+    try {
+      final resp = await dio.post(
+        '${Apiurl.api}/chats/$chatId/leave',
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+      return (resp.data as Map<String, dynamic>?) ?? <String, dynamic>{};
+    } on DioException catch (e) {
+      throw ApiException(
+        (e.response?.data is String)
+            ? e.response?.data as String
+            : 'Ошибка выхода из чата',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
+  Future<Map<String, dynamic>> getLatestChatKey(int chatId) async {
+    final token = await _requireToken();
+    try {
+      final resp = await dio.get(
+        '${Apiurl.api}/chats/$chatId/keys/latest',
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+      return (resp.data as Map<String, dynamic>?) ?? <String, dynamic>{};
+    } on DioException catch (e) {
+      throw ApiException(
+        (e.response?.data is String)
+            ? e.response?.data as String
+            : 'Ошибка получения ключа',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
+  Future<Map<String, dynamic>> rotateChatKey(
+    int chatId,
+    Map<String, dynamic> envelopes,
+  ) async {
+    final token = await _requireToken();
+    try {
+      final resp = await dio.post(
+        '${Apiurl.api}/chats/$chatId/keys/rotate',
+        data: {'envelopes': envelopes},
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+      return (resp.data as Map<String, dynamic>?) ?? <String, dynamic>{};
+    } on DioException catch (e) {
+      throw ApiException(
+        (e.response?.data is String)
+            ? e.response?.data as String
+            : 'Ошибка ротации ключа',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
   Future<String> getPublicKey(int userId) async {
     try {
       final token = await _requireToken();

@@ -96,25 +96,28 @@ class _SquareVideoBubbleState extends State<SquareVideoBubble> {
     }
     await c.play();
 
-    await Navigator.of(context, rootNavigator: true).push(
-      PageRouteBuilder<void>(
-        opaque: false,
-        barrierColor: const Color(0x01FFFFFF),
-        pageBuilder: (context, animation, secondaryAnimation) {
-          return _SquareVideoFullscreen(
-            heroTag: widget.videoPath,
-            controller: c,
-            animation: animation,
-          );
-        },
-      ),
-    );
+    if (mounted) {
+      await Navigator.of(context, rootNavigator: true).push(
+        PageRouteBuilder<void>(
+          opaque: false,
+          barrierColor: const Color(0x01FFFFFF),
+          pageBuilder: (context, animation, secondaryAnimation) {
+            return _SquareVideoFullscreen(
+              heroTag: widget.videoPath,
+              controller: c,
+              animation: animation,
+            );
+          },
+        ),
+      );
+    }
 
-    if (!mounted) return;
-    try {
-      await c.setVolume(0);
-      await c.play();
-    } catch (_) {}
+    if (mounted) {
+      try {
+        await c.setVolume(0);
+        await c.play();
+      } catch (_) {}
+    }
   }
 
   @override

@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
@@ -41,6 +40,9 @@ class ChatsRepository {
   String? _myPublicKeyB64Cache;
   final Map<int, String> _peerPublicKeyB64Cache = <int, String>{};
 
+  final Map<int, Map<int, Uint8List>> _chatKeyBytesByChatIdAndVersion = <int, Map<int, Uint8List>>{};
+  final Map<int, int> _latestChatKeyVersionByChatId = <int, int>{};
+
   ChatsRepository(this.api, this.renSdk);
 
   Future<Directory> _getTempDir() async {
@@ -58,6 +60,150 @@ class ChatsRepository {
     } finally {
       _tempDirInFlight = null;
     }
+
+  }
+
+  ({String text, String? key}) _decryptMessageWithChatKeyBytes({
+    required String encrypted,
+    required Uint8List keyBytes,
+  }) {
+    if (encrypted.isEmpty) return (text: '', key: null);
+
+    Map<String, dynamic>? payload;
+    try {
+      payload = jsonDecode(encrypted) as Map<String, dynamic>;
+    } catch (_) {
+      return (text: '[encrypted]', key: null);
+    }
+
+    final ciphertext = (payload['ciphertext'] as String?)?.trim();
+    final nonce = (payload['nonce'] as String?)?.trim();
+    if (ciphertext == null || nonce == null) {
+      debugPrint('decrypt: missing ciphertext/nonce');
+      return (text: '[encrypted]', key: null);
+    }
+
+    final decrypted = renSdk.decryptMessageWithKeyBytes(ciphertext, nonce, keyBytes);
+    if (decrypted == null) {
+      debugPrint('decrypt: decryptMessage failed');
+    }
+    return (text: decrypted ?? '[encrypted]', key: base64Encode(keyBytes));
+  }
+
+  Future<Uint8List?> _getChatKeyBytesLatest(int chatId) async {
+    final resp = await api.getLatestChatKey(chatId);
+    final kvDyn = resp['key_version'] ?? resp['keyVersion'];
+    final keyVersion = (kvDyn is int) ? kvDyn : int.tryParse('${kvDyn ?? ''}') ?? 0;
+    final env = resp['envelope'];
+    if (env is! Map) {
+      return null;
+    }
+
+    final myPriv = await _getMyPrivateKeyB64();
+    if (myPriv == null || myPriv.isEmpty) return null;
+
+    final keyBytes = renSdk.unwrapSymmetricKeyEnvelopeBytes(env, myPriv);
+    if (keyBytes == null || keyBytes.isEmpty) return null;
+
+    final byVer = _chatKeyBytesByChatIdAndVersion.putIfAbsent(chatId, () => <int, Uint8List>{});
+    byVer[keyVersion] = keyBytes;
+    _latestChatKeyVersionByChatId[chatId] = keyVersion;
+    return keyBytes;
+  }
+
+  Future<Uint8List?> _getChatKeyBytesForMessage({
+    required int chatId,
+    required int keyVersion,
+  }) async {
+    final byVer = _chatKeyBytesByChatIdAndVersion[chatId];
+    final cached = byVer?[keyVersion];
+    if (cached != null) return cached;
+
+    // We only have "latest" API right now; fetch it and cache.
+    await _getChatKeyBytesLatest(chatId);
+    return _chatKeyBytesByChatIdAndVersion[chatId]?[keyVersion];
+  }
+
+  void invalidateChatKey(int chatId) {
+    _latestChatKeyVersionByChatId.remove(chatId);
+    _chatKeyBytesByChatIdAndVersion.remove(chatId);
+  }
+
+  Future<void> prefetchLatestChatKey(int chatId) async {
+    await _getChatKeyBytesLatest(chatId);
+  }
+
+  Future<void> rotateChatKey(int chatId) async {
+    if (chatId <= 0) {
+      throw Exception('Некорректный chatId');
+    }
+
+    final myId = await _getMyUserId();
+    if (myId <= 0) {
+      throw Exception('Не удалось определить userId');
+    }
+
+    final myPublicKeyB64 = await _getMyPublicKeyB64();
+    if (myPublicKeyB64 == null || myPublicKeyB64.isEmpty) {
+      throw Exception('Отсутствует публичный ключ');
+    }
+
+    final participants = await api.getParticipants(chatId);
+
+    final userIds = <int>{};
+    for (final p in participants) {
+      if (p is int) {
+        if (p > 0) userIds.add(p);
+        continue;
+      }
+      if (p is Map) {
+        final dynId = p['user_id'] ?? p['userId'] ?? p['id'];
+        final uid = (dynId is int) ? dynId : int.tryParse('${dynId ?? ''}') ?? 0;
+        if (uid > 0) userIds.add(uid);
+      }
+    }
+    userIds.add(myId);
+
+    final publicKeysByUserId = <int, String>{
+      myId: myPublicKeyB64,
+    };
+
+    final missingPublicKeys = <int>[];
+    for (final uid in userIds) {
+      if (uid == myId) continue;
+
+      try {
+        final pk = (await api.getPublicKey(uid)).trim();
+        if (pk.isNotEmpty) {
+          publicKeysByUserId[uid] = pk;
+        } else {
+          missingPublicKeys.add(uid);
+        }
+      } catch (_) {
+        missingPublicKeys.add(uid);
+      }
+    }
+
+    if (missingPublicKeys.isNotEmpty) {
+      missingPublicKeys.sort();
+      throw Exception(
+        'Не удалось получить public key для пользователей: ${missingPublicKeys.join(', ')}',
+      );
+    }
+
+    final newKeyB64 = renSdk.generateMessageKey().trim();
+    final envelopes = renSdk.wrapSymmetricKeyEnvelopes(
+      keyB64: newKeyB64,
+      publicKeysByUserId: publicKeysByUserId,
+    );
+    if (envelopes.isEmpty) {
+      throw Exception('Не удалось сформировать envelopes');
+    }
+
+    await api.rotateChatKey(chatId, envelopes);
+
+    invalidateChatKey(chatId);
+    await prefetchLatestChatKey(chatId);
   }
 
   Future<Directory> _getCiphertextCacheDir() async {
@@ -275,6 +421,9 @@ class ChatsRepository {
       final createdAtStr = (m['created_at'] as String?) ?? '';
       final createdAt = (DateTime.tryParse(createdAtStr) ?? DateTime.now()).toLocal();
 
+      final kvDyn = m['key_version'] ?? m['keyVersion'];
+      final keyVersion = (kvDyn is int) ? kvDyn : int.tryParse('${kvDyn ?? ''}');
+
       final encrypted = (m['message'] as String?) ?? '';
 
       final decrypted = await _tryDecryptMessageAndKey(
@@ -282,6 +431,8 @@ class ChatsRepository {
         envelopes: m['envelopes'],
         myUserId: myUserId,
         myPrivateKeyB64: privateKey,
+        chatId: chatId,
+        keyVersion: keyVersion,
       );
 
       final msgKey = decrypted.key;
@@ -473,13 +624,62 @@ class ChatsRepository {
     required dynamic envelopes,
     required int myUserId,
     required String? myPrivateKeyB64,
+    int? chatId,
+    int? keyVersion,
   }) async {
-    return _decryptMessageWithKey(
-      encrypted: encrypted,
-      envelopes: envelopes,
-      myUserId: myUserId,
-      myPrivateKeyB64: myPrivateKeyB64,
-    );
+    // 1) If per-message envelopes exist (private chat / legacy), use them
+    if (envelopes is Map) {
+      return _decryptMessageWithKey(
+        encrypted: encrypted,
+        envelopes: envelopes,
+        myUserId: myUserId,
+        myPrivateKeyB64: myPrivateKeyB64,
+      );
+    }
+
+    // 2) Otherwise, try decrypt using group/channel chat key
+    final cid = chatId ?? 0;
+    final kv = keyVersion ?? 0;
+    if (cid <= 0) {
+      return (text: '[encrypted]', key: null);
+    }
+    final keyBytes = await _getChatKeyBytesForMessage(chatId: cid, keyVersion: kv);
+    if (keyBytes == null || keyBytes.isEmpty) {
+      return (text: '[encrypted]', key: null);
+    }
+    return _decryptMessageWithChatKeyBytes(encrypted: encrypted, keyBytes: keyBytes);
+  }
+
+  Future<Map<String, dynamic>> buildEncryptedWsGroupMessage({
+    required int chatId,
+    required String plaintext,
+  }) async {
+    final keyBytes = await _getChatKeyBytesLatest(chatId);
+    if (keyBytes == null || keyBytes.isEmpty) {
+      throw Exception('Не найден ключ чата');
+    }
+
+    final keyB64 = base64Encode(keyBytes);
+    final enc = renSdk.encryptMessage(plaintext, keyB64);
+    if (enc == null) {
+      throw Exception('Не удалось зашифровать сообщение');
+    }
+
+    final keyVersion = _latestChatKeyVersionByChatId[chatId] ?? 0;
+
+    final messageJson = jsonEncode({
+      'ciphertext': enc['ciphertext'],
+      'nonce': enc['nonce'],
+    });
+
+    return {
+      'chat_id': chatId,
+      'message': messageJson,
+      'message_type': 'text',
+      'envelopes': null,
+      'metadata': null,
+      'key_version': keyVersion,
+    };
   }
 
   Future<ChatPreview> createPrivateChat(int peerId) async {
@@ -566,17 +766,15 @@ class ChatsRepository {
       throw Exception('Ошибка E2EE: не удалось развернуть собственный envelope (ключи не совпадают)');
     }
 
-    Map<String, dynamic> env(String userId, Map<String, String> w) {
-      return {
-        'key': w['wrapped'],
-        'ephem_pub_key': w['ephemeral_public_key'],
-        'iv': w['nonce'],
-      };
+    final envMe = renSdk.envelopeFromWrappedKeyMap(wrappedForMe);
+    final envPeer = renSdk.envelopeFromWrappedKeyMap(wrappedForPeer);
+    if (envMe == null || envPeer == null) {
+      throw Exception('Не удалось сформировать envelopes');
     }
 
     final envelopes = <String, dynamic>{
-      '$myUserId': env('$myUserId', wrappedForMe),
-      '$peerId': env('$peerId', wrappedForPeer),
+      '$myUserId': envMe,
+      '$peerId': envPeer,
     };
 
     final messageJson = jsonEncode({
@@ -729,17 +927,15 @@ class ChatsRepository {
       throw Exception('Не удалось сформировать envelopes');
     }
 
-    Map<String, dynamic> env(String userId, Map<String, String> w) {
-      return {
-        'key': w['wrapped'],
-        'ephem_pub_key': w['ephemeral_public_key'],
-        'iv': w['nonce'],
-      };
+    final envMe = renSdk.envelopeFromWrappedKeyMap(wrappedForMe);
+    final envPeer = renSdk.envelopeFromWrappedKeyMap(wrappedForPeer);
+    if (envMe == null || envPeer == null) {
+      throw Exception('Не удалось сформировать envelopes');
     }
 
     final envelopes = {
-      '$myId': env('$myId', wrappedForMe),
-      '$peerId': env('$peerId', wrappedForPeer),
+      '$myId': envMe,
+      '$peerId': envPeer,
     };
 
     final metadata = <Map<String, dynamic>>[];
@@ -803,6 +999,11 @@ class ChatsRepository {
     final myUserId = await _getMyUserId();
     final myPrivateKeyB64 = await _getMyPrivateKeyB64();
 
+    final cidDyn = message['chat_id'] ?? message['chatId'];
+    final chatId = (cidDyn is int) ? cidDyn : int.tryParse('${cidDyn ?? ''}');
+    final kvDyn = message['key_version'] ?? message['keyVersion'];
+    final keyVersion = (kvDyn is int) ? kvDyn : int.tryParse('${kvDyn ?? ''}');
+
     final encrypted = message['message'] as String? ?? '';
     final envelopes = message['envelopes'];
 
@@ -811,6 +1012,8 @@ class ChatsRepository {
       envelopes: envelopes,
       myUserId: myUserId,
       myPrivateKeyB64: myPrivateKeyB64,
+      chatId: chatId,
+      keyVersion: keyVersion,
     );
 
     return decrypted.text;
@@ -822,6 +1025,11 @@ class ChatsRepository {
     final myUserId = await _getMyUserId();
     final myPrivateKeyB64 = await _getMyPrivateKeyB64();
 
+    final cidDyn = message['chat_id'] ?? message['chatId'];
+    final chatId = (cidDyn is int) ? cidDyn : int.tryParse('${cidDyn ?? ''}');
+    final kvDyn = message['key_version'] ?? message['keyVersion'];
+    final keyVersion = (kvDyn is int) ? kvDyn : int.tryParse('${kvDyn ?? ''}');
+
     final encrypted = message['message'] as String? ?? '';
     final envelopes = message['envelopes'];
 
@@ -830,6 +1038,8 @@ class ChatsRepository {
       envelopes: envelopes,
       myUserId: myUserId,
       myPrivateKeyB64: myPrivateKeyB64,
+      chatId: chatId,
+      keyVersion: keyVersion,
     );
 
     final attachments = await _tryDecryptAttachments(
