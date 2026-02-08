@@ -314,6 +314,28 @@ class ChatsApi {
     }
   }
 
+  Future<Map<String, dynamic>> distributeChatKey(
+    int chatId,
+    Map<String, dynamic> envelopes,
+  ) async {
+    final token = await _requireToken();
+    try {
+      final resp = await dio.post(
+        '${Apiurl.api}/chats/$chatId/keys/distribute',
+        data: {'envelopes': envelopes},
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+      return (resp.data as Map<String, dynamic>?) ?? <String, dynamic>{};
+    } on DioException catch (e) {
+      throw ApiException(
+        (e.response?.data is String)
+            ? e.response?.data as String
+            : 'Ошибка распределения ключа',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
   Future<String> getPublicKey(int userId) async {
     try {
       final token = await _requireToken();

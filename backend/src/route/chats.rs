@@ -35,12 +35,18 @@ pub fn router() -> Router<AppState> {
         .route("/chats/:chat_id/leave", post(leave_chat))
         .route("/chats/:chat_id/keys/latest", get(get_latest_key))
         .route("/chats/:chat_id/keys/rotate", post(rotate_key))
+        .route("/chats/:chat_id/keys/distribute", post(distribute_key))
         .route("/chats/:id/favorite", post(add_favorite).delete(remove_favorite))
         .route("/chats/:id", delete(delete_or_leave_chat))
 }
 
 #[derive(Deserialize)]
 struct RotateKeyRequest {
+    envelopes: Value,
+}
+
+#[derive(Deserialize)]
+struct DistributeKeyRequest {
     envelopes: Value,
 }
 
@@ -515,6 +521,10 @@ async fn add_participant(
     }
     crate::middleware::ensure_admin(&state, chat_id, current_user_id).await?;
 
+    if body.user_id == current_user_id {
+        return Err((StatusCode::BAD_REQUEST, "Нельзя добавить себя в чат".into()));
+    }
+
     // Убедимся, что пользователь существует (иначе внешний ключ даст 500)
     let exists: Option<i32> = sqlx::query_scalar("SELECT id FROM users WHERE id = $1")
         .bind(body.user_id)
@@ -653,6 +663,10 @@ async fn leave_chat(
         return Err((StatusCode::BAD_REQUEST, "leave поддерживается только для group/channel".into()));
     }
 
+    if kind == "channel" {
+        return Err((StatusCode::FORBIDDEN, "Нельзя самостоятельно подписываться/отписываться от канала".into()));
+    }
+
     // Если админов больше нет — запрещаем уход последнего админа
     let my_role: Option<String> = sqlx::query_scalar(
         "SELECT role FROM chat_participants WHERE chat_id = $1 AND user_id = $2",
@@ -759,8 +773,8 @@ async fn rotate_key(
     let Some(kind) = kind else {
         return Err((StatusCode::NOT_FOUND, "Чат не найден".into()));
     };
-    if kind != "group" {
-        return Err((StatusCode::BAD_REQUEST, "Ротация ключа поддерживается только для group-чата".into()));
+    if kind != "group" && kind != "channel" {
+        return Err((StatusCode::BAD_REQUEST, "Ротация ключа поддерживается только для group/channel".into()));
     }
 
     if !body.envelopes.is_object() {
@@ -770,13 +784,34 @@ async fn rotate_key(
     let mut tx: Transaction<'_, Postgres> = state.pool.begin().await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Не удалось начать транзакцию: {}", e)))?;
 
-    let new_version: i32 = sqlx::query_scalar(
-        "UPDATE chats SET key_version = key_version + 1 WHERE id = $1 RETURNING key_version",
-    )
-    .bind(chat_id)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+    let new_version: i32 = if kind == "group" {
+        sqlx::query_scalar(
+            "UPDATE chats SET key_version = key_version + 1 WHERE id = $1 RETURNING key_version",
+        )
+        .bind(chat_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?
+    } else {
+        // channel: allow only one-time initialization (key_version becomes 1)
+        let current: Option<i32> = sqlx::query_scalar("SELECT key_version FROM chats WHERE id = $1")
+            .bind(chat_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+
+        if current.unwrap_or(0) >= 1 {
+            return Err((StatusCode::BAD_REQUEST, "Ключ канала уже инициализирован".into()));
+        }
+
+        sqlx::query_scalar(
+            "UPDATE chats SET key_version = 1 WHERE id = $1 RETURNING key_version",
+        )
+        .bind(chat_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?
+    };
 
     sqlx::query(
         r#"INSERT INTO chat_keys (chat_id, key_version, envelopes) VALUES ($1, $2, $3)"#,
@@ -801,6 +836,84 @@ async fn rotate_key(
 
     let envelope = body.envelopes.get(current_user_id.to_string()).cloned();
     Ok(Json(LatestKeyResponse { chat_id, key_version: new_version, envelope }))
+}
+
+// ---------------------------
+// POST /chats/{chat_id}/keys/distribute — добавить envelopes в текущий ключ без ротации
+// (например, для channel при добавлении новых участников)
+// body: { envelopes: {"userId": {key, ephem_pub_key, iv}, ...} }
+// ---------------------------
+async fn distribute_key(
+    State(state): State<AppState>,
+    CurrentUser { id: current_user_id }: CurrentUser,
+    Path(chat_id): Path<i32>,
+    Json(body): Json<DistributeKeyRequest>,
+) -> Result<Json<LatestKeyResponse>, (StatusCode, String)> {
+    crate::middleware::ensure_admin(&state, chat_id, current_user_id).await?;
+
+    let kind: Option<String> = sqlx::query_scalar("SELECT kind FROM chats WHERE id = $1")
+        .bind(chat_id)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+
+    let Some(kind) = kind else {
+        return Err((StatusCode::NOT_FOUND, "Чат не найден".into()));
+    };
+    if kind != "channel" {
+        return Err((StatusCode::BAD_REQUEST, "distribute поддерживается только для channel".into()));
+    }
+
+    if !body.envelopes.is_object() {
+        return Err((StatusCode::BAD_REQUEST, "envelopes должен быть JSON-объектом".into()));
+    }
+
+    let row = sqlx::query(
+        r#"
+        SELECT ck.key_version, ck.envelopes
+        FROM chat_keys ck
+        WHERE ck.chat_id = $1
+        ORDER BY ck.key_version DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(chat_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+
+    let Some(row) = row else {
+        return Err((StatusCode::BAD_REQUEST, "Ключ чата не найден".into()));
+    };
+
+    let key_version: i32 = row.try_get("key_version").unwrap_or(0);
+    let mut envelopes: Value = row.try_get("envelopes").unwrap_or(Value::Null);
+    if !envelopes.is_object() {
+        envelopes = json!({});
+    }
+
+    if let (Some(dst), Some(src)) = (envelopes.as_object_mut(), body.envelopes.as_object()) {
+        for (k, v) in src.iter() {
+            dst.insert(k.clone(), v.clone());
+        }
+    }
+
+    sqlx::query(
+        r#"
+        UPDATE chat_keys
+        SET envelopes = $2
+        WHERE chat_id = $1 AND key_version = $3
+        "#,
+    )
+    .bind(chat_id)
+    .bind(envelopes.clone())
+    .bind(key_version)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+
+    let envelope = envelopes.get(current_user_id.to_string()).cloned();
+    Ok(Json(LatestKeyResponse { chat_id, key_version, envelope }))
 }
 
 // ---------------------------

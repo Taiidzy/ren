@@ -15,6 +15,7 @@ class ChatUser {
 class ChatMessage {
   final String id;
   final String chatId;
+  final String? senderId;
   final bool isMe;
   final String text;
   final List<ChatAttachment> attachments;
@@ -24,6 +25,7 @@ class ChatMessage {
   const ChatMessage({
     required this.id,
     required this.chatId,
+    this.senderId,
     required this.isMe,
     required this.text,
     this.attachments = const [],

@@ -206,6 +206,66 @@ class ChatsRepository {
     await prefetchLatestChatKey(chatId);
   }
 
+  Future<void> distributeChannelKey(int chatId, {required List<int> userIds}) async {
+    if (chatId <= 0) {
+      throw Exception('Некорректный chatId');
+    }
+    if (userIds.isEmpty) return;
+
+    final myId = await _getMyUserId();
+    if (myId <= 0) {
+      throw Exception('Не удалось определить userId');
+    }
+
+    final myPublicKeyB64 = await _getMyPublicKeyB64();
+    if (myPublicKeyB64 == null || myPublicKeyB64.isEmpty) {
+      throw Exception('Отсутствует публичный ключ');
+    }
+
+    final keyBytes = await _getChatKeyBytesLatest(chatId);
+    if (keyBytes == null || keyBytes.isEmpty) {
+      throw Exception('Не найден ключ чата');
+    }
+    final keyB64 = base64Encode(keyBytes);
+
+    final publicKeysByUserId = <int, String>{
+      myId: myPublicKeyB64,
+    };
+
+    final missing = <int>[];
+    for (final uid in userIds) {
+      if (uid <= 0) continue;
+      if (uid == myId) continue;
+      try {
+        final pk = (await api.getPublicKey(uid)).trim();
+        if (pk.isNotEmpty) {
+          publicKeysByUserId[uid] = pk;
+        } else {
+          missing.add(uid);
+        }
+      } catch (_) {
+        missing.add(uid);
+      }
+    }
+    if (missing.isNotEmpty) {
+      missing.sort();
+      throw Exception('Не удалось получить public key для пользователей: ${missing.join(', ')}');
+    }
+
+    final envelopes = renSdk.wrapSymmetricKeyEnvelopes(
+      keyB64: keyB64,
+      publicKeysByUserId: publicKeysByUserId,
+    );
+    if (envelopes.isEmpty) {
+      throw Exception('Не удалось сформировать envelopes');
+    }
+
+    await api.distributeChatKey(chatId, envelopes);
+
+    invalidateChatKey(chatId);
+    await prefetchLatestChatKey(chatId);
+  }
+
   Future<Directory> _getCiphertextCacheDir() async {
     final cached = _ciphertextCacheDirCache;
     if (cached != null) return cached;
@@ -490,6 +550,7 @@ class ChatsRepository {
         ChatMessage(
           id: messageId.toString(),
           chatId: chatId.toString(),
+          senderId: senderId.toString(),
           isMe: senderId == myUserId,
           text: decrypted.text,
           attachments: attachments,
@@ -731,6 +792,92 @@ class ChatsRepository {
       'message_type': 'text',
       'envelopes': null,
       'metadata': null,
+      'key_version': keyVersion,
+    };
+  }
+
+  Future<Map<String, dynamic>> buildEncryptedWsGroupMediaMessage({
+    required int chatId,
+    required String caption,
+    required List<OutgoingAttachment> attachments,
+  }) async {
+    if (attachments.isEmpty) {
+      return buildEncryptedWsGroupMessage(chatId: chatId, plaintext: caption);
+    }
+
+    Uint8List? keyBytes = await _getChatKeyBytesLatest(chatId);
+    if (keyBytes == null || keyBytes.isEmpty) {
+      try {
+        await rotateChatKey(chatId);
+      } catch (_) {
+        // ignore
+      }
+      keyBytes = await _getChatKeyBytesLatest(chatId);
+      if (keyBytes == null || keyBytes.isEmpty) {
+        throw Exception('Не найден ключ чата');
+      }
+    }
+
+    final msgKeyB64 = base64Encode(keyBytes);
+    final keyVersion = _latestChatKeyVersionByChatId[chatId] ?? 0;
+
+    final encMsg = renSdk.encryptMessage(caption, msgKeyB64);
+    if (encMsg == null) {
+      throw Exception('Не удалось зашифровать сообщение');
+    }
+
+    final metadata = <Map<String, dynamic>>[];
+    for (final att in attachments) {
+      final filename = att.filename.isNotEmpty
+          ? att.filename
+          : 'file_${DateTime.now().millisecondsSinceEpoch}';
+      final mimetype = att.mimetype.isNotEmpty ? att.mimetype : 'application/octet-stream';
+
+      final encFile = await renSdk.encryptFile(
+        Uint8List.fromList(att.bytes),
+        filename,
+        mimetype,
+        msgKeyB64,
+      );
+      if (encFile == null) {
+        throw Exception('Не удалось зашифровать файл');
+      }
+
+      final ciphertextBytes = base64Decode((encFile['ciphertext'] ?? '').toString());
+      final uploadResp = await api.uploadMedia(
+        chatId: chatId,
+        ciphertextBytes: ciphertextBytes,
+        filename: filename,
+        mimetype: mimetype,
+      );
+      final uploadedId = uploadResp['file_id'];
+      final fileId = (uploadedId is int) ? uploadedId : int.tryParse('$uploadedId') ?? 0;
+      if (fileId <= 0) {
+        throw Exception('Не удалось загрузить ciphertext файла');
+      }
+
+      metadata.add({
+        'file_id': fileId,
+        'filename': filename,
+        'mimetype': mimetype,
+        'size': att.bytes.length,
+        'enc_file': null,
+        'nonce': encFile['nonce'],
+        'file_creation_date': null,
+      });
+    }
+
+    final messageJson = jsonEncode({
+      'ciphertext': encMsg['ciphertext'],
+      'nonce': encMsg['nonce'],
+    });
+
+    return {
+      'chat_id': chatId,
+      'message': messageJson,
+      'message_type': 'media',
+      'envelopes': null,
+      'metadata': metadata,
       'key_version': keyVersion,
     };
   }

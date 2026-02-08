@@ -25,6 +25,7 @@ import 'package:ren/shared/widgets/glass_surface.dart';
 import 'package:ren/shared/widgets/glass_snackbar.dart';
 import 'package:ren/shared/widgets/context_menu.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:ren/shared/widgets/avatar.dart';
 
 import 'package:ren/features/chats/presentation/widgets/chat_attachment_viewer_sheet.dart';
 import 'package:ren/features/chats/presentation/widgets/chat_input_bar.dart';
@@ -36,6 +37,7 @@ import 'package:ren/features/chats/presentation/widgets/chat_recorder_ui.dart';
 import 'package:ren/features/chats/presentation/widgets/voice_message_bubble.dart';
 import 'package:ren/features/chats/presentation/widgets/square_video_bubble.dart';
 import 'package:ren/features/chats/presentation/chat_participants_page.dart';
+import 'package:ren/core/constants/api_url.dart';
 
 class ChatPage extends StatefulWidget {
   final ChatPreview chat;
@@ -55,6 +57,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
   bool _hasMore = true;
   final List<ChatMessage> _messages = [];
   final Map<String, ChatMessage> _messageById = {};
+
+  final Map<String, ChatUser> _participantsById = <String, ChatUser>{};
 
   ChatMessage? _replyTo;
   ChatMessage? _editing;
@@ -193,35 +197,99 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
     required String? replyPreview,
     required bool isDark,
   }) {
+    Widget bubble;
     if (_isVoiceMessage(msg)) {
       final audioPath = msg.attachments.first.localPath;
-      return VoiceMessageBubble(
+      bubble = VoiceMessageBubble(
         audioPath: audioPath,
         timeLabel: _formatTime(msg.sentAt),
         isMe: msg.isMe,
         isDark: isDark,
       );
-    }
-
-    if (_isSquareVideoMessage(msg)) {
+    } else if (_isSquareVideoMessage(msg)) {
       final videoPath = msg.attachments.first.localPath;
-      return SquareVideoBubble(
+      bubble = SquareVideoBubble(
         videoPath: videoPath,
         timeLabel: _formatTime(msg.sentAt),
         isMe: msg.isMe,
         isDark: isDark,
       );
+    } else {
+      bubble = ChatMessageBubble(
+        replyPreview: (replyPreview != null && replyPreview.isNotEmpty) ? replyPreview : null,
+        text: msg.text,
+        attachments: msg.attachments,
+        timeLabel: _formatTime(msg.sentAt),
+        isMe: msg.isMe,
+        isDark: isDark,
+        onOpenAttachment: (a) => _openAttachmentSheet(a),
+      );
     }
 
-    return ChatMessageBubble(
-      replyPreview: (replyPreview != null && replyPreview.isNotEmpty) ? replyPreview : null,
-      text: msg.text,
-      attachments: msg.attachments,
-      timeLabel: _formatTime(msg.sentAt),
-      isMe: msg.isMe,
-      isDark: isDark,
-      onOpenAttachment: (a) => _openAttachmentSheet(a),
+    if (widget.chat.kind != 'group' || msg.isMe) {
+      return bubble;
+    }
+
+    final sid = msg.senderId;
+    final sender = (sid == null) ? null : _participantsById[sid];
+    if (sender == null) {
+      return bubble;
+    }
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(right: 8, bottom: 2),
+          child: RenAvatar(
+            url: sender.avatarUrl,
+            name: sender.name,
+            isOnline: false,
+            size: 26,
+            onlineDotSize: 0,
+          ),
+        ),
+        Flexible(child: bubble),
+      ],
     );
+  }
+
+  String _avatarUrl(String avatarPath) {
+    final p = avatarPath.trim();
+    if (p.isEmpty) return '';
+    if (p.startsWith('http://') || p.startsWith('https://')) return p;
+    final normalized = p.startsWith('/') ? p.substring(1) : p;
+    return '${Apiurl.api}/avatars/$normalized';
+  }
+
+  Future<void> _refreshParticipants({required ChatsRepository repo, required int chatId}) async {
+    if (widget.chat.kind != 'group') return;
+    try {
+      final list = await repo.api.getParticipants(chatId);
+      final next = <String, ChatUser>{};
+      for (final it in list) {
+        if (it is! Map) continue;
+        final dynId = it['user_id'] ?? it['userId'] ?? it['id'];
+        final uid = (dynId is int) ? dynId : int.tryParse('${dynId ?? ''}') ?? 0;
+        if (uid <= 0) continue;
+        final username = (it['username'] ?? it['login'] ?? 'User').toString();
+        final avatar = (it['avatar'] ?? '').toString();
+        next[uid.toString()] = ChatUser(
+          id: uid.toString(),
+          name: username.isNotEmpty ? username : 'User',
+          avatarUrl: _avatarUrl(avatar),
+          isOnline: false,
+        );
+      }
+      if (!mounted) return;
+      setState(() {
+        _participantsById
+          ..clear()
+          ..addAll(next);
+      });
+    } catch (_) {
+      // ignore
+    }
   }
 
   List<ChatAttachment> _allChatAttachments() {
@@ -481,6 +549,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
 
     await _ensureRealtime();
 
+    await _refreshParticipants(repo: repo, chatId: chatId);
+
     if (widget.chat.kind == 'channel') {
       await _refreshMyRole(repo: repo, chatId: chatId);
     }
@@ -521,6 +591,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
                 _rotationRequired = rotationRequired;
               });
             }
+            await _refreshParticipants(repo: repo, chatId: chatId);
           }
 
           if (rotationRequired) {
@@ -600,6 +671,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
           final updated = ChatMessage(
             id: old.id,
             chatId: old.chatId,
+            senderId: old.senderId,
             isMe: old.isMe,
             text: decoded.text,
             attachments: old.attachments,
@@ -624,7 +696,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
         final mid = evt.data['message_id'];
         final messageId = (mid is int)
             ? mid
-            : int.tryParse('$mid') ?? 0;
+            : (mid is String) ? int.tryParse(mid) ?? 0 : 0;
 
         if (messageId <= 0) return;
 
@@ -735,6 +807,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
         final created = ChatMessage(
           id: '${m['id'] ?? DateTime.now().millisecondsSinceEpoch}',
           chatId: chatId.toString(),
+          senderId: senderId > 0 ? senderId.toString() : null,
           isMe: isMe,
           text: decoded.text,
           attachments: decoded.attachments,
@@ -764,7 +837,6 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
     if (text.isEmpty && !hasAttachments) return;
     final isPrivate = widget.chat.kind == 'private';
     if (isPrivate && peerId <= 0) return;
-    if (!isPrivate && hasAttachments) return;
 
     final repo = context.read<ChatsRepository>();
     _rt ??= context.read<RealtimeClient>();
@@ -798,6 +870,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
           _messages[idx] = ChatMessage(
             id: old.id,
             chatId: old.chatId,
+            senderId: old.senderId,
             isMe: old.isMe,
             text: text,
             attachments: old.attachments,
@@ -868,6 +941,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
         ChatMessage(
           id: 'local_${DateTime.now().millisecondsSinceEpoch}',
           chatId: chatId.toString(),
+          senderId: (_myUserId != null && _myUserId! > 0) ? _myUserId.toString() : null,
           isMe: true,
           text: text,
           attachments: optimisticAtt,
@@ -882,20 +956,34 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
     _scheduleScrollToBottom(animated: true);
 
     final payload = hasAttachments
-        ? await repo.buildEncryptedWsMediaMessage(
-            chatId: chatId,
-            peerId: peerId,
-            caption: text,
-            attachments: pendingCopy
-                .map(
-                  (p) => OutgoingAttachment(
-                    bytes: p.bytes,
-                    filename: p.filename,
-                    mimetype: p.mimetype,
-                  ),
-                )
-                .toList(),
-          )
+        ? (isPrivate
+            ? await repo.buildEncryptedWsMediaMessage(
+                chatId: chatId,
+                peerId: peerId,
+                caption: text,
+                attachments: pendingCopy
+                    .map(
+                      (p) => OutgoingAttachment(
+                        bytes: p.bytes,
+                        filename: p.filename,
+                        mimetype: p.mimetype,
+                      ),
+                    )
+                    .toList(),
+              )
+            : await repo.buildEncryptedWsGroupMediaMessage(
+                chatId: chatId,
+                caption: text,
+                attachments: pendingCopy
+                    .map(
+                      (p) => OutgoingAttachment(
+                        bytes: p.bytes,
+                        filename: p.filename,
+                        mimetype: p.mimetype,
+                      ),
+                    )
+                    .toList(),
+              ))
         : (isPrivate
             ? await repo.buildEncryptedWsMessage(
                 chatId: chatId,
@@ -941,7 +1029,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
   Future<void> _sendRecordedVoice(PendingChatAttachment attachment) async {
     final chatId = int.tryParse(widget.chat.id) ?? 0;
     final peerId = widget.chat.peerId ?? 0;
-    if (chatId <= 0 || peerId <= 0) return;
+    if (chatId <= 0) return;
+    final isPrivate = widget.chat.kind == 'private';
+    if (isPrivate && peerId <= 0) return;
 
     final repo = context.read<ChatsRepository>();
 
@@ -962,6 +1052,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
           ChatMessage(
             id: 'local_${DateTime.now().millisecondsSinceEpoch}',
             chatId: chatId.toString(),
+            senderId: (_myUserId != null && _myUserId! > 0) ? _myUserId.toString() : null,
             isMe: true,
             text: '',
             attachments: [
@@ -981,18 +1072,30 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
     }
     _scheduleScrollToBottom(animated: true);
 
-    final payload = await repo.buildEncryptedWsMediaMessage(
-      chatId: chatId,
-      peerId: peerId,
-      caption: '',
-      attachments: [
-        OutgoingAttachment(
-          bytes: attachment.bytes,
-          filename: safeName,
-          mimetype: attachment.mimetype,
-        ),
-      ],
-    );
+    final payload = isPrivate
+        ? await repo.buildEncryptedWsMediaMessage(
+            chatId: chatId,
+            peerId: peerId,
+            caption: '',
+            attachments: [
+              OutgoingAttachment(
+                bytes: attachment.bytes,
+                filename: safeName,
+                mimetype: attachment.mimetype,
+              ),
+            ],
+          )
+        : await repo.buildEncryptedWsGroupMediaMessage(
+            chatId: chatId,
+            caption: '',
+            attachments: [
+              OutgoingAttachment(
+                bytes: attachment.bytes,
+                filename: safeName,
+                mimetype: attachment.mimetype,
+              ),
+            ],
+          );
 
     await _ensureWsReady(chatId);
     final rt = _rt!;
@@ -1010,7 +1113,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
   Future<void> _sendRecordedVideo(PendingChatAttachment attachment) async {
     final chatId = int.tryParse(widget.chat.id) ?? 0;
     final peerId = widget.chat.peerId ?? 0;
-    if (chatId <= 0 || peerId <= 0) return;
+    if (chatId <= 0) return;
+    final isPrivate = widget.chat.kind == 'private';
+    if (isPrivate && peerId <= 0) return;
 
     final repo = context.read<ChatsRepository>();
 
@@ -1050,18 +1155,30 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
     }
     _scheduleScrollToBottom(animated: true);
 
-    final payload = await repo.buildEncryptedWsMediaMessage(
-      chatId: chatId,
-      peerId: peerId,
-      caption: '',
-      attachments: [
-        OutgoingAttachment(
-          bytes: attachment.bytes,
-          filename: safeName,
-          mimetype: attachment.mimetype,
-        ),
-      ],
-    );
+    final payload = isPrivate
+        ? await repo.buildEncryptedWsMediaMessage(
+            chatId: chatId,
+            peerId: peerId,
+            caption: '',
+            attachments: [
+              OutgoingAttachment(
+                bytes: attachment.bytes,
+                filename: safeName,
+                mimetype: attachment.mimetype,
+              ),
+            ],
+          )
+        : await repo.buildEncryptedWsGroupMediaMessage(
+            chatId: chatId,
+            caption: '',
+            attachments: [
+              OutgoingAttachment(
+                bytes: attachment.bytes,
+                filename: safeName,
+                mimetype: attachment.mimetype,
+              ),
+            ],
+          );
 
     await _ensureWsReady(chatId);
     final rt = _rt!;

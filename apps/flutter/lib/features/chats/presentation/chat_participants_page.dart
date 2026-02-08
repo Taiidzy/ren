@@ -165,6 +165,10 @@ class _ChatParticipantsPageState extends State<ChatParticipantsPage> {
     final uid = int.tryParse(selected.id) ?? 0;
     if (uid <= 0) return;
 
+    final myIdStr = await SecureStorage.readKey(Keys.UserId);
+    final myId = int.tryParse(myIdStr ?? '') ?? 0;
+    if (myId > 0 && uid == myId) return;
+
     final chatId = int.tryParse(widget.chat.id) ?? 0;
     if (chatId <= 0) return;
 
@@ -172,7 +176,11 @@ class _ChatParticipantsPageState extends State<ChatParticipantsPage> {
       final repo = context.read<ChatsRepository>();
       await repo.api.addParticipant(chatId, uid);
 
-      await repo.rotateChatKey(chatId);
+      if (widget.chat.kind == 'group') {
+        await repo.rotateChatKey(chatId);
+      } else if (widget.chat.kind == 'channel') {
+        await repo.distributeChannelKey(chatId, userIds: [uid]);
+      }
 
       if (!mounted) return;
       showGlassSnack(context, 'Участник добавлен', kind: GlassSnackKind.success);
@@ -214,7 +222,9 @@ class _ChatParticipantsPageState extends State<ChatParticipantsPage> {
     try {
       await repo.api.removeParticipant(chatId, userId);
 
-      await repo.rotateChatKey(chatId);
+      if (widget.chat.kind == 'group') {
+        await repo.rotateChatKey(chatId);
+      }
 
       if (!mounted) return;
       showGlassSnack(context, 'Участник удалён', kind: GlassSnackKind.success);
