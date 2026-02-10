@@ -2,23 +2,27 @@ version: "3.9"
 
 services:
   backend:
-    image: rust:1.75
-    container_name: backend
+    image: rust:latest
     working_dir: /app
     volumes:
       - ./backend:/app
     command: cargo run
-    env_file:
-      - .env
     depends_on:
       - db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_HOST: ${POSTGRES_HOST}
+      JWT_SECRET: ${JWT_SECRET}
+    # expose делает порт доступным другим контейнерам в сети compose,
+    # по умолчанию возьмёт значение из .env (PORT). Дефолт 8081, если не задан.
     expose:
-      - "${port}"
+      - "${PORT:-8081}"
     restart: unless-stopped
 
   db:
     image: postgres:16
-    container_name: postgres
     env_file:
       - .env
     volumes:
@@ -27,24 +31,28 @@ services:
 
   nginx:
     image: nginx:alpine
-    container_name: nginx
     ports:
       - "80:80"
       - "443:443"
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      # IMPORTANT: не монтируем server-блоки в /etc/nginx/nginx.conf,
+      # а кладём их в conf.d (как стандартный include).
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - ./nginx/certbot/www:/var/www/certbot
       - ./nginx/certbot/conf:/etc/letsencrypt
+      - ./nginx/var/www:/var/www/messanger-ren.ru
     depends_on:
       - backend
     restart: unless-stopped
 
   certbot:
     image: certbot/certbot
-    container_name: certbot
     volumes:
       - ./nginx/certbot/www:/var/www/certbot
       - ./nginx/certbot/conf:/etc/letsencrypt
+    # certbot должен запускаться после nginx, чтобы challenge был доступен.
+    depends_on:
+      - nginx
     command: >
       certonly --webroot
       --webroot-path=/var/www/certbot

@@ -91,3 +91,13 @@ Ren-SDK/android-libs/
 Ren-SDK/pkg/
 apps/flutter/ios/Podfile.lock
 ren_benchmark_app
+
+# Certbot / Let's Encrypt
+nginx/certbot/conf/
+nginx/certbot/www/
+
+# Env
+.env
+
+# Docker volumes
+postgres_data/

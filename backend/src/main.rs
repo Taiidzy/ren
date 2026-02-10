@@ -42,14 +42,14 @@ async fn async_main() {
     let postgres_user = std::env::var("POSTGRES_USER").expect("Переменная окружения POSTGRES_USER не установлена");
     let postgres_password = std::env::var("POSTGRES_PASSWORD").expect("Переменная окружения POSTGRES_PASSWORD не установлена");
     let postgres_host = std::env::var("POSTGRES_HOST").expect("Переменная окружения POSTGRES_HOST не установлена");
-    let postgres_port = std::env::var("POSTGRES_PORT").expect("Переменная окружения POSTGRES_PORT не установлена");
+    let postgres_port = std::env::var("POSTGRES_PORT").unwrap_or_else(|_| "8081".to_string());
     let postgres_db = std::env::var("POSTGRES_DB").expect("Переменная окружения POSTGRES_DB не установлена");
     let database_url = format!("postgres://{}:{}@{}:{}/{}", postgres_user, postgres_password, postgres_host, postgres_port, postgres_db);
     // Секрет для подписи JWT, обязателен
     let jwt_secret = std::env::var("JWT_SECRET").expect("Переменная окружения JWT_SECRET не установлена");
 
     // Порт для прослушивания
-    let port: u16 = std::env::var("PORT").expect("Переменная окружения PORT не установлена").parse().expect("Переменная окружения PORT должна быть числом");
+    let port = 8081;
 
     // Создаем пул соединений с БД.
     // Пул — это набор заранее открытых соединений, чтобы хендлеры могли быстро
