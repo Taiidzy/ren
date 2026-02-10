@@ -1,16 +1,16 @@
 class Keys {
-  static const String Token = 'token';
-  static const String PrivateKey = 'privateKey';
-  static const String PublicKey = 'publicKey';
-  static const String UserId = 'userId';
+  static const String token = 'token';
+  static const String privateKey = 'privateKey';
+  static const String publicKey = 'publicKey';
+  static const String userId = 'userId';
 
-  static const String ThemeMode = 'themeMode';
-  static const String ThemeColorScheme = 'themeColorScheme';
+  static const String themeMode = 'themeMode';
+  static const String themeColorScheme = 'themeColorScheme';
 
-  static const String BackgroundType = 'backgroundType';
-  static const String BackgroundValue = 'backgroundValue';
-  static const String BackgroundImageOpacity = 'backgroundImageOpacity';
-  static const String BackgroundImageBlur = 'backgroundImageBlurSigma';
+  static const String backgroundType = 'backgroundType';
+  static const String backgroundValue = 'backgroundValue';
+  static const String backgroundImageOpacity = 'backgroundImageOpacity';
+  static const String backgroundImageBlur = 'backgroundImageBlurSigma';
 
-  static const String BackgroundGalleryHistory = 'backgroundGalleryHistory';
+  static const String backgroundGalleryHistory = 'backgroundGalleryHistory';
 }

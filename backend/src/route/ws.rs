@@ -28,13 +28,13 @@ async fn ws_handler(
     ws.on_upgrade(move |socket| handle_socket(socket, state, user_id))
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ClientEvent {
-    init { contacts: Vec<i32> },
-    join_chat { chat_id: i32 },
-    leave_chat { chat_id: i32 },
-    send_message { 
+    Init { contacts: Vec<i32> },
+    JoinChat { chat_id: i32 },
+    LeaveChat { chat_id: i32 },
+    SendMessage { 
         chat_id: i32, 
         message: String,              // зашифрованное сообщение
         message_type: Option<String>, // 'text' | 'file' | 'image' и т.д.
@@ -42,7 +42,7 @@ enum ClientEvent {
         metadata: Option<Vec<FileMetadata>>, // метаданные файлов
         reply_to_message_id: Option<i64>,
     },
-    voce_message {
+    VoiceMessage {
         chat_id: i32,
         message: String,
         message_type: Option<String>,
@@ -50,7 +50,7 @@ enum ClientEvent {
         metadata: Option<Vec<FileMetadata>>,
         reply_to_message_id: Option<i64>,
     },
-    video_message {
+    VideoMessage {
         chat_id: i32,
         message: String,
         message_type: Option<String>,
@@ -58,7 +58,7 @@ enum ClientEvent {
         metadata: Option<Vec<FileMetadata>>,
         reply_to_message_id: Option<i64>,
     },
-    edit_message {
+    EditMessage {
         chat_id: i32,
         message_id: i64,
         message: String,
@@ -66,11 +66,11 @@ enum ClientEvent {
         envelopes: Option<Value>,
         metadata: Option<Vec<FileMetadata>>,
     },
-    delete_message {
+    DeleteMessage {
         chat_id: i32,
         message_id: i64,
     },
-    forward_message {
+    ForwardMessage {
         from_chat_id: i32,
         message_id: i64,
         to_chat_id: i32,
@@ -79,20 +79,20 @@ enum ClientEvent {
         envelopes: Option<Value>,
         metadata: Option<Vec<FileMetadata>>,
     },
-    typing { chat_id: i32, is_typing: bool },
+    Typing { chat_id: i32, is_typing: bool },
 }
 
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ServerEvent<'a> {
-    ok,
-    error { error: &'a str },
-    message_new { chat_id: i32, message: OutMessage },
-    message_updated { chat_id: i32, message: OutMessage },
-    message_deleted { chat_id: i32, message_id: i64, deleted_at: String, deleted_by: i64 },
-    typing { chat_id: i32, user_id: i32, is_typing: bool },
-    presence { user_id: i32, status: &'a str }, // online/offline (глобальная)
-    notification_new { chat_id: i32, message: OutMessage },
+    Ok,
+    Error { error: &'a str },
+    MessageNew { chat_id: i32, message: OutMessage },
+    MessageUpdated { chat_id: i32, message: OutMessage },
+    MessageDeleted { chat_id: i32, message_id: i64, deleted_at: String, deleted_by: i64 },
+    Typing { chat_id: i32, user_id: i32, is_typing: bool },
+    Presence { user_id: i32, status: &'a str }, // online/offline (глобальная)
+    NotificationNew { chat_id: i32, message: OutMessage },
 }
 
 // OutMessage теперь использует структуру Message из models
@@ -147,7 +147,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
             WsMessage::Text(text) => {
                 let parsed: Result<ClientEvent, _> = serde_json::from_str(&text);
                 match parsed {
-                    Ok(ClientEvent::init { contacts }) => {
+                    Ok(ClientEvent::Init { contacts }) => {
                         // Подписываемся на собственный личный канал, чтобы получать presence от других
                         let tx = match state.user_hub.get(&user_id) {
                             Some(existing) => existing.clone(),
@@ -169,11 +169,11 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
 
                         // Сохраняем список контактов и рассылаем им, что мы онлайн
                         subs.contacts = contacts.into_iter().collect();
-                        let presence_evt = match serde_json::to_string(&ServerEvent::presence { user_id, status: "online" }) {
+                        let presence_evt = match serde_json::to_string(&ServerEvent::Presence { user_id, status: "online" }) {
                             Ok(s) => s,
                             Err(_) => {
                                 let _ = out_tx.send(WsMessage::Text(
-                                    serde_json::to_string(&ServerEvent::error { error: "Ошибка сериализации" })
+                                    serde_json::to_string(&ServerEvent::Error { error: "Ошибка сериализации" })
                                         .unwrap_or_else(|_| "{\"type\":\"error\",\"error\":\"Ошибка сериализации\"}".to_string()),
                                 ));
                                 continue;
@@ -187,13 +187,13 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                             }
                             publish_user(&state, *cid, presence_evt.clone());
                         }
-                        let ok_msg = serde_json::to_string(&ServerEvent::ok)
+                        let ok_msg = serde_json::to_string(&ServerEvent::Ok)
                             .unwrap_or_else(|_| "{\"type\":\"ok\"}".to_string());
                         let _ = out_tx.send(WsMessage::Text(ok_msg));
                     }
-                    Ok(ClientEvent::join_chat { chat_id }) => {
+                    Ok(ClientEvent::JoinChat { chat_id }) => {
                         if let Err(e) = ensure_member(&state, chat_id, user_id).await {
-                            let err_msg = serde_json::to_string(&ServerEvent::error { error: &e.1 })
+                            let err_msg = serde_json::to_string(&ServerEvent::Error { error: &e.1 })
                                 .unwrap_or_else(|_| format!("{{\"type\":\"error\",\"error\":{}}}", serde_json::to_string(&e.1).unwrap_or_else(|_| "\"Ошибка\"".to_string())));
                             let _ = out_tx.send(WsMessage::Text(err_msg));
                             continue;
@@ -219,33 +219,33 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                         subs.forwarders.insert(chat_id, handle);
                         // Отмечаем, что пользователь находится в этом чате
                         state.in_chat.insert((chat_id, user_id));
-                        let ok_msg = serde_json::to_string(&ServerEvent::ok)
+                        let ok_msg = serde_json::to_string(&ServerEvent::Ok)
                             .unwrap_or_else(|_| "{\"type\":\"ok\"}".to_string());
                         let _ = out_tx.send(WsMessage::Text(ok_msg));
                     }
-                    Ok(ClientEvent::leave_chat { chat_id }) => {
+                    Ok(ClientEvent::LeaveChat { chat_id }) => {
                         if subs.joined.remove(&chat_id) {
                             if let Some(h) = subs.forwarders.remove(&chat_id) { h.abort(); }
                         }
                         state.in_chat.remove(&(chat_id, user_id));
-                        let ok_msg = serde_json::to_string(&ServerEvent::ok)
+                        let ok_msg = serde_json::to_string(&ServerEvent::Ok)
                             .unwrap_or_else(|_| "{\"type\":\"ok\"}".to_string());
                         let _ = out_tx.send(WsMessage::Text(ok_msg));
                     }
-                    Ok(ClientEvent::typing { chat_id, is_typing }) => {
+                    Ok(ClientEvent::Typing { chat_id, is_typing }) => {
                         if subs.joined.contains(&chat_id) {
-                            if let Ok(evt) = serde_json::to_string(&ServerEvent::typing { chat_id, user_id, is_typing }) {
+                            if let Ok(evt) = serde_json::to_string(&ServerEvent::Typing { chat_id, user_id, is_typing }) {
                                 publish(&state, chat_id, evt);
                             }
                         }
                     }
-                    Ok(ClientEvent::send_message { chat_id, message, message_type, envelopes, metadata, reply_to_message_id })
-                    | Ok(ClientEvent::voce_message { chat_id, message, message_type, envelopes, metadata, reply_to_message_id })
-                    | Ok(ClientEvent::video_message { chat_id, message, message_type, envelopes, metadata, reply_to_message_id }) => {
+                    Ok(ClientEvent::SendMessage { chat_id, message, message_type, envelopes, metadata, reply_to_message_id })
+                    | Ok(ClientEvent::VoiceMessage { chat_id, message, message_type, envelopes, metadata, reply_to_message_id })
+                    | Ok(ClientEvent::VideoMessage { chat_id, message, message_type, envelopes, metadata, reply_to_message_id }) => {
                         if !subs.joined.contains(&chat_id) {
                             // safety: проверка членства
                             if let Err(e) = ensure_member(&state, chat_id, user_id).await {
-                                let err_msg = serde_json::to_string(&ServerEvent::error { error: &e.1 })
+                                let err_msg = serde_json::to_string(&ServerEvent::Error { error: &e.1 })
                                     .unwrap_or_else(|_| format!("{{\"type\":\"error\",\"error\":{}}}", serde_json::to_string(&e.1).unwrap_or_else(|_| "\"Ошибка\"".to_string())));
                                 let _ = out_tx.send(WsMessage::Text(err_msg));
                                 continue;
@@ -295,7 +295,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                             Ok(r) => r,
                             Err(e) => {
                                 let err_txt = format!("Ошибка БД: {}", e);
-                                let err_msg = serde_json::to_string(&ServerEvent::error { error: &err_txt })
+                                let err_msg = serde_json::to_string(&ServerEvent::Error { error: &err_txt })
                                     .unwrap_or_else(|_| format!("{{\"type\":\"error\",\"error\":{}}}", serde_json::to_string(&err_txt).unwrap_or_else(|_| "\"Ошибка\"".to_string())));
                                 let _ = out_tx.send(WsMessage::Text(err_msg));
                                 continue;
@@ -362,11 +362,11 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                                 }
 
                                 if state.in_chat.contains(&(chat_id, uid)) {
-                                    if let Ok(evt) = serde_json::to_string(&ServerEvent::message_new { chat_id, message: msg.clone() }) {
+                                    if let Ok(evt) = serde_json::to_string(&ServerEvent::MessageNew { chat_id, message: msg.clone() }) {
                                         publish(&state, chat_id, evt);
                                     }
                                 } else {
-                                    if let Ok(evt) = serde_json::to_string(&ServerEvent::notification_new { chat_id, message: msg.clone() }) {
+                                    if let Ok(evt) = serde_json::to_string(&ServerEvent::NotificationNew { chat_id, message: msg.clone() }) {
                                         publish_user(&state, uid, evt);
                                     }
                                 }
@@ -375,15 +375,15 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
 
                         // Эхо отправителю: только если он подписан на чат.
                         if subs.joined.contains(&chat_id) {
-                            if let Ok(evt) = serde_json::to_string(&ServerEvent::message_new { chat_id, message: msg }) {
+                            if let Ok(evt) = serde_json::to_string(&ServerEvent::MessageNew { chat_id, message: msg }) {
                                 publish(&state, chat_id, evt);
                             }
                         }
                     }
-                    Ok(ClientEvent::edit_message { chat_id, message_id, message, message_type, envelopes, metadata }) => {
+                    Ok(ClientEvent::EditMessage { chat_id, message_id, message, message_type, envelopes, metadata }) => {
                         if !subs.joined.contains(&chat_id) {
                             if let Err(e) = ensure_member(&state, chat_id, user_id).await {
-                                let err_msg = serde_json::to_string(&ServerEvent::error { error: &e.1 })
+                                let err_msg = serde_json::to_string(&ServerEvent::Error { error: &e.1 })
                                     .unwrap_or_else(|_| format!("{{\"type\":\"error\",\"error\":{}}}", serde_json::to_string(&e.1).unwrap_or_else(|_| "\"Ошибка\"".to_string())));
                                 let _ = out_tx.send(WsMessage::Text(err_msg));
                                 continue;
@@ -442,14 +442,14 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                         let row = match updated {
                             Ok(Some(r)) => r,
                             Ok(None) => {
-                                let err_msg = serde_json::to_string(&ServerEvent::error { error: "Сообщение не найдено" })
+                                let err_msg = serde_json::to_string(&ServerEvent::Error { error: "Сообщение не найдено" })
                                     .unwrap_or_else(|_| "{\"type\":\"error\",\"error\":\"Сообщение не найдено\"}".to_string());
                                 let _ = out_tx.send(WsMessage::Text(err_msg));
                                 continue;
                             }
                             Err(e) => {
                                 let err_txt = format!("Ошибка БД: {}", e);
-                                let err_msg = serde_json::to_string(&ServerEvent::error { error: &err_txt })
+                                let err_msg = serde_json::to_string(&ServerEvent::Error { error: &err_txt })
                                     .unwrap_or_else(|_| format!("{{\"type\":\"error\",\"error\":{}}}", serde_json::to_string(&err_txt).unwrap_or_else(|_| "\"Ошибка\"".to_string())));
                                 let _ = out_tx.send(WsMessage::Text(err_msg));
                                 continue;
@@ -491,10 +491,10 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                             status: Some("sent".to_string()),
                         };
 
-                        let evt = match serde_json::to_string(&ServerEvent::message_updated { chat_id, message: msg }) {
+                        let evt = match serde_json::to_string(&ServerEvent::MessageUpdated { chat_id, message: msg }) {
                             Ok(s) => s,
                             Err(_) => {
-                                let err_msg = serde_json::to_string(&ServerEvent::error { error: "Ошибка сериализации" })
+                                let err_msg = serde_json::to_string(&ServerEvent::Error { error: "Ошибка сериализации" })
                                     .unwrap_or_else(|_| "{\"type\":\"error\",\"error\":\"Ошибка сериализации\"}".to_string());
                                 let _ = out_tx.send(WsMessage::Text(err_msg));
                                 continue;
@@ -526,10 +526,10 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                             }
                         }
                     }
-                    Ok(ClientEvent::delete_message { chat_id, message_id }) => {
+                    Ok(ClientEvent::DeleteMessage { chat_id, message_id }) => {
                         if !subs.joined.contains(&chat_id) {
                             if let Err(e) = ensure_member(&state, chat_id, user_id).await {
-                                let err_msg = serde_json::to_string(&ServerEvent::error { error: &e.1 })
+                                let err_msg = serde_json::to_string(&ServerEvent::Error { error: &e.1 })
                                     .unwrap_or_else(|_| format!("{{\"type\":\"error\",\"error\":{}}}", serde_json::to_string(&e.1).unwrap_or_else(|_| "\"Ошибка\"".to_string())));
                                 let _ = out_tx.send(WsMessage::Text(err_msg));
                                 continue;
@@ -554,7 +554,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                             Ok(r) => r,
                             Err(e) => {
                                 let err_txt = format!("Ошибка БД: {}", e);
-                                let err_msg = serde_json::to_string(&ServerEvent::error { error: &err_txt })
+                                let err_msg = serde_json::to_string(&ServerEvent::Error { error: &err_txt })
                                     .unwrap_or_else(|_| format!("{{\"type\":\"error\",\"error\":{}}}", serde_json::to_string(&err_txt).unwrap_or_else(|_| "\"Ошибка\"".to_string())));
                                 let _ = out_tx.send(WsMessage::Text(err_msg));
                                 continue;
@@ -562,7 +562,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                         };
 
                         let Some(row) = row else {
-                            let err_msg = serde_json::to_string(&ServerEvent::error { error: "Сообщение не найдено" })
+                            let err_msg = serde_json::to_string(&ServerEvent::Error { error: "Сообщение не найдено" })
                                 .unwrap_or_else(|_| "{\"type\":\"error\",\"error\":\"Сообщение не найдено\"}".to_string());
                             let _ = out_tx.send(WsMessage::Text(err_msg));
                             continue;
@@ -573,7 +573,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                             .map(|t| t.to_rfc3339())
                             .unwrap_or_default();
 
-                        let evt = match serde_json::to_string(&ServerEvent::message_deleted {
+                        let evt = match serde_json::to_string(&ServerEvent::MessageDeleted {
                             chat_id,
                             message_id,
                             deleted_at,
@@ -581,7 +581,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                         }) {
                             Ok(s) => s,
                             Err(_) => {
-                                let err_msg = serde_json::to_string(&ServerEvent::error { error: "Ошибка сериализации" })
+                                let err_msg = serde_json::to_string(&ServerEvent::Error { error: "Ошибка сериализации" })
                                     .unwrap_or_else(|_| "{\"type\":\"error\",\"error\":\"Ошибка сериализации\"}".to_string());
                                 let _ = out_tx.send(WsMessage::Text(err_msg));
                                 continue;
@@ -615,16 +615,16 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                             }
                         }
                     }
-                    Ok(ClientEvent::forward_message { from_chat_id, message_id, to_chat_id, message, message_type, envelopes, metadata }) => {
+                    Ok(ClientEvent::ForwardMessage { from_chat_id, message_id, to_chat_id, message, message_type, envelopes, metadata }) => {
                         // Должен быть участником и исходного, и целевого чата
                         if let Err(e) = ensure_member(&state, from_chat_id, user_id).await {
-                            let err_msg = serde_json::to_string(&ServerEvent::error { error: &e.1 })
+                            let err_msg = serde_json::to_string(&ServerEvent::Error { error: &e.1 })
                                 .unwrap_or_else(|_| format!("{{\"type\":\"error\",\"error\":{}}}", serde_json::to_string(&e.1).unwrap_or_else(|_| "\"Ошибка\"".to_string())));
                             let _ = out_tx.send(WsMessage::Text(err_msg));
                             continue;
                         }
                         if let Err(e) = ensure_member(&state, to_chat_id, user_id).await {
-                            let err_msg = serde_json::to_string(&ServerEvent::error { error: &e.1 })
+                            let err_msg = serde_json::to_string(&ServerEvent::Error { error: &e.1 })
                                 .unwrap_or_else(|_| format!("{{\"type\":\"error\",\"error\":{}}}", serde_json::to_string(&e.1).unwrap_or_else(|_| "\"Ошибка\"".to_string())));
                             let _ = out_tx.send(WsMessage::Text(err_msg));
                             continue;
@@ -648,7 +648,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                             Ok(r) => r,
                             Err(e) => {
                                 let err_txt = format!("Ошибка БД: {}", e);
-                                let err_msg = serde_json::to_string(&ServerEvent::error { error: &err_txt })
+                                let err_msg = serde_json::to_string(&ServerEvent::Error { error: &err_txt })
                                     .unwrap_or_else(|_| format!("{{\"type\":\"error\",\"error\":{}}}", serde_json::to_string(&err_txt).unwrap_or_else(|_| "\"Ошибка\"".to_string())));
                                 let _ = out_tx.send(WsMessage::Text(err_msg));
                                 continue;
@@ -656,7 +656,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                         };
 
                         let Some(src_row) = src else {
-                            let err_msg = serde_json::to_string(&ServerEvent::error { error: "Исходное сообщение не найдено" })
+                            let err_msg = serde_json::to_string(&ServerEvent::Error { error: "Исходное сообщение не найдено" })
                                 .unwrap_or_else(|_| "{\"type\":\"error\",\"error\":\"Исходное сообщение не найдено\"}".to_string());
                             let _ = out_tx.send(WsMessage::Text(err_msg));
                             continue;
@@ -716,7 +716,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                             Ok(r) => r,
                             Err(e) => {
                                 let err_txt = format!("Ошибка БД: {}", e);
-                                let err_msg = serde_json::to_string(&ServerEvent::error { error: &err_txt })
+                                let err_msg = serde_json::to_string(&ServerEvent::Error { error: &err_txt })
                                     .unwrap_or_else(|_| format!("{{\"type\":\"error\",\"error\":{}}}", serde_json::to_string(&err_txt).unwrap_or_else(|_| "\"Ошибка\"".to_string())));
                                 let _ = out_tx.send(WsMessage::Text(err_msg));
                                 continue;
@@ -757,12 +757,12 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                             status: Some("sent".to_string()),
                         };
 
-                        if let Ok(evt) = serde_json::to_string(&ServerEvent::message_new { chat_id: to_chat_id, message: msg }) {
+                        if let Ok(evt) = serde_json::to_string(&ServerEvent::MessageNew { chat_id: to_chat_id, message: msg }) {
                             publish(&state, to_chat_id, evt);
                         }
                     }
                     Err(_) => {
-                        let err_msg = serde_json::to_string(&ServerEvent::error { error: "Некорректный формат сообщения" })
+                        let err_msg = serde_json::to_string(&ServerEvent::Error { error: "Некорректный формат сообщения" })
                             .unwrap_or_else(|_| "{\"type\":\"error\",\"error\":\"Некорректный формат сообщения\"}".to_string());
                         let _ = out_tx.send(WsMessage::Text(err_msg));
                     }
@@ -783,7 +783,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
 
     // Удаляем из онлайна
     state.online_users.remove(&user_id);
-    let presence_evt = match serde_json::to_string(&ServerEvent::presence { user_id, status: "offline" }) {
+    let presence_evt = match serde_json::to_string(&ServerEvent::Presence { user_id, status: "offline" }) {
         Ok(s) => s,
         Err(_) => "{\"type\":\"presence\",\"user_id\":0,\"status\":\"offline\"}".to_string(),
     };

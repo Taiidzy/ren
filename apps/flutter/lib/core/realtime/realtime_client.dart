@@ -44,7 +44,7 @@ class RealtimeClient {
   Future<void> connect() async {
     if (_channel != null) return;
 
-    final token = await SecureStorage.readKey(Keys.Token);
+    final token = await SecureStorage.readKey(Keys.token);
     if (token == null || token.isEmpty) {
       throw Exception('Нет токена авторизации');
     }

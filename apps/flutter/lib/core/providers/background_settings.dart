@@ -29,12 +29,12 @@ class BackgroundSettings extends ChangeNotifier {
   double get imageBlurSigma => _imageBlurSigma;
 
   Future<void> _load() async {
-    final type = await SecureStorage.readKey(Keys.BackgroundType);
-    final value = await SecureStorage.readKey(Keys.BackgroundValue);
-    final imgOpacity = await SecureStorage.readKey(Keys.BackgroundImageOpacity);
-    final blur = await SecureStorage.readKey(Keys.BackgroundImageBlur);
+    final type = await SecureStorage.readKey(Keys.backgroundType);
+    final value = await SecureStorage.readKey(Keys.backgroundValue);
+    final imgOpacity = await SecureStorage.readKey(Keys.backgroundImageOpacity);
+    final blur = await SecureStorage.readKey(Keys.backgroundImageBlur);
     final historyJson =
-        await SecureStorage.readKey(Keys.BackgroundGalleryHistory);
+        await SecureStorage.readKey(Keys.backgroundGalleryHistory);
 
     _backgroundType = type;
     _backgroundValue = value;
@@ -83,26 +83,26 @@ class BackgroundSettings extends ChangeNotifier {
 
   Future<void> _persist() async {
     await SecureStorage.writeKey(
-      Keys.BackgroundImageOpacity,
+      Keys.backgroundImageOpacity,
       _imageOpacity.toString(),
     );
     await SecureStorage.writeKey(
-      Keys.BackgroundImageBlur,
+      Keys.backgroundImageBlur,
       _imageBlurSigma.toString(),
     );
 
     await SecureStorage.writeKey(
-      Keys.BackgroundGalleryHistory,
+      Keys.backgroundGalleryHistory,
       jsonEncode(_galleryHistoryPaths),
     );
 
     if (_backgroundType == null || _backgroundValue == null) {
-      await SecureStorage.deleteKey(Keys.BackgroundType);
-      await SecureStorage.deleteKey(Keys.BackgroundValue);
+      await SecureStorage.deleteKey(Keys.backgroundType);
+      await SecureStorage.deleteKey(Keys.backgroundValue);
       return;
     }
-    await SecureStorage.writeKey(Keys.BackgroundType, _backgroundType!);
-    await SecureStorage.writeKey(Keys.BackgroundValue, _backgroundValue!);
+    await SecureStorage.writeKey(Keys.backgroundType, _backgroundType!);
+    await SecureStorage.writeKey(Keys.backgroundValue, _backgroundValue!);
   }
 
   void setBackgroundImage(ImageProvider? image) {

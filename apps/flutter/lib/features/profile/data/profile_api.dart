@@ -22,7 +22,7 @@ class ProfileApi {
   ProfileApi(this.dio);
 
   Future<String> _requireToken() async {
-    final token = await SecureStorage.readKey(Keys.Token);
+    final token = await SecureStorage.readKey(Keys.token);
     if (token == null || token.isEmpty) {
       throw ApiException('Нет токена авторизации');
     }

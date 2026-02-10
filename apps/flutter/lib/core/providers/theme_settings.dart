@@ -26,8 +26,8 @@ class ThemeSettings extends ChangeNotifier {
 
   Future<void> _load() async {
     final int loadMutationId = _mutationId;
-    final themeModeStr = await SecureStorage.readKey(Keys.ThemeMode);
-    final schemeStr = await SecureStorage.readKey(Keys.ThemeColorScheme);
+    final themeModeStr = await SecureStorage.readKey(Keys.themeMode);
+    final schemeStr = await SecureStorage.readKey(Keys.themeColorScheme);
 
     if (loadMutationId != _mutationId) {
       return;
@@ -57,7 +57,7 @@ class ThemeSettings extends ChangeNotifier {
     _themeMode = mode;
     notifyListeners();
 
-    SecureStorage.writeKey(Keys.ThemeMode, _themeMode.name);
+    SecureStorage.writeKey(Keys.themeMode, _themeMode.name);
   }
 
   void setColorScheme(AppColorSchemePreset preset) {
@@ -66,7 +66,7 @@ class ThemeSettings extends ChangeNotifier {
     _colorScheme = preset;
     notifyListeners();
 
-    SecureStorage.writeKey(Keys.ThemeColorScheme, _colorScheme.name);
+    SecureStorage.writeKey(Keys.themeColorScheme, _colorScheme.name);
   }
 
   ThemeMode? _parseThemeMode(String? v) {

@@ -48,10 +48,10 @@ class AuthRepository {
       throw Exception('E2EE keys mismatch: server returned incompatible pubk/pkebymk');
     }
 
-    await SecureStorage.writeKey(Keys.PrivateKey, priv);
-    await SecureStorage.writeKey(Keys.PublicKey, pub);
-    await SecureStorage.writeKey(Keys.Token, resp.token);
-    await SecureStorage.writeKey(Keys.UserId, resp.user.id.toString());
+    await SecureStorage.writeKey(Keys.privateKey, priv);
+    await SecureStorage.writeKey(Keys.publicKey, pub);
+    await SecureStorage.writeKey(Keys.token, resp.token);
+    await SecureStorage.writeKey(Keys.userId, resp.user.id.toString());
 
     return AuthUser(
       id: resp.user.id,
