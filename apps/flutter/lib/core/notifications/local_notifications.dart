@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -205,7 +204,7 @@ class LocalNotifications {
 
       final dir = await getTemporaryDirectory();
       final safe = (senderName ?? 'user').replaceAll(RegExp(r'[^a-zA-Z0-9_\-]'), '_');
-      final path = '${dir.path}/notif_avatar_${chatId}_${safe}.png';
+      final path = '${dir.path}/notif_avatar_${chatId}_$safe.png';
       final f = File(path);
       await f.writeAsBytes(bytes, flush: true);
       return (path: path, bytes: bytes);
@@ -215,7 +214,7 @@ class LocalNotifications {
   }
 
   Future<Color?> _readAccentColor() async {
-    final schemeStr = await SecureStorage.readKey(Keys.ThemeColorScheme);
+    final schemeStr = await SecureStorage.readKey(Keys.themeColorScheme);
     final preset = _parseScheme(schemeStr) ?? AppColorSchemePreset.indigo;
 
     switch (preset) {

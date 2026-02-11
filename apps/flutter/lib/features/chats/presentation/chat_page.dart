@@ -701,7 +701,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
   }
 
   Future<int> _readMyUserId() async {
-    final v = await SecureStorage.readKey(Keys.UserId);
+    final v = await SecureStorage.readKey(Keys.userId);
     return int.tryParse(v ?? '') ?? 0;
   }
 

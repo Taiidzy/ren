@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
@@ -85,7 +84,7 @@ class ChatsRepository {
   Future<int> _getMyUserId() async {
     final cached = _myUserIdCache;
     if (cached != null && cached > 0) return cached;
-    final myUserIdStr = await SecureStorage.readKey(Keys.UserId);
+    final myUserIdStr = await SecureStorage.readKey(Keys.userId);
     final myUserId = int.tryParse(myUserIdStr ?? '') ?? 0;
     _myUserIdCache = myUserId;
     return myUserId;
@@ -94,7 +93,7 @@ class ChatsRepository {
   Future<String?> _getMyPrivateKeyB64() async {
     final cached = _myPrivateKeyB64Cache;
     if (cached != null && cached.trim().isNotEmpty) return cached;
-    final v = await SecureStorage.readKey(Keys.PrivateKey);
+    final v = await SecureStorage.readKey(Keys.privateKey);
     final trimmed = v?.trim();
     if (trimmed != null && trimmed.isNotEmpty) {
       _myPrivateKeyB64Cache = trimmed;
@@ -105,7 +104,7 @@ class ChatsRepository {
   Future<String?> _getMyPublicKeyB64() async {
     final cached = _myPublicKeyB64Cache;
     if (cached != null && cached.trim().isNotEmpty) return cached;
-    final v = await SecureStorage.readKey(Keys.PublicKey);
+    final v = await SecureStorage.readKey(Keys.publicKey);
     final trimmed = v?.trim();
     if (trimmed != null && trimmed.isNotEmpty) {
       _myPublicKeyB64Cache = trimmed;

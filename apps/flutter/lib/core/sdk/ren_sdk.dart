@@ -1,4 +1,4 @@
-// ignore_for_file: non_constant_identifier_names
+// ignore_for_file: non_constant_identifier_names, camel_case_types, unintended_html_in_doc_comment
 
 import 'dart:ffi';
 import 'dart:io' show Platform, File, Directory;
@@ -62,6 +62,7 @@ DynamicLibrary _openLibrary() {
           _logger.i("Windows SDK Loaded");
           return lib;
         } catch (e) {
+          _logger.e(e);
         }
       }
       throw ArgumentError('ren_sdk.dll not found');

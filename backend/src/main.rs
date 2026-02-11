@@ -1,11 +1,3 @@
-fn main() {
-    // Точка входа в приложение. Запускаем асинхронный рантайм Tokio.
-    // Отдельная асинхронная функция `async_main` содержит всю логику запуска.
-    tokio::runtime::Runtime::new()
-        .expect("failed to create tokio runtime")
-        .block_on(async_main());
-}
-
 // ---------------------------
 // Импорты
 // ---------------------------
@@ -17,6 +9,13 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use dashmap::{DashMap, DashSet};
 use tokio::sync::broadcast;
+
+// Подключаем модуль с маршрутами
+mod route;
+// Подключаем модуль с моделями (auth/chats)
+pub mod models;
+// Подключаем модуль с экстракторами аутентификации
+pub mod middleware;
 
 // Делаем состояние приложения доступным в остальных модулях (например, в маршрутах)
 // чтобы в хендлерах был доступ к пулу соединений PostgreSQL.
@@ -39,14 +38,18 @@ pub struct AppState {
 // Основная асинхронная функция запуска приложения
 async fn async_main() {
     // Загружаем переменные окружения из файла .env (если он есть).
-    // Ожидаем переменную DATABASE_URL вида:
-    // postgres://USER:PASSWORD@HOST:PORT/DB_NAME
     let _ = dotenvy::dotenv();
-    let database_url = std::env::var("DATABASE_URL")
-        .expect("Переменная окружения DATABASE_URL не установлена");
+    let postgres_user = std::env::var("POSTGRES_USER").expect("Переменная окружения POSTGRES_USER не установлена");
+    let postgres_password = std::env::var("POSTGRES_PASSWORD").expect("Переменная окружения POSTGRES_PASSWORD не установлена");
+    let postgres_host = std::env::var("POSTGRES_HOST").expect("Переменная окружения POSTGRES_HOST не установлена");
+    let postgres_port = std::env::var("POSTGRES_PORT").unwrap_or_else(|_| "8081".to_string());
+    let postgres_db = std::env::var("POSTGRES_DB").expect("Переменная окружения POSTGRES_DB не установлена");
+    let database_url = format!("postgres://{}:{}@{}:{}/{}", postgres_user, postgres_password, postgres_host, postgres_port, postgres_db);
     // Секрет для подписи JWT, обязателен
-    let jwt_secret = std::env::var("JWT_SECRET")
-        .expect("Переменная окружения JWT_SECRET не установлена");
+    let jwt_secret = std::env::var("JWT_SECRET").expect("Переменная окружения JWT_SECRET не установлена");
+
+    // Порт для прослушивания
+    let port = 8081;
 
     // Создаем пул соединений с БД.
     // Пул — это набор заранее открытых соединений, чтобы хендлеры могли быстро
@@ -80,8 +83,7 @@ async fn async_main() {
         .layer(from_fn(middleware::logging))
         .with_state(state);
 
-    // Запускаем HTTP-сервер на 0.0.0.0:8081
-    let addr = std::net::SocketAddr::from(([0, 0, 0, 0], 8081));
+    let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
     println!("Server running on http://{addr}");
     let listener = TcpListener::bind(addr)
         .await
@@ -91,9 +93,10 @@ async fn async_main() {
         .expect("Сервер завершился с ошибкой");
 }
 
-// Подключаем модуль с маршрутами
-mod route;
-// Подключаем модуль с моделями (auth/chats)
-pub mod models;
-// Подключаем модуль с экстракторами аутентификации
-pub mod middleware;
+fn main() {
+    // Точка входа в приложение. Запускаем асинхронный рантайм Tokio.
+    // Отдельная асинхронная функция `async_main` содержит всю логику запуска.
+    tokio::runtime::Runtime::new()
+        .expect("failed to create tokio runtime")
+        .block_on(async_main());
+}

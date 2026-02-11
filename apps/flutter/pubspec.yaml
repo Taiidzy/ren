@@ -60,11 +60,11 @@ dependencies:
   record: ^6.1.2
   vibration: ^3.1.5
   just_audio: ^0.9.40
+  ffi: ^2.1.4
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  ffi: ^2.1.4
 
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is

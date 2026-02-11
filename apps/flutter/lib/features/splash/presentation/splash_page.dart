@@ -1,4 +1,3 @@
-// lib/src/splash_page.dart
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
@@ -88,53 +87,86 @@ class _SplashPageState extends State<SplashPage>
         return;
       }
 
-      _initApp();
-    } catch (e, st) {
+      // Используем Future.microtask для гарантии, что context доступен
+      Future.microtask(() {
+        _initApp();
+      });
+    } catch (e) {
       if (!mounted) return;
     }
   }
 
   void _initApp() async {
+    // Сохраняем контекст до начала асинхронных операций
+    final currentContext = context;
+    SplashRepository? repo;
+    
     try {
-      final token = await SecureStorage.readKey(Keys.Token);
+      final token = await SecureStorage.readKey(Keys.token);
 
       if (token == null || token.isEmpty) {
         await SecureStorage.deleteAllKeys();
-        Navigator.of(context).pushReplacement(
-          adaptivePageRoute((_) => const AuthPage()),
-        );
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            Navigator.of(currentContext).pushReplacement(
+              adaptivePageRoute((_) => const AuthPage()),
+            );
+          }
+        });
         return;
       }
 
-      final repo = context.read<SplashRepository>();
-      final userJson = await repo.checkAuth(token);
+      // Получаем репозиторий с использованием сохраненного контекста
+      try {
+        repo = currentContext.read<SplashRepository>();
+      } catch (e) {
+        // Если не удалось получить репозиторий (контекст недействителен)
+        if (!mounted) return;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            Navigator.of(context).pushReplacement(
+              adaptivePageRoute((_) => const AuthPage()),
+            );
+          }
+        });
+        return;
+      }
 
+      final userJson = await repo.checkAuth(token);
       final hasUser = userJson['id'] != null;
 
-      if (hasUser) {
-        Navigator.of(context).pushReplacement(
-          adaptivePageRoute((_) => const ChatsPage()),
-        );
-      } else {
-        await SecureStorage.deleteAllKeys();
-        Navigator.of(context).pushReplacement(
-          adaptivePageRoute((_) => const AuthPage()),
-        );
-      }
-    } on ApiException catch (e, st) {
-      // Очистить защищённое хранилище при 401
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        
+        if (hasUser) {
+          Navigator.of(context).pushReplacement(
+            adaptivePageRoute((_) => const ChatsPage()),
+          );
+        } else {
+          Navigator.of(context).pushReplacement(
+            adaptivePageRoute((_) => const AuthPage()),
+          );
+        }
+      });
+    } on ApiException catch (e) {
       if (e.statusCode == 401) {
         await SecureStorage.deleteAllKeys();
       }
-      if (!mounted) return;
-      Navigator.of(context).pushReplacement(
-        adaptivePageRoute((_) => const AuthPage()),
-      );
-    } catch (e, st) {
-      if (!mounted) return;
-      Navigator.of(context).pushReplacement(
-        adaptivePageRoute((_) => const AuthPage()),
-      );
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          Navigator.of(context).pushReplacement(
+            adaptivePageRoute((_) => const AuthPage()),
+          );
+        }
+      });
+    } catch (e) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          Navigator.of(context).pushReplacement(
+            adaptivePageRoute((_) => const AuthPage()),
+          );
+        }
+      });
     }
   }
 

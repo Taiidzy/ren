@@ -11,12 +11,15 @@ import 'package:ffmpeg_kit_min_gpl/ffmpeg_kit.dart';
 import 'package:ffmpeg_kit_min_gpl/return_code.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:logger/logger.dart';  
 
 import 'package:ren/features/chats/presentation/widgets/chat_attach_menu.dart';
 import 'package:ren/features/chats/presentation/widgets/chat_pending_attachment.dart';
 import 'package:ren/shared/widgets/glass_surface.dart';
 import 'package:ren/features/chats/presentation/widgets/chat_recorder_ui.dart';
 import 'package:ren/shared/widgets/glass_snackbar.dart';
+
+final Logger _logger = Logger();
 
 class ChatInputBar extends StatefulWidget {
   
@@ -368,7 +371,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
     try {
       final cameras = await _getCameras();
       if (cameras.isEmpty) {
-        print('No cameras available');
+        _logger.e('No cameras available');
         _showPermissionSnack('Камера недоступна на устройстве.');
         return false;
       }
@@ -389,7 +392,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
       widget.onVideoControllerChanged?.call(_cameraController);
       return true;
     } catch (e) {
-      print('Camera initialization failed: $e');
+      _logger.e('Camera initialization failed: $e');
       _showPermissionSnack('Не удалось инициализировать камеру.');
       return false;
     }
@@ -410,7 +413,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
         path: path,
       );
     } catch (e) {
-      print('Failed to start audio recording: $e');
+      _logger.e('Failed to start audio recording: $e');
     }
   }
 
@@ -421,7 +424,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
     }
     
     if (!_isCameraInitialized || _cameraController == null) {
-      print('Camera not initialized');
+      _logger.w('Camera not initialized');
       _showPermissionSnack('Камера не инициализирована.');
       return false;
     }
@@ -430,7 +433,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
       await _cameraController!.startVideoRecording();
       return true;
     } catch (e) {
-      print('Failed to start video recording: $e');
+      _logger.e('Failed to start video recording: $e');
       _showPermissionSnack('Не удалось начать запись видео.');
       return false;
     }
@@ -468,6 +471,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
       _showInfoSnack('Склейка видео недоступна (плагин не подключен). Отправляем без склейки.');
       return null;
     } catch (_) {
+      _logger.e('Failed to concat video segments');
       _showInfoSnack('Не удалось склеить видео. Отправляем без склейки.');
       return null;
     } finally {
@@ -482,7 +486,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
       final path = await _audioRecorder.stop();
       return path;
     } catch (e) {
-      print('Failed to stop audio recording: $e');
+      _logger.e('Failed to stop audio recording: $e');
       return null;
     }
   }
@@ -519,7 +523,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
 
       return merged;
     } catch (e) {
-      print('Failed to stop video recording: $e');
+      _logger.e('Failed to stop video recording: $e');
       _disposeCamera();
       return null;
     }

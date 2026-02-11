@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'dart:ui' as ui;
 
-import 'package:flutter/rendering.dart';
 import 'package:image/image.dart' as img;
 import 'package:flutter/material.dart';
 import 'package:image_cropper/image_cropper.dart';
@@ -627,8 +626,6 @@ class _AvatarCropEditorState extends State<AvatarCropEditor> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(

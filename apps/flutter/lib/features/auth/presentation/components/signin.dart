@@ -67,7 +67,7 @@ class _SignInFormState extends State<SignInForm>
 
       final repo = context.read<AuthRepository>();
       final result = await repo.login(login, password, _rememberMe);
-      if (result.id != null) {
+      if (result.id >= 0) {
         Navigator.of(context).pushReplacement(
           adaptivePageRoute((_) => SplashPage()),
         );
