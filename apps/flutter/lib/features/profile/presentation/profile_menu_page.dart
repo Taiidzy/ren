@@ -3,8 +3,8 @@ import 'package:hugeicons/hugeicons.dart';
 import 'package:provider/provider.dart';
 import 'package:ren/core/secure/secure_storage.dart';
 import 'package:ren/features/auth/presentation/auth_page.dart';
-import 'package:ren/features/profile/presentation/background_personalization_sheet.dart';
-import 'package:ren/features/profile/presentation/profile_edit_sheet.dart';
+import 'package:ren/features/profile/presentation/widgets/personalization_sheet.dart';
+import 'package:ren/features/profile/presentation/widgets/profile_edit_sheet.dart';
 import 'package:ren/features/profile/presentation/profile_store.dart';
 import 'package:ren/shared/widgets/adaptive_page_route.dart';
 import 'package:ren/shared/widgets/background.dart';
@@ -239,7 +239,7 @@ class ProfileMenuPage extends StatelessWidget {
                         icon: HugeIcons.strokeRoundedPaintBrush02,
                         title: 'Персонализация',
                         onTap: () {
-                          BackgroundPersonalizationSheet.show(context);
+                          PersonalizationSheet.show(context);
                         },
                       ),
                       const SizedBox(height: 10),
