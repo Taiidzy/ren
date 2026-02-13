@@ -11,7 +11,7 @@ import 'package:ffmpeg_kit_min_gpl/ffmpeg_kit.dart';
 import 'package:ffmpeg_kit_min_gpl/return_code.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:logger/logger.dart';  
+import 'package:logger/logger.dart';
 
 import 'package:ren/features/chats/presentation/widgets/chat_attach_menu.dart';
 import 'package:ren/features/chats/presentation/widgets/chat_pending_attachment.dart';
@@ -22,7 +22,6 @@ import 'package:ren/shared/widgets/glass_snackbar.dart';
 final Logger _logger = Logger();
 
 class ChatInputBar extends StatefulWidget {
-  
   final TextEditingController controller;
   final FocusNode focusNode;
   final bool isDark;
@@ -39,14 +38,18 @@ class ChatInputBar extends StatefulWidget {
   final VoidCallback onSend;
   final void Function(RecorderMode mode, bool isRecording)? onRecordingChanged;
   final void Function(String durationText)? onRecordingDurationChanged;
-  final void Function(RecorderMode mode, bool isLocked)? onRecordingLockedChanged;
-  final void Function(VoidCallback cancel, VoidCallback stop)? onRecorderController;
-  final Future<void> Function(PendingChatAttachment attachment)? onAddRecordedFile;
+  final void Function(RecorderMode mode, bool isLocked)?
+  onRecordingLockedChanged;
+  final void Function(VoidCallback cancel, VoidCallback stop)?
+  onRecorderController;
+  final Future<void> Function(PendingChatAttachment attachment)?
+  onAddRecordedFile;
   final void Function(CameraController? controller)? onVideoControllerChanged;
   final void Function(
     Future<bool> Function(bool enabled) setTorch,
     Future<bool> Function(bool useFront) setUseFrontCamera,
-  )? onVideoActionsController;
+  )?
+  onVideoActionsController;
 
   const ChatInputBar({
     super.key,
@@ -78,7 +81,6 @@ class ChatInputBar extends StatefulWidget {
 }
 
 class _ChatInputBarState extends State<ChatInputBar> {
-
   final GlobalKey<ChatRecorderButtonState> _recorderKey =
       GlobalKey<ChatRecorderButtonState>();
 
@@ -86,9 +88,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
 
   bool _lastShowSendButton = false;
 
-
   RecorderMode _activeRecordingMode = RecorderMode.audio;
-
 
   bool _isRecording = false;
   bool _isRecordingLocked = false;
@@ -120,9 +120,14 @@ class _ChatInputBarState extends State<ChatInputBar> {
     return _availableCameras!;
   }
 
-  CameraDescription? _pickCamera(List<CameraDescription> cams, {required bool useFront}) {
+  CameraDescription? _pickCamera(
+    List<CameraDescription> cams, {
+    required bool useFront,
+  }) {
     if (cams.isEmpty) return null;
-    final desired = useFront ? CameraLensDirection.front : CameraLensDirection.back;
+    final desired = useFront
+        ? CameraLensDirection.front
+        : CameraLensDirection.back;
     final found = cams.where((c) => c.lensDirection == desired).toList();
     return found.isNotEmpty ? found.first : cams.first;
   }
@@ -190,7 +195,9 @@ class _ChatInputBarState extends State<ChatInputBar> {
       if (wasRecording) {
         final ok = await _startVideoRecording();
         if (!ok) {
-          _showPermissionSnack('Не удалось продолжить запись после переключения.');
+          _showPermissionSnack(
+            'Не удалось продолжить запись после переключения.',
+          );
           return false;
         }
       }
@@ -202,7 +209,8 @@ class _ChatInputBarState extends State<ChatInputBar> {
   }
 
   // Слушатель для кнопки Send/Mic
-  bool get _showSendButton => widget.controller.text.trim().isNotEmpty || widget.pending.isNotEmpty;
+  bool get _showSendButton =>
+      widget.controller.text.trim().isNotEmpty || widget.pending.isNotEmpty;
 
   @override
   void initState() {
@@ -231,7 +239,8 @@ class _ChatInputBarState extends State<ChatInputBar> {
   void didUpdateWidget(covariant ChatInputBar oldWidget) {
     super.didUpdateWidget(oldWidget);
 
-    if (oldWidget.controller != widget.controller && _controllerListener != null) {
+    if (oldWidget.controller != widget.controller &&
+        _controllerListener != null) {
       oldWidget.controller.removeListener(_controllerListener!);
       widget.controller.addListener(_controllerListener!);
     }
@@ -357,7 +366,9 @@ class _ChatInputBarState extends State<ChatInputBar> {
         final micAfter = await Permission.microphone.request();
         _videoEnableAudio = micAfter.isGranted;
         if (!_videoEnableAudio) {
-          _showInfoSnack('Микрофон недоступен. Видео будет записано без звука.');
+          _showInfoSnack(
+            'Микрофон недоступен. Видео будет записано без звука.',
+          );
         }
       }
 
@@ -367,7 +378,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
 
   Future<bool> _initializeCamera() async {
     if (_isCameraInitialized && _cameraController != null) return true;
-    
+
     try {
       final cameras = await _getCameras();
       if (cameras.isEmpty) {
@@ -376,7 +387,8 @@ class _ChatInputBarState extends State<ChatInputBar> {
         return false;
       }
 
-      final camera = _pickCamera(cameras, useFront: _useFrontCamera) ?? cameras.first;
+      final camera =
+          _pickCamera(cameras, useFront: _useFrontCamera) ?? cameras.first;
       _cameraController = CameraController(
         camera,
         ResolutionPreset.high,
@@ -422,7 +434,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
       final ok = await _initializeCamera();
       if (!ok) return false;
     }
-    
+
     if (!_isCameraInitialized || _cameraController == null) {
       _logger.w('Camera not initialized');
       _showPermissionSnack('Камера не инициализирована.');
@@ -448,10 +460,12 @@ class _ChatInputBarState extends State<ChatInputBar> {
     final listFile = File('${dir.path}/video_concat_$ts.txt');
     final outPath = '${dir.path}/video_merged_$ts.mp4';
 
-    final lines = segmentPaths.map((p) {
-      final escaped = p.replaceAll("'", "'\\''");
-      return "file '$escaped'";
-    }).join('\n');
+    final lines = segmentPaths
+        .map((p) {
+          final escaped = p.replaceAll("'", "'\\''");
+          return "file '$escaped'";
+        })
+        .join('\n');
     await listFile.writeAsString(lines);
 
     final audioArgs = _videoEnableAudio ? "-c:a aac -b:a 128k" : "-an";
@@ -468,7 +482,9 @@ class _ChatInputBarState extends State<ChatInputBar> {
       if (!await outFile.exists()) return null;
       return outPath;
     } on MissingPluginException {
-      _showInfoSnack('Склейка видео недоступна (плагин не подключен). Отправляем без склейки.');
+      _showInfoSnack(
+        'Склейка видео недоступна (плагин не подключен). Отправляем без склейки.',
+      );
       return null;
     } catch (_) {
       _logger.e('Failed to concat video segments');
@@ -492,9 +508,12 @@ class _ChatInputBarState extends State<ChatInputBar> {
   }
 
   Future<String?> _stopVideoRecording() async {
-    if (_cameraController == null || !_cameraController!.value.isRecordingVideo) {
+    if (_cameraController == null ||
+        !_cameraController!.value.isRecordingVideo) {
       if (_videoSegmentPaths.isEmpty) return null;
-      final merged = await _concatVideoSegments(List<String>.from(_videoSegmentPaths));
+      final merged = await _concatVideoSegments(
+        List<String>.from(_videoSegmentPaths),
+      );
       return merged;
     }
 
@@ -504,7 +523,9 @@ class _ChatInputBarState extends State<ChatInputBar> {
       _videoSegmentPaths.add(segmentPath);
       _disposeCamera();
 
-      final merged = await _concatVideoSegments(List<String>.from(_videoSegmentPaths));
+      final merged = await _concatVideoSegments(
+        List<String>.from(_videoSegmentPaths),
+      );
       if (merged == null) {
         // Fallback: send the last recorded segment.
         return segmentPath;
@@ -541,7 +562,8 @@ class _ChatInputBarState extends State<ChatInputBar> {
         }
       } catch (_) {}
     } else {
-      if (_cameraController != null && _cameraController!.value.isRecordingVideo) {
+      if (_cameraController != null &&
+          _cameraController!.value.isRecordingVideo) {
         try {
           final file = await _cameraController!.stopVideoRecording();
           final videoFile = File(file.path);
@@ -569,10 +591,10 @@ class _ChatInputBarState extends State<ChatInputBar> {
 
     final file = File(path);
     final bytes = await file.readAsBytes();
-    
+
     String filename;
     String mimetype;
-    
+
     if (mode == RecorderMode.audio) {
       filename = 'voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
       mimetype = 'audio/m4a';
@@ -585,6 +607,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
       bytes: bytes,
       filename: filename,
       mimetype: mimetype,
+      localPath: path,
     );
 
     await widget.onAddRecordedFile?.call(attachment);
@@ -602,13 +625,16 @@ class _ChatInputBarState extends State<ChatInputBar> {
         mainAxisSize: MainAxisSize.min,
         children: [
           if (!_isRecording) ...[
-             if (widget.isEditing)
-               Padding(
+            if (widget.isEditing)
+              Padding(
                 padding: const EdgeInsets.only(bottom: 10),
                 child: GlassSurface(
                   borderRadius: 16,
                   blurSigma: 10,
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
                   child: Row(
                     children: [
                       Expanded(
@@ -636,8 +662,8 @@ class _ChatInputBarState extends State<ChatInputBar> {
                   ),
                 ),
               ),
-             if (widget.hasReply)
-               AnimatedSwitcher(
+            if (widget.hasReply)
+              AnimatedSwitcher(
                 duration: const Duration(milliseconds: 220),
                 switchInCurve: Curves.easeOut,
                 switchOutCurve: Curves.easeOut,
@@ -657,7 +683,10 @@ class _ChatInputBarState extends State<ChatInputBar> {
                   child: GlassSurface(
                     borderRadius: 16,
                     blurSigma: 12,
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
                     child: Row(
                       children: [
                         Icon(
@@ -668,11 +697,15 @@ class _ChatInputBarState extends State<ChatInputBar> {
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            widget.replyText.trim().isNotEmpty ? widget.replyText.trim() : 'Сообщение',
+                            widget.replyText.trim().isNotEmpty
+                                ? widget.replyText.trim()
+                                : 'Сообщение',
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
-                              color: theme.colorScheme.onSurface.withOpacity(0.9),
+                              color: theme.colorScheme.onSurface.withOpacity(
+                                0.9,
+                              ),
                               fontSize: 13,
                             ),
                           ),
@@ -691,101 +724,107 @@ class _ChatInputBarState extends State<ChatInputBar> {
                   ),
                 ),
               ),
-             if (widget.pending.isNotEmpty)
+            if (widget.pending.isNotEmpty)
               Padding(
-              padding: const EdgeInsets.only(bottom: 10),
-              child: SizedBox(
-                height: 64,
-                child: ListView.separated(
-                  scrollDirection: Axis.horizontal,
-                  itemCount: widget.pending.length,
-                  separatorBuilder: (_, __) => const SizedBox(width: 10),
-                  itemBuilder: (context, index) {
-                    final p = widget.pending[index];
-                    final isImg = p.mimetype.startsWith('image/');
-                    return Stack(
-                      clipBehavior: Clip.none,
-                      children: [
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(12),
-                          child: Container(
-                            width: 64,
-                            height: 64,
-                            color: theme.colorScheme.surface,
-                            child: isImg
-                                ? Image.memory(
-                                    p.bytes,
-                                    fit: BoxFit.cover,
-                                    errorBuilder: (c, e, s) => const SizedBox(),
-                                  )
-                                : Center(
-                                    child: Icon(
-                                      Icons.insert_drive_file,
-                                      color: theme.colorScheme.onSurface.withOpacity(0.65),
-                                    ),
-                                  ),
-                          ),
-                        ),
-                        Positioned(
-                          right: -6,
-                          top: -6,
-                          child: GestureDetector(
-                            onTap: () => widget.onRemovePending(index),
+                padding: const EdgeInsets.only(bottom: 10),
+                child: SizedBox(
+                  height: 64,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: widget.pending.length,
+                    separatorBuilder: (_, __) => const SizedBox(width: 10),
+                    itemBuilder: (context, index) {
+                      final p = widget.pending[index];
+                      final isImg = p.mimetype.startsWith('image/');
+                      return Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(12),
                             child: Container(
-                              width: 20,
-                              height: 20,
-                              decoration: BoxDecoration(
-                                color: theme.colorScheme.surface,
-                                shape: BoxShape.circle,
-                                border: Border.all(
-                                  color: theme.colorScheme.onSurface.withOpacity(0.25),
+                              width: 64,
+                              height: 64,
+                              color: theme.colorScheme.surface,
+                              child: isImg
+                                  ? Image.memory(
+                                      p.bytes,
+                                      fit: BoxFit.cover,
+                                      errorBuilder: (c, e, s) =>
+                                          const SizedBox(),
+                                    )
+                                  : Center(
+                                      child: Icon(
+                                        Icons.insert_drive_file,
+                                        color: theme.colorScheme.onSurface
+                                            .withOpacity(0.65),
+                                      ),
+                                    ),
+                            ),
+                          ),
+                          Positioned(
+                            right: -6,
+                            top: -6,
+                            child: GestureDetector(
+                              onTap: () => widget.onRemovePending(index),
+                              child: Container(
+                                width: 20,
+                                height: 20,
+                                decoration: BoxDecoration(
+                                  color: theme.colorScheme.surface,
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: theme.colorScheme.onSurface
+                                        .withOpacity(0.25),
+                                  ),
                                 ),
-                              ),
-                              child: Icon(
-                                Icons.close,
-                                size: 14,
-                                color: theme.colorScheme.onSurface.withOpacity(0.8),
+                                child: Icon(
+                                  Icons.close,
+                                  size: 14,
+                                  color: theme.colorScheme.onSurface
+                                      .withOpacity(0.8),
+                                ),
                               ),
                             ),
                           ),
-                        ),
-                      ],
-                    );
-                  },
-                ),
-              ),
-            ),
-          ],
-            
-          Row(
-            children: [
-              if (!_isRecording)
-              GlassSurface(
-                borderRadius: 18,
-                blurSigma: 12,
-                width: inputHeight,
-                height: inputHeight,
-                onTap: () => showChatAttachMenu(
-                  context,
-                  onPickPhotos: () async => await widget.onPickPhotos(),
-                  onPickFiles: () async => await widget.onPickFiles(),
-                  onTakePhoto: () async => await widget.onTakePhoto(),
-                ),
-                child: Center(
-                  child: HugeIcon(
-                    icon: HugeIcons.strokeRoundedAttachment01,
-                    color: theme.colorScheme.onSurface.withOpacity(0.9),
-                    size: 18,
+                        ],
+                      );
+                    },
                   ),
                 ),
               ),
+          ],
+
+          Row(
+            children: [
+              if (!_isRecording)
+                GlassSurface(
+                  borderRadius: 18,
+                  blurSigma: 12,
+                  width: inputHeight,
+                  height: inputHeight,
+                  onTap: () => showChatAttachMenu(
+                    context,
+                    onPickPhotos: () async => await widget.onPickPhotos(),
+                    onPickFiles: () async => await widget.onPickFiles(),
+                    onTakePhoto: () async => await widget.onTakePhoto(),
+                  ),
+                  child: Center(
+                    child: HugeIcon(
+                      icon: HugeIcons.strokeRoundedAttachment01,
+                      color: theme.colorScheme.onSurface.withOpacity(0.9),
+                      size: 18,
+                    ),
+                  ),
+                ),
               if (!_isRecording) const SizedBox(width: 10),
               Expanded(
                 child: GlassSurface(
                   borderRadius: 18,
                   blurSigma: 12,
                   height: inputHeight,
-                  borderColor: theme.colorScheme.onSurface.withOpacity(widget.isDark ? 0.20 : 0.10),
+                  borderColor: theme.colorScheme.onSurface.withOpacity(
+                    widget.isDark ? 0.20 : 0.10,
+                  ),
                   child: AnimatedSwitcher(
                     duration: const Duration(milliseconds: 200),
                     switchInCurve: Curves.easeOut,
@@ -800,82 +839,92 @@ class _ChatInputBarState extends State<ChatInputBar> {
                         ),
                       );
                     },
-                    child: _isRecording ? Padding(
-                      key: const ValueKey('recording_ui'),
-                      padding: const EdgeInsets.symmetric(horizontal: 14),
-                      child: Row(
-                        children: [
-                          Container(
-                            width: 10,
-                            height: 10,
-                            decoration: BoxDecoration(
-                              color: theme.colorScheme.error,
-                              shape: BoxShape.circle,
+                    child: _isRecording
+                        ? Padding(
+                            key: const ValueKey('recording_ui'),
+                            padding: const EdgeInsets.symmetric(horizontal: 14),
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 10,
+                                  height: 10,
+                                  decoration: BoxDecoration(
+                                    color: theme.colorScheme.error,
+                                    shape: BoxShape.circle,
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Text(
+                                  _durationText,
+                                  style: theme.textTheme.titleMedium?.copyWith(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w700,
+                                    color: theme.colorScheme.onSurface,
+                                  ),
+                                ),
+                                const Spacer(),
+                                if (_isRecordingLocked) ...[
+                                  Text(
+                                    'Отмена',
+                                    style: theme.textTheme.bodyMedium?.copyWith(
+                                      color: theme.colorScheme.onSurface
+                                          .withOpacity(0.75),
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  GlassSurface(
+                                    borderRadius: 18,
+                                    blurSigma: 12,
+                                    width: 32,
+                                    height: 32,
+                                    onTap: () {
+                                      _recorderKey.currentState
+                                          ?.cancelRecording();
+                                    },
+                                    child: Center(
+                                      child: Icon(
+                                        Icons.close,
+                                        size: 16,
+                                        color: theme.colorScheme.onSurface
+                                            .withOpacity(0.85),
+                                      ),
+                                    ),
+                                  ),
+                                ] else ...[
+                                  ShimmerText(
+                                    text: '< Свайп для отмены',
+                                    color: theme.colorScheme.onSurface
+                                        .withOpacity(0.6),
+                                  ),
+                                  const SizedBox(width: 20),
+                                ],
+                              ],
                             ),
-                          ),
-                          const SizedBox(width: 10),
-                          Text(
-                            _durationText,
-                            style: theme.textTheme.titleMedium?.copyWith(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w700,
+                          )
+                        : TextField(
+                            key: const ValueKey('input_field'),
+                            controller: widget.controller,
+                            focusNode: widget.focusNode,
+                            style: TextStyle(
                               color: theme.colorScheme.onSurface,
+                              fontSize: 14,
                             ),
-                          ),
-                          const Spacer(),
-                          if (_isRecordingLocked) ...[
-                            Text(
-                              'Отмена',
-                              style: theme.textTheme.bodyMedium?.copyWith(
-                                color: theme.colorScheme.onSurface.withOpacity(0.75),
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            GlassSurface(
-                              borderRadius: 18,
-                              blurSigma: 12,
-                              width: 32,
-                              height: 32,
-                              onTap: () {
-                                _recorderKey.currentState?.cancelRecording();
-                              },
-                              child: Center(
-                                child: Icon(
-                                  Icons.close,
-                                  size: 16,
-                                  color: theme.colorScheme.onSurface.withOpacity(0.85),
+                            cursorColor: theme.colorScheme.primary,
+                            decoration: InputDecoration(
+                              hintText: 'Введите сообщение...',
+                              hintStyle: TextStyle(
+                                color: theme.colorScheme.onSurface.withOpacity(
+                                  0.55,
                                 ),
                               ),
+                              filled: false,
+                              border: InputBorder.none,
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 14,
+                              ),
                             ),
-                          ] else ...[
-                            ShimmerText(
-                              text: '< Свайп для отмены',
-                              color: theme.colorScheme.onSurface.withOpacity(0.6),
-                            ),
-                            const SizedBox(width: 20),
-                          ],
-                        ],
-                      ),
-                    ) : TextField(
-                      key: const ValueKey('input_field'),
-                      controller: widget.controller,
-                      focusNode: widget.focusNode,
-                      style: TextStyle(
-                        color: theme.colorScheme.onSurface,
-                        fontSize: 14,
-                      ),
-                      cursorColor: theme.colorScheme.primary,
-                      decoration: InputDecoration(
-                        hintText: 'Введите сообщение...',
-                        hintStyle: TextStyle(
-                          color: theme.colorScheme.onSurface.withOpacity(0.55),
-                        ),
-                        filled: false,
-                        border: InputBorder.none,
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 14),
-                      ),
-                    ),
+                          ),
                   ),
                 ),
               ),
@@ -964,14 +1013,20 @@ class _ChatInputBarState extends State<ChatInputBar> {
                   });
                   _stopTimer();
                   widget.onRecordingChanged?.call(_activeRecordingMode, false);
-                  widget.onRecordingLockedChanged?.call(_activeRecordingMode, false);
+                  widget.onRecordingLockedChanged?.call(
+                    _activeRecordingMode,
+                    false,
+                  );
                 },
                 onLockRecording: () {
                   if (!mounted) return;
                   setState(() {
                     _isRecordingLocked = true;
                   });
-                  widget.onRecordingLockedChanged?.call(_activeRecordingMode, true);
+                  widget.onRecordingLockedChanged?.call(
+                    _activeRecordingMode,
+                    true,
+                  );
                 },
               ),
             ],
@@ -992,13 +1047,17 @@ class ShimmerText extends StatefulWidget {
   State<ShimmerText> createState() => _ShimmerTextState();
 }
 
-class _ShimmerTextState extends State<ShimmerText> with SingleTickerProviderStateMixin {
+class _ShimmerTextState extends State<ShimmerText>
+    with SingleTickerProviderStateMixin {
   late AnimationController _controller;
 
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(vsync: this, duration: const Duration(seconds: 2))..repeat();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 2),
+    )..repeat();
   }
 
   @override

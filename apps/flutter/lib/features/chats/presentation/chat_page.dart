@@ -44,7 +44,8 @@ class ChatPage extends StatefulWidget {
   State<ChatPage> createState() => _ChatPageState();
 }
 
-class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, WidgetsBindingObserver {
+class _ChatPageState extends State<ChatPage>
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   final _controller = TextEditingController();
   final _focusNode = FocusNode();
   final _scrollController = ScrollController();
@@ -57,10 +58,17 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
   ChatMessage? _replyTo;
   ChatMessage? _editing;
 
-  final ValueNotifier<String?> _pressedMessageIdN = ValueNotifier<String?>(null);
+  final ValueNotifier<String?> _pressedMessageIdN = ValueNotifier<String?>(
+    null,
+  );
 
   final ValueNotifier<bool> _selectionModeN = ValueNotifier<bool>(false);
-  final ValueNotifier<Set<String>> _selectedMessageIdsN = ValueNotifier<Set<String>>(<String>{});
+  final ValueNotifier<Set<String>> _selectedMessageIdsN =
+      ValueNotifier<Set<String>>(<String>{});
+  late final Listenable _selectionListenable = Listenable.merge([
+    _selectionModeN,
+    _selectedMessageIdsN,
+  ]);
 
   final _picker = ImagePicker();
 
@@ -98,6 +106,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
   late final AnimationController _videoPulse;
 
   void _setVideoRecordingOverlay({required bool show}) {
+    if (_showVideoRecordingOverlay == show) return;
     if (!mounted) return;
     setState(() {
       _showVideoRecordingOverlay = show;
@@ -125,6 +134,67 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
         ..stop()
         ..value = 0;
     }
+  }
+
+  void _onVideoRecordingDurationChanged(String text) {
+    if (!_showVideoRecordingOverlay || !mounted) return;
+    if (_videoRecordingDurationText == text) return;
+    setState(() {
+      _videoRecordingDurationText = text;
+    });
+  }
+
+  void _onVideoRecordingLockedChanged(bool locked) {
+    if (!mounted || _videoRecordingLocked == locked) return;
+    setState(() {
+      _videoRecordingLocked = locked;
+    });
+
+    if (locked) {
+      _videoLockedTransition.forward();
+    } else {
+      _videoLockedTransition.reverse();
+    }
+  }
+
+  void _onVideoControllerChanged(CameraController? controller) {
+    if (!mounted) return;
+    if (identical(_videoCameraController, controller)) return;
+    setState(() {
+      _videoCameraController = controller;
+    });
+  }
+
+  Future<ChatAttachment> _resolveOptimisticAttachment(
+    PendingChatAttachment attachment,
+  ) async {
+    final safeName = attachment.filename.isNotEmpty
+        ? attachment.filename
+        : 'file_${DateTime.now().millisecondsSinceEpoch}';
+
+    final existingPath = attachment.localPath;
+    if (existingPath != null && existingPath.isNotEmpty) {
+      final existing = File(existingPath);
+      if (await existing.exists()) {
+        return ChatAttachment(
+          localPath: existingPath,
+          filename: safeName,
+          mimetype: attachment.mimetype,
+          size: attachment.bytes.length,
+        );
+      }
+    }
+
+    final dir = await getTemporaryDirectory();
+    final path = '${dir.path}/$safeName';
+    final file = File(path);
+    await file.writeAsBytes(attachment.bytes, flush: true);
+    return ChatAttachment(
+      localPath: path,
+      filename: safeName,
+      mimetype: attachment.mimetype,
+      size: attachment.bytes.length,
+    );
   }
 
   void _reindexMessages() {
@@ -210,7 +280,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
     }
 
     return ChatMessageBubble(
-      replyPreview: (replyPreview != null && replyPreview.isNotEmpty) ? replyPreview : null,
+      replyPreview: (replyPreview != null && replyPreview.isNotEmpty)
+          ? replyPreview
+          : null,
       text: msg.text,
       attachments: msg.attachments,
       timeLabel: _formatTime(msg.sentAt),
@@ -342,15 +414,23 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
 
     final repo = context.read<ChatsRepository>();
 
-    final oldPixels = _scrollController.hasClients ? _scrollController.position.pixels : 0.0;
-    final oldMax = _scrollController.hasClients ? _scrollController.position.maxScrollExtent : 0.0;
+    final oldPixels = _scrollController.hasClients
+        ? _scrollController.position.pixels
+        : 0.0;
+    final oldMax = _scrollController.hasClients
+        ? _scrollController.position.maxScrollExtent
+        : 0.0;
 
     setState(() {
       _loadingMore = true;
     });
 
     try {
-      final list = await repo.fetchMessages(chatId, limit: 50, beforeId: beforeId);
+      final list = await repo.fetchMessages(
+        chatId,
+        limit: 50,
+        beforeId: beforeId,
+      );
       if (!mounted) return;
 
       if (list.isEmpty) {
@@ -501,17 +581,20 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
     _rtSub ??= rt.events.listen((evt) async {
       if (evt.type == 'presence') {
         final peerId = widget.chat.peerId ?? 0;
-        final userId = evt.data['user_id'] ?? evt.data['userId'] ?? evt.data['id'];
+        final userId =
+            evt.data['user_id'] ?? evt.data['userId'] ?? evt.data['id'];
         if ('$userId' == '$peerId') {
-          final statusRaw = (evt.data['status'] ??
-                  evt.data['state'] ??
-                  evt.data['online'] ??
-                  evt.data['is_online'] ??
-                  evt.data['isOnline'])
-              .toString()
-              .trim()
-              .toLowerCase();
-          final online = statusRaw == 'online' || statusRaw == 'true' || statusRaw == '1';
+          final statusRaw =
+              (evt.data['status'] ??
+                      evt.data['state'] ??
+                      evt.data['online'] ??
+                      evt.data['is_online'] ??
+                      evt.data['isOnline'])
+                  .toString()
+                  .trim()
+                  .toLowerCase();
+          final online =
+              statusRaw == 'online' || statusRaw == 'true' || statusRaw == '1';
           if (online != _peerOnline && mounted) {
             setState(() {
               _peerOnline = online;
@@ -626,21 +709,11 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
       final m = (msg is Map<String, dynamic>)
           ? msg
           : Map<String, dynamic>.fromEntries(
-              msg.entries.map(
-                (e) => MapEntry(e.key.toString(), e.value),
-              ),
+              msg.entries.map((e) => MapEntry(e.key.toString(), e.value)),
             );
 
       if (kDebugMode) {
-        debugPrint('WS message keys: ${m.keys.toList()}');
-        final encPreview = (m['message'] is String)
-            ? (m['message'] as String)
-            : (m['body'] is String ? (m['body'] as String) : '');
-        if (encPreview.isNotEmpty) {
-          debugPrint(
-            'WS message encrypted preview: ${encPreview.substring(0, encPreview.length > 200 ? 200 : encPreview.length)}',
-          );
-        }
+        debugPrint('WS message_new payload keys: ${m.keys.toList()}');
       }
 
       final decoded = await repo.decryptIncomingWsMessageFull(message: m);
@@ -649,7 +722,8 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
           ? m['sender_id'] as int
           : int.tryParse('${m['sender_id']}') ?? 0;
       final createdAtStr = (m['created_at'] as String?) ?? '';
-      final createdAt = (DateTime.tryParse(createdAtStr) ?? DateTime.now()).toLocal();
+      final createdAt = (DateTime.tryParse(createdAtStr) ?? DateTime.now())
+          .toLocal();
 
       final replyDyn = m['reply_to_message_id'] ?? m['replyToMessageId'];
       final replyId = (replyDyn is int)
@@ -660,9 +734,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
       final isMe = (myId > 0) ? senderId == myId : senderId != peerId;
 
       if (kDebugMode) {
-        debugPrint(
-          'WS message_new chat=$chatId sender=$senderId my=$myId peer=$peerId isMe=$isMe id=${m['id']}',
-        );
+        debugPrint('WS message_new routing resolved (isMe=$isMe)');
       }
 
       if (!mounted) return;
@@ -688,7 +760,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
           text: decoded.text,
           attachments: decoded.attachments,
           sentAt: createdAt,
-          replyToMessageId: (replyId != null && replyId > 0) ? replyId.toString() : null,
+          replyToMessageId: (replyId != null && replyId > 0)
+              ? replyId.toString()
+              : null,
         );
         _messages.add(created);
         _messageById[created.id] = created;
@@ -733,7 +807,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
 
     if (editing != null) {
       // редактирование: поддерживаем только текст без файлов
-      if (hasAttachments || pendingCopy.isNotEmpty || editing.attachments.isNotEmpty) {
+      if (hasAttachments ||
+          pendingCopy.isNotEmpty ||
+          editing.attachments.isNotEmpty) {
         return;
       }
 
@@ -783,23 +859,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
 
     List<ChatAttachment> optimisticAtt = const [];
     if (pendingCopy.isNotEmpty) {
-      final dir = await getTemporaryDirectory();
       final out = <ChatAttachment>[];
       for (final p in pendingCopy) {
-        final safeName = p.filename.isNotEmpty
-            ? p.filename
-            : 'file_${DateTime.now().millisecondsSinceEpoch}';
-        final path = '${dir.path}/$safeName';
-        final f = File(path);
-        await f.writeAsBytes(p.bytes, flush: true);
-        out.add(
-          ChatAttachment(
-            localPath: path,
-            filename: safeName,
-            mimetype: p.mimetype,
-            size: p.bytes.length,
-          ),
-        );
+        out.add(await _resolveOptimisticAttachment(p));
       }
       optimisticAtt = out;
     }
@@ -846,8 +908,12 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
 
     String wsType = 'send_message';
     if (hasAttachments) {
-      final hasAudio = pendingCopy.any((p) => p.mimetype.toLowerCase().startsWith('audio/'));
-      final hasVideo = pendingCopy.any((p) => p.mimetype.toLowerCase().startsWith('video/'));
+      final hasAudio = pendingCopy.any(
+        (p) => p.mimetype.toLowerCase().startsWith('audio/'),
+      );
+      final hasVideo = pendingCopy.any(
+        (p) => p.mimetype.toLowerCase().startsWith('video/'),
+      );
       if (hasAudio && !hasVideo) {
         wsType = 'voce_message';
       } else if (hasVideo && !hasAudio) {
@@ -878,14 +944,11 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
 
     final repo = context.read<ChatsRepository>();
 
-    // optimistic attachment preview
-    final dir = await getTemporaryDirectory();
     final safeName = attachment.filename.isNotEmpty
         ? attachment.filename
         : 'voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
-    final path = '${dir.path}/$safeName';
-    final f = File(path);
-    await f.writeAsBytes(attachment.bytes, flush: true);
+    final preview = await _resolveOptimisticAttachment(attachment);
+    final path = preview.localPath;
 
     final replyTo = _replyTo;
     if (mounted) {
@@ -947,14 +1010,11 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
 
     final repo = context.read<ChatsRepository>();
 
-    // optimistic attachment preview
-    final dir = await getTemporaryDirectory();
     final safeName = attachment.filename.isNotEmpty
         ? attachment.filename
         : 'video_${DateTime.now().millisecondsSinceEpoch}.mp4';
-    final path = '${dir.path}/$safeName';
-    final f = File(path);
-    await f.writeAsBytes(attachment.bytes, flush: true);
+    final preview = await _resolveOptimisticAttachment(attachment);
+    final path = preview.localPath;
 
     final replyTo = _replyTo;
     if (mounted) {
@@ -1033,6 +1093,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
             bytes: bytes,
             filename: name,
             mimetype: mimetypeFromName(name),
+            localPath: f.path,
           ),
         );
       }
@@ -1048,9 +1109,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
 
   Future<void> _takePhoto() async {
     try {
-      final file = await _picker.pickImage(
-        source: ImageSource.camera,
-      );
+      final file = await _picker.pickImage(source: ImageSource.camera);
       if (file == null) return;
 
       final bytes = await file.readAsBytes();
@@ -1067,6 +1126,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
             bytes: bytes,
             filename: name,
             mimetype: 'image/jpeg',
+            localPath: file.path,
           ),
         );
       });
@@ -1097,6 +1157,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
             bytes: bytes,
             filename: name,
             mimetype: mime,
+            localPath: f.path,
           ),
         );
       }
@@ -1109,7 +1170,6 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
       debugPrint('pick files failed: $e');
     }
   }
-
 
   @override
   void dispose() {
@@ -1138,15 +1198,338 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
     super.dispose();
   }
 
+  Widget _buildMessagesPane({
+    required ThemeData theme,
+    required bool isDark,
+    required bool selectionMode,
+    required Set<String> selectedIds,
+    required double listTopPadding,
+    required double listBottomPadding,
+  }) {
+    const double horizontalPadding = 14;
+    return Positioned.fill(
+      child: _loading
+          ? ListView.separated(
+              padding: EdgeInsets.fromLTRB(
+                horizontalPadding,
+                listTopPadding,
+                horizontalPadding,
+                listBottomPadding,
+              ),
+              itemCount: 10,
+              separatorBuilder: (_, __) => const SizedBox(height: 10),
+              itemBuilder: (context, index) {
+                final alignRight = index.isOdd;
+                return Align(
+                  alignment: alignRight
+                      ? Alignment.centerRight
+                      : Alignment.centerLeft,
+                  child: ChatSkeletonMessageBubble(isMe: alignRight),
+                );
+              },
+            )
+          : ListView.separated(
+              controller: _scrollController,
+              padding: EdgeInsets.fromLTRB(
+                horizontalPadding,
+                listTopPadding,
+                horizontalPadding,
+                listBottomPadding,
+              ),
+              itemCount: _messages.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 10),
+              itemBuilder: (context, index) {
+                final msg = _messages[index];
+                final replyToId = msg.replyToMessageId;
+                final replied = (replyToId == null || replyToId.isEmpty)
+                    ? null
+                    : _findMessageById(replyToId);
+                final replyPreview = (replied == null)
+                    ? null
+                    : _messageSummary(replied);
+                final selected = selectionMode && selectedIds.contains(msg.id);
+                return Align(
+                  alignment: msg.isMe
+                      ? Alignment.centerRight
+                      : Alignment.centerLeft,
+                  child: Dismissible(
+                    key: ValueKey('reply_${msg.id}'),
+                    direction: selectionMode
+                        ? DismissDirection.none
+                        : (msg.isMe
+                              ? DismissDirection.endToStart
+                              : DismissDirection.startToEnd),
+                    movementDuration: const Duration(milliseconds: 260),
+                    dismissThresholds: {
+                      DismissDirection.startToEnd: 0.22,
+                      DismissDirection.endToStart: 0.22,
+                    },
+                    confirmDismiss: (_) async {
+                      if (selectionMode) return false;
+                      HapticFeedback.selectionClick();
+                      if (!mounted) return false;
+                      setState(() {
+                        _replyTo = msg;
+                        _editing = null;
+                      });
+                      _focusNode.requestFocus();
+                      return false;
+                    },
+                    background: Align(
+                      alignment: msg.isMe
+                          ? Alignment.centerRight
+                          : Alignment.centerLeft,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        child: Icon(
+                          Icons.reply,
+                          size: 18,
+                          color: theme.colorScheme.onSurface.withOpacity(0.55),
+                        ),
+                      ),
+                    ),
+                    secondaryBackground: Align(
+                      alignment: msg.isMe
+                          ? Alignment.centerRight
+                          : Alignment.centerLeft,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        child: Icon(
+                          Icons.reply,
+                          size: 18,
+                          color: theme.colorScheme.onSurface.withOpacity(0.55),
+                        ),
+                      ),
+                    ),
+                    child: GestureDetector(
+                      onTapDown: (_) {
+                        if (!mounted) return;
+                        if (_pressedMessageIdN.value == msg.id) {
+                          return;
+                        }
+                        _pressedMessageIdN.value = msg.id;
+                      },
+                      onTapCancel: () {
+                        if (!mounted) return;
+                        if (_pressedMessageIdN.value != msg.id) {
+                          return;
+                        }
+                        _pressedMessageIdN.value = null;
+                      },
+                      onTapUp: (_) {
+                        if (!mounted) return;
+                        if (_pressedMessageIdN.value != msg.id) {
+                          return;
+                        }
+                        _pressedMessageIdN.value = null;
+                      },
+                      onTap: () {
+                        if (selectionMode) {
+                          _toggleSelected(msg);
+                        }
+                      },
+                      onLongPressStart: (d) async {
+                        HapticFeedback.selectionClick();
+                        if (mounted && _pressedMessageIdN.value != msg.id) {
+                          _pressedMessageIdN.value = msg.id;
+                        }
+                        if (selectionMode) {
+                          _toggleSelected(msg);
+                        } else {
+                          await _showMessageContextMenu(msg, d.globalPosition);
+                        }
+
+                        if (mounted && _pressedMessageIdN.value == msg.id) {
+                          _pressedMessageIdN.value = null;
+                        }
+                      },
+                      onLongPressEnd: (_) {
+                        if (!mounted) return;
+                        if (_pressedMessageIdN.value != msg.id) {
+                          return;
+                        }
+                        _pressedMessageIdN.value = null;
+                      },
+                      child: ValueListenableBuilder<String?>(
+                        valueListenable: _pressedMessageIdN,
+                        builder: (context, pressedId, child) {
+                          final pressed = pressedId == msg.id;
+                          return AnimatedScale(
+                            scale: pressed ? 0.985 : (selected ? 1.05 : 1.0),
+                            duration: const Duration(milliseconds: 110),
+                            curve: Curves.easeOut,
+                            child: Stack(
+                              clipBehavior: Clip.none,
+                              children: [
+                                AnimatedContainer(
+                                  duration: const Duration(milliseconds: 110),
+                                  curve: Curves.easeOut,
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(16),
+                                    color: pressed
+                                        ? theme.colorScheme.onSurface
+                                              .withOpacity(isDark ? 0.10 : 0.06)
+                                        : (selected
+                                              ? theme.colorScheme.primary
+                                                    .withOpacity(
+                                                      isDark ? 0.12 : 0.10,
+                                                    )
+                                              : Colors.transparent),
+                                    border: selected
+                                        ? Border.all(
+                                            color: theme.colorScheme.primary
+                                                .withOpacity(0.8),
+                                            width: 1.2,
+                                          )
+                                        : null,
+                                  ),
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(2),
+                                    child: RepaintBoundary(
+                                      child: _buildMessageBubble(
+                                        msg: msg,
+                                        replyPreview: replyPreview,
+                                        isDark: isDark,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                Positioned(
+                                  right: -6,
+                                  top: -6,
+                                  child: AnimatedOpacity(
+                                    opacity: selected ? 1 : 0,
+                                    duration: const Duration(milliseconds: 120),
+                                    curve: Curves.easeOut,
+                                    child: AnimatedScale(
+                                      scale: selected ? 1 : 0.9,
+                                      duration: const Duration(
+                                        milliseconds: 120,
+                                      ),
+                                      curve: Curves.easeOut,
+                                      child: Container(
+                                        width: 20,
+                                        height: 20,
+                                        decoration: BoxDecoration(
+                                          color: theme.colorScheme.primary,
+                                          shape: BoxShape.circle,
+                                          border: Border.all(
+                                            color: theme.colorScheme.surface
+                                                .withOpacity(0.9),
+                                            width: 1,
+                                          ),
+                                        ),
+                                        child: Icon(
+                                          Icons.check,
+                                          size: 14,
+                                          color: theme.colorScheme.onPrimary,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+    );
+  }
+
+  Widget _buildInputPane({
+    required MediaQueryData media,
+    required bool isDark,
+    required String replyText,
+  }) {
+    return Positioned(
+      left: 0,
+      right: 0,
+      bottom: 0,
+      child: AnimatedPadding(
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeOut,
+        padding: EdgeInsets.only(bottom: media.viewInsets.bottom),
+        child: SafeArea(
+          top: false,
+          child: ChatInputBar(
+            controller: _controller,
+            focusNode: _focusNode,
+            isDark: isDark,
+            isEditing: _editing != null,
+            onCancelEditing: () {
+              if (_editing == null) return;
+              setState(() {
+                _editing = null;
+              });
+              _controller.clear();
+            },
+            hasReply: _replyTo != null,
+            replyText: replyText,
+            onCancelReply: () {
+              if (_replyTo == null) return;
+              setState(() {
+                _replyTo = null;
+              });
+            },
+            pending: _pending,
+            onRemovePending: (index) {
+              if (index < 0 || index >= _pending.length) return;
+              setState(() {
+                _pending.removeAt(index);
+              });
+            },
+            onPickPhotos: _pickPhotos,
+            onPickFiles: _pickFiles,
+            onTakePhoto: _takePhoto,
+            onSend: _send,
+            onRecordingChanged: (mode, isRecording) {
+              if (mode == RecorderMode.video) {
+                _setVideoRecordingOverlay(show: isRecording);
+              }
+            },
+            onRecordingDurationChanged: _onVideoRecordingDurationChanged,
+            onRecordingLockedChanged: (mode, locked) {
+              if (mode != RecorderMode.video) return;
+              _onVideoRecordingLockedChanged(locked);
+            },
+            onRecorderController: (cancel, stop) {
+              _cancelVideoRecording = cancel;
+              _stopVideoRecording = stop;
+            },
+            onVideoControllerChanged: _onVideoControllerChanged,
+            onVideoActionsController: (setTorch, setUseFrontCamera) {
+              _setVideoTorch = setTorch;
+              _setVideoUseFrontCamera = setUseFrontCamera;
+            },
+            onAddRecordedFile: (attachment) async {
+              if (!mounted) return;
+              if ((attachment.mimetype).toLowerCase().startsWith('audio/')) {
+                await _sendRecordedVoice(attachment);
+                return;
+              }
+              if ((attachment.mimetype).toLowerCase().startsWith('video/')) {
+                await _sendRecordedVideo(attachment);
+                return;
+              }
+              setState(() {
+                _pending.add(attachment);
+              });
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-
-    final selectionListenable = Listenable.merge([
-      _selectionModeN,
-      _selectedMessageIdsN,
-    ]);
 
     return AppBackground(
       imageOpacity: 1,
@@ -1155,7 +1538,7 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
       animate: true,
       animationDuration: const Duration(seconds: 20),
       child: AnimatedBuilder(
-        animation: selectionListenable,
+        animation: _selectionListenable,
         builder: (context, child) {
           final selectionMode = _selectionModeN.value;
           final selectedIds = _selectedMessageIdsN.value;
@@ -1187,659 +1570,572 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
             ),
             body: Builder(
               builder: (context) {
-              final media = MediaQuery.of(context);
-              const double inputHeight = 44;
-              const double horizontalPadding = 14;
-              const double verticalPadding = 14;
+                final media = MediaQuery.of(context);
+                const double inputHeight = 44;
+                const double verticalPadding = 14;
 
-              final double topInset = media.padding.top;
-              // viewInsets.bottom is already applied via AnimatedPadding below.
-              final double bottomInset = media.padding.bottom;
+                final double topInset = media.padding.top;
+                // viewInsets.bottom is already applied via AnimatedPadding below.
+                final double bottomInset = media.padding.bottom;
 
-              final double listTopPadding = topInset + kToolbarHeight + 12;
-              final double listBottomPadding =
-                  bottomInset + media.viewInsets.bottom + inputHeight + verticalPadding + 12;
+                final double listTopPadding = topInset + kToolbarHeight + 12;
+                final double listBottomPadding =
+                    bottomInset +
+                    media.viewInsets.bottom +
+                    inputHeight +
+                    verticalPadding +
+                    12;
 
-              final messages = _messages;
+                final replyText = _replyTo == null
+                    ? ''
+                    : _messageSummary(_replyTo!);
 
-              final replyText = _replyTo == null ? '' : _messageSummary(_replyTo!);
-
-              return Stack(
-                children: [
-                  Positioned.fill(
-                    child: _loading ? ListView.separated(
-                      padding: EdgeInsets.fromLTRB(
-                        horizontalPadding,
-                        listTopPadding,
-                        horizontalPadding,
-                        listBottomPadding,
-                      ),
-                      itemCount: 10,
-                      separatorBuilder: (_, __) => const SizedBox(height: 10),
-                      itemBuilder: (context, index) {
-                        final alignRight = index.isOdd;
-                        return Align(
-                          alignment: alignRight ? Alignment.centerRight : Alignment.centerLeft,
-                          child: ChatSkeletonMessageBubble(isMe: alignRight),
-                        );
-                      },
-                    ) : ListView.separated(
-                      controller: _scrollController,
-                      padding: EdgeInsets.fromLTRB(
-                        horizontalPadding,
-                        listTopPadding,
-                        horizontalPadding,
-                        listBottomPadding,
-                      ),
-                      itemCount: messages.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 10),
-                      itemBuilder: (context, index) {
-                        final msg = messages[index];
-                        final replyToId = msg.replyToMessageId;
-                        final replied = (replyToId == null || replyToId.isEmpty)
-                            ? null
-                            : _findMessageById(replyToId);
-                        final replyPreview = (replied == null) ? null : _messageSummary(replied);
-                        final selected = selectionMode && selectedIds.contains(msg.id);
-                        return Align(
-                          alignment: msg.isMe
-                              ? Alignment.centerRight
-                              : Alignment.centerLeft,
-                          child: Dismissible(
-                            key: ValueKey('reply_${msg.id}'),
-                            direction: selectionMode
-                                ? DismissDirection.none
-                                : (msg.isMe ? DismissDirection.endToStart : DismissDirection.startToEnd),
-                            movementDuration: const Duration(milliseconds: 260),
-                            dismissThresholds: {
-                              DismissDirection.startToEnd: 0.22,
-                              DismissDirection.endToStart: 0.22,
-                            },
-                            confirmDismiss: (_) async {
-                              if (selectionMode) return false;
-                              HapticFeedback.selectionClick();
-                              if (!mounted) return false;
-                              setState(() {
-                                _replyTo = msg;
-                                _editing = null;
-                              });
-                              _focusNode.requestFocus();
-                              return false;
-                            },
-                            background: Align(
-                              alignment: msg.isMe ? Alignment.centerRight : Alignment.centerLeft,
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: 12),
-                                child: Icon(
-                                  Icons.reply,
-                                  size: 18,
-                                  color: theme.colorScheme.onSurface.withOpacity(0.55),
-                                ),
-                              ),
-                            ),
-                            secondaryBackground: Align(
-                              alignment: msg.isMe ? Alignment.centerRight : Alignment.centerLeft,
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: 12),
-                                child: Icon(
-                                  Icons.reply,
-                                  size: 18,
-                                  color: theme.colorScheme.onSurface.withOpacity(0.55),
-                                ),
-                              ),
-                            ),
-                            child: GestureDetector(
-                              onTapDown: (_) {
-                                if (!mounted) return;
-                                if (_pressedMessageIdN.value == msg.id) return;
-                                _pressedMessageIdN.value = msg.id;
-                              },
-                              onTapCancel: () {
-                                if (!mounted) return;
-                                if (_pressedMessageIdN.value != msg.id) return;
-                                _pressedMessageIdN.value = null;
-                              },
-                              onTapUp: (_) {
-                                if (!mounted) return;
-                                if (_pressedMessageIdN.value != msg.id) return;
-                                _pressedMessageIdN.value = null;
-                              },
-                              onTap: () {
-                                if (selectionMode) {
-                                  _toggleSelected(msg);
-                                }
-                              },
-                              onLongPressStart: (d) async {
-                                HapticFeedback.selectionClick();
-                                if (mounted && _pressedMessageIdN.value != msg.id) {
-                                  _pressedMessageIdN.value = msg.id;
-                                }
-                                if (selectionMode) {
-                                  _toggleSelected(msg);
-                                } else {
-                                  await _showMessageContextMenu(msg, d.globalPosition);
-                                }
-
-                                if (mounted && _pressedMessageIdN.value == msg.id) {
-                                  _pressedMessageIdN.value = null;
-                                }
-                              },
-                              onLongPressEnd: (_) {
-                                if (!mounted) return;
-                                if (_pressedMessageIdN.value != msg.id) return;
-                                _pressedMessageIdN.value = null;
-                              },
-                              child: ValueListenableBuilder<String?>(
-                                valueListenable: _pressedMessageIdN,
-                                builder: (context, pressedId, child) {
-                                  final pressed = pressedId == msg.id;
-                                  return AnimatedScale(
-                                    scale: pressed ? 0.985 : (selected ? 1.05 : 1.0),
-                                    duration: const Duration(milliseconds: 110),
-                                    curve: Curves.easeOut,
-                                    child: Stack(
-                                      clipBehavior: Clip.none,
-                                      children: [
-                                        AnimatedContainer(
-                                          duration: const Duration(milliseconds: 110),
-                                          curve: Curves.easeOut,
-                                          decoration: BoxDecoration(
-                                            borderRadius: BorderRadius.circular(16),
-                                            color: pressed
-                                                ? theme.colorScheme.onSurface.withOpacity(isDark ? 0.10 : 0.06)
-                                                : (selected
-                                                    ? theme.colorScheme.primary.withOpacity(isDark ? 0.12 : 0.10)
-                                                    : Colors.transparent),
-                                            border: selected
-                                                ? Border.all(
-                                                    color: theme.colorScheme.primary.withOpacity(0.8),
-                                                    width: 1.2,
-                                                  )
-                                                : null,
-                                          ),
-                                          child: Padding(
-                                            padding: const EdgeInsets.all(2),
-                                            child: RepaintBoundary(
-                                              child: _buildMessageBubble(
-                                                msg: msg,
-                                                replyPreview: replyPreview,
-                                                isDark: isDark,
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                        Positioned(
-                                          right: -6,
-                                          top: -6,
-                                          child: AnimatedOpacity(
-                                            opacity: selected ? 1 : 0,
-                                            duration: const Duration(milliseconds: 120),
-                                            curve: Curves.easeOut,
-                                            child: AnimatedScale(
-                                              scale: selected ? 1 : 0.9,
-                                              duration: const Duration(milliseconds: 120),
-                                              curve: Curves.easeOut,
-                                              child: Container(
-                                                width: 20,
-                                                height: 20,
-                                                decoration: BoxDecoration(
-                                                  color: theme.colorScheme.primary,
-                                                  shape: BoxShape.circle,
-                                                  border: Border.all(
-                                                    color: theme.colorScheme.surface.withOpacity(0.9),
-                                                    width: 1,
-                                                  ),
-                                                ),
-                                                child: Icon(
-                                                  Icons.check,
-                                                  size: 14,
-                                                  color: theme.colorScheme.onPrimary,
-                                                ),
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  );
-                                },
-                              ),
-                            ),
-                          ),
-                        );
-                      },
+                return Stack(
+                  children: [
+                    _buildMessagesPane(
+                      theme: theme,
+                      isDark: isDark,
+                      selectionMode: selectionMode,
+                      selectedIds: selectedIds,
+                      listTopPadding: listTopPadding,
+                      listBottomPadding: listBottomPadding,
                     ),
-                  ),
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: 0,
-                    child: AnimatedPadding(
-                      duration: const Duration(milliseconds: 200),
-                      curve: Curves.easeOut,
-                      padding: EdgeInsets.only(bottom: media.viewInsets.bottom),
-                      child: SafeArea(
-                        top: false,
-                        child: ChatInputBar(
-                          controller: _controller,
-                          focusNode: _focusNode,
-                          isDark: isDark,
-                          isEditing: _editing != null,
-                          onCancelEditing: () {
-                            setState(() {
-                              _editing = null;
-                            });
-                            _controller.clear();
-                          },
-                          hasReply: _replyTo != null,
-                          replyText: replyText,
-                          onCancelReply: () {
-                            setState(() {
-                              _replyTo = null;
-                            });
-                          },
-                          pending: _pending,
-                          onRemovePending: (index) {
-                            setState(() {
-                              _pending.removeAt(index);
-                            });
-                          },
-                          onPickPhotos: () async => await _pickPhotos(),
-                          onPickFiles: () async => await _pickFiles(),
-                          onTakePhoto: () async => await _takePhoto(),
-                          onSend: _send,
-                          onRecordingChanged: (mode, isRecording) {
-                            if (mode == RecorderMode.video) {
-                              _setVideoRecordingOverlay(show: isRecording);
-                            }
-                          },
-                          onRecordingDurationChanged: (t) {
-                            if (!_showVideoRecordingOverlay) return;
-                            if (!mounted) return;
-                            setState(() {
-                              _videoRecordingDurationText = t;
-                            });
-                          },
-                          onRecordingLockedChanged: (mode, locked) {
-                            if (mode != RecorderMode.video) return;
-                            if (!mounted) return;
-                            setState(() {
-                              _videoRecordingLocked = locked;
-                            });
-
-                            if (locked) {
-                              _videoLockedTransition.forward();
-                            } else {
-                              _videoLockedTransition.reverse();
-                            }
-                          },
-                          onRecorderController: (cancel, stop) {
-                            _cancelVideoRecording = cancel;
-                            _stopVideoRecording = stop;
-                          },
-                          onVideoControllerChanged: (controller) {
-                            if (!mounted) return;
-                            setState(() {
-                              _videoCameraController = controller;
-                            });
-                          },
-                          onVideoActionsController: (setTorch, setUseFrontCamera) {
-                            _setVideoTorch = setTorch;
-                            _setVideoUseFrontCamera = setUseFrontCamera;
-                          },
-                          onAddRecordedFile: (attachment) async {
-                            if (!mounted) return;
-                            if ((attachment.mimetype).toLowerCase().startsWith('audio/')) {
-                              await _sendRecordedVoice(attachment);
-                              return;
-                            }
-                            if ((attachment.mimetype).toLowerCase().startsWith('video/')) {
-                              await _sendRecordedVideo(attachment);
-                              return;
-                            }
-                            setState(() {
-                              _pending.add(attachment);
-                            });
-                          },
-                        ),
-                      ),
+                    _buildInputPane(
+                      media: media,
+                      isDark: isDark,
+                      replyText: replyText,
                     ),
-                  ),
 
-                  if (_showVideoRecordingOverlay)
-                    Positioned.fill(
-                      child: Stack(
-                        children: [
-                          Positioned.fill(
-                            child: IgnorePointer(
-                              ignoring: !_videoRecordingLocked,
-                              child: AnimatedBuilder(
-                                animation: _videoLockedTransition,
-                                builder: (context, _) {
-                                  final t = Curves.easeOut.transform(_videoLockedTransition.value);
-                                  if (t <= 0) return const SizedBox();
-                                  return ClipRect(
-                                    child: BackdropFilter(
-                                      filter: ImageFilter.blur(
-                                        sigmaX: 14 * t,
-                                        sigmaY: 14 * t,
-                                      ),
-                                      child: Container(
-                                        color: Colors.black.withOpacity(
-                                          (isDark ? 0.25 : 0.10) * t,
-                                        ),
-                                      ),
-                                    ),
-                                  );
-                                },
-                              ),
-                            ),
-                          ),
-                          Center(
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                AnimatedBuilder(
+                    if (_showVideoRecordingOverlay)
+                      Positioned.fill(
+                        child: Stack(
+                          children: [
+                            Positioned.fill(
+                              child: IgnorePointer(
+                                ignoring: !_videoRecordingLocked,
+                                child: AnimatedBuilder(
                                   animation: _videoLockedTransition,
                                   builder: (context, _) {
-                                    final t = Curves.easeOutBack.transform(_videoLockedTransition.value);
-                                    final pulse = _videoPulse.value;
-                                    final breathe = math.sin(pulse * math.pi * 2);
-                                    final breathingScale = 1 + 0.006 * breathe;
-                                    final scale = (1 - 0.02 * t) * breathingScale;
-                                    final dy = -8.0 * t;
-                                    return Transform.translate(
-                                      offset: Offset(0, dy),
-                                      child: Transform.scale(
-                                        scale: scale,
-                                        child: ClipRRect(
-                                          borderRadius: BorderRadius.circular(32),
-                                          child: Container(
-                                            width: 320,
-                                            height: 320,
-                                            color: theme.colorScheme.surface.withOpacity(isDark ? 0.55 : 0.80),
-                                            child: Stack(
-                                              children: [
-                                                if (_videoCameraController != null &&
-                                                    _videoCameraController!.value.isInitialized)
-                                                  Positioned.fill(
-                                                    child: ClipRRect(
-                                                      borderRadius: BorderRadius.circular(32),
-                                                      child: FittedBox(
-                                                        fit: BoxFit.cover,
-                                                        child: SizedBox(
-                                                          width: _videoCameraController!.value.previewSize?.height ?? 320,
-                                                          height: _videoCameraController!.value.previewSize?.width ?? 320,
-                                                          child: CameraPreview(_videoCameraController!),
-                                                        ),
-                                                      ),
-                                                    ),
-                                                  )
-                                                else
-                                                  Center(
-                                                    child: HugeIcon(
-                                                      icon: HugeIcons.strokeRoundedVideo01,
-                                                      size: 92,
-                                                      color: theme.colorScheme.onSurface.withOpacity(0.85),
-                                                    ),
-                                                  ),
-                                              ],
-                                            ),
+                                    final t = Curves.easeOut.transform(
+                                      _videoLockedTransition.value,
+                                    );
+                                    if (t <= 0) return const SizedBox();
+                                    return ClipRect(
+                                      child: BackdropFilter(
+                                        filter: ImageFilter.blur(
+                                          sigmaX: 14 * t,
+                                          sigmaY: 14 * t,
+                                        ),
+                                        child: Container(
+                                          color: Colors.black.withOpacity(
+                                            (isDark ? 0.25 : 0.10) * t,
                                           ),
                                         ),
                                       ),
                                     );
                                   },
                                 ),
-                                const SizedBox(height: 14),
-                                AnimatedBuilder(
-                                  animation: _videoLockedTransition,
-                                  builder: (context, _) {
-                                    final t = Curves.easeOut.transform(_videoLockedTransition.value);
-                                    final capsuleScale = 1 + 0.01 * t;
-                                    final capsuleDy = -4.0 * t;
-                                    return Transform.translate(
-                                      offset: Offset(0, capsuleDy),
-                                      child: Transform.scale(
-                                        scale: capsuleScale,
-                                        child: GlassSurface(
-                                          borderRadius: 999,
-                                          blurSigma: 12,
-                                          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-                                          child: SizedBox(
-                                            width: 320,
-                                            child: Row(
-                                              children: [
-                                                AnimatedSwitcher(
-                                                  duration: const Duration(milliseconds: 220),
-                                                  switchInCurve: Curves.easeOut,
-                                                  switchOutCurve: Curves.easeOut,
-                                                  transitionBuilder: (child, anim) {
-                                                    final curved = CurvedAnimation(parent: anim, curve: Curves.easeOut);
-                                                    return FadeTransition(
-                                                      opacity: curved,
-                                                      child: ScaleTransition(
-                                                        scale: Tween<double>(begin: 0.92, end: 1.0).animate(curved),
-                                                        child: SlideTransition(
-                                                          position: Tween<Offset>(
-                                                            begin: const Offset(-0.10, 0),
-                                                            end: Offset.zero,
-                                                          ).animate(curved),
-                                                          child: child,
+                              ),
+                            ),
+                            Center(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  AnimatedBuilder(
+                                    animation: _videoLockedTransition,
+                                    builder: (context, _) {
+                                      final t = Curves.easeOutBack.transform(
+                                        _videoLockedTransition.value,
+                                      );
+                                      final pulse = _videoPulse.value;
+                                      final breathe = math.sin(
+                                        pulse * math.pi * 2,
+                                      );
+                                      final breathingScale =
+                                          1 + 0.006 * breathe;
+                                      final scale =
+                                          (1 - 0.02 * t) * breathingScale;
+                                      final dy = -8.0 * t;
+                                      return Transform.translate(
+                                        offset: Offset(0, dy),
+                                        child: Transform.scale(
+                                          scale: scale,
+                                          child: ClipRRect(
+                                            borderRadius: BorderRadius.circular(
+                                              32,
+                                            ),
+                                            child: Container(
+                                              width: 320,
+                                              height: 320,
+                                              color: theme.colorScheme.surface
+                                                  .withOpacity(
+                                                    isDark ? 0.55 : 0.80,
+                                                  ),
+                                              child: Stack(
+                                                children: [
+                                                  if (_videoCameraController !=
+                                                          null &&
+                                                      _videoCameraController!
+                                                          .value
+                                                          .isInitialized)
+                                                    Positioned.fill(
+                                                      child: ClipRRect(
+                                                        borderRadius:
+                                                            BorderRadius.circular(
+                                                              32,
+                                                            ),
+                                                        child: FittedBox(
+                                                          fit: BoxFit.cover,
+                                                          child: SizedBox(
+                                                            width:
+                                                                _videoCameraController!
+                                                                    .value
+                                                                    .previewSize
+                                                                    ?.height ??
+                                                                320,
+                                                            height:
+                                                                _videoCameraController!
+                                                                    .value
+                                                                    .previewSize
+                                                                    ?.width ??
+                                                                320,
+                                                            child: CameraPreview(
+                                                              _videoCameraController!,
+                                                            ),
+                                                          ),
                                                         ),
                                                       ),
-                                                    );
-                                                  },
-                                                  child: _videoRecordingLocked
-                                                      ? Row(
-                                                          key: const ValueKey('locked_cancel'),
-                                                          mainAxisSize: MainAxisSize.min,
-                                                          children: [
-                                                            GestureDetector(
-                                                              onTap: () {
-                                                                _cancelVideoRecording?.call();
-                                                              },
-                                                              child: GlassSurface(
-                                                                borderRadius: 12,
-                                                                blurSigma: 12,
-                                                                width: 32,
-                                                                height: 32,
-                                                                child: Center(
-                                                                  child: HugeIcon(
-                                                                    icon: HugeIcons.strokeRoundedCancel01,
-                                                                    size: 20,
-                                                                    color: theme.colorScheme.onSurface.withOpacity(0.9),
+                                                    )
+                                                  else
+                                                    Center(
+                                                      child: HugeIcon(
+                                                        icon: HugeIcons
+                                                            .strokeRoundedVideo01,
+                                                        size: 92,
+                                                        color: theme
+                                                            .colorScheme
+                                                            .onSurface
+                                                            .withOpacity(0.85),
+                                                      ),
+                                                    ),
+                                                ],
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                  const SizedBox(height: 14),
+                                  AnimatedBuilder(
+                                    animation: _videoLockedTransition,
+                                    builder: (context, _) {
+                                      final t = Curves.easeOut.transform(
+                                        _videoLockedTransition.value,
+                                      );
+                                      final capsuleScale = 1 + 0.01 * t;
+                                      final capsuleDy = -4.0 * t;
+                                      return Transform.translate(
+                                        offset: Offset(0, capsuleDy),
+                                        child: Transform.scale(
+                                          scale: capsuleScale,
+                                          child: GlassSurface(
+                                            borderRadius: 999,
+                                            blurSigma: 12,
+                                            padding: const EdgeInsets.fromLTRB(
+                                              12,
+                                              10,
+                                              12,
+                                              10,
+                                            ),
+                                            child: SizedBox(
+                                              width: 320,
+                                              child: Row(
+                                                children: [
+                                                  AnimatedSwitcher(
+                                                    duration: const Duration(
+                                                      milliseconds: 220,
+                                                    ),
+                                                    switchInCurve:
+                                                        Curves.easeOut,
+                                                    switchOutCurve:
+                                                        Curves.easeOut,
+                                                    transitionBuilder: (child, anim) {
+                                                      final curved =
+                                                          CurvedAnimation(
+                                                            parent: anim,
+                                                            curve:
+                                                                Curves.easeOut,
+                                                          );
+                                                      return FadeTransition(
+                                                        opacity: curved,
+                                                        child: ScaleTransition(
+                                                          scale: Tween<double>(
+                                                            begin: 0.92,
+                                                            end: 1.0,
+                                                          ).animate(curved),
+                                                          child: SlideTransition(
+                                                            position:
+                                                                Tween<Offset>(
+                                                                  begin:
+                                                                      const Offset(
+                                                                        -0.10,
+                                                                        0,
+                                                                      ),
+                                                                  end: Offset
+                                                                      .zero,
+                                                                ).animate(
+                                                                  curved,
+                                                                ),
+                                                            child: child,
+                                                          ),
+                                                        ),
+                                                      );
+                                                    },
+                                                    child: _videoRecordingLocked
+                                                        ? Row(
+                                                            key: const ValueKey(
+                                                              'locked_cancel',
+                                                            ),
+                                                            mainAxisSize:
+                                                                MainAxisSize
+                                                                    .min,
+                                                            children: [
+                                                              GestureDetector(
+                                                                onTap: () {
+                                                                  _cancelVideoRecording
+                                                                      ?.call();
+                                                                },
+                                                                child: GlassSurface(
+                                                                  borderRadius:
+                                                                      12,
+                                                                  blurSigma: 12,
+                                                                  width: 32,
+                                                                  height: 32,
+                                                                  child: Center(
+                                                                    child: HugeIcon(
+                                                                      icon: HugeIcons
+                                                                          .strokeRoundedCancel01,
+                                                                      size: 20,
+                                                                      color: theme
+                                                                          .colorScheme
+                                                                          .onSurface
+                                                                          .withOpacity(
+                                                                            0.9,
+                                                                          ),
+                                                                    ),
                                                                   ),
                                                                 ),
                                                               ),
+                                                              const SizedBox(
+                                                                width: 10,
+                                                              ),
+                                                            ],
+                                                          )
+                                                        : const SizedBox(
+                                                            key: ValueKey(
+                                                              'hold_cancel_spacer',
                                                             ),
-                                                            const SizedBox(width: 10),
-                                                          ],
-                                                        )
-                                                      : const SizedBox(
-                                                          key: ValueKey('hold_cancel_spacer'),
-                                                        ),
-                                                ),
-                                                AnimatedBuilder(
-                                                  animation: _videoPulse,
-                                                  builder: (context, _) {
-                                                    final p = Curves.easeInOut.transform(_videoPulse.value);
-                                                    final s = 1.0 + 0.18 * p;
-                                                    final o = 0.55 + 0.45 * (1 - p);
-                                                    return Transform.scale(
-                                                      scale: s,
-                                                      child: Container(
-                                                        width: 8,
-                                                        height: 8,
-                                                        decoration: BoxDecoration(
-                                                          color: theme.colorScheme.error.withOpacity(o),
-                                                          shape: BoxShape.circle,
-                                                          boxShadow: [
-                                                            BoxShadow(
-                                                              color: theme.colorScheme.error.withOpacity(0.35 * o),
-                                                              blurRadius: 10 + 10 * p,
-                                                              spreadRadius: 0.5 + 0.8 * p,
-                                                            ),
-                                                          ],
-                                                        ),
-                                                      ),
-                                                    );
-                                                  },
-                                                ),
-                                                const SizedBox(width: 8),
-                                                Text(
-                                                  _videoRecordingDurationText,
-                                                  style: theme.textTheme.titleSmall?.copyWith(
-                                                    fontWeight: FontWeight.w800,
-                                                    color: theme.colorScheme.onSurface,
+                                                          ),
                                                   ),
-                                                ),
-                                                const SizedBox(width: 10),
-                                                Expanded(
-                                                  child: AnimatedBuilder(
-                                                    animation: _videoProgressController,
+                                                  AnimatedBuilder(
+                                                    animation: _videoPulse,
                                                     builder: (context, _) {
-                                                      return ClipRRect(
-                                                        borderRadius: BorderRadius.circular(999),
+                                                      final p = Curves.easeInOut
+                                                          .transform(
+                                                            _videoPulse.value,
+                                                          );
+                                                      final s = 1.0 + 0.18 * p;
+                                                      final o =
+                                                          0.55 + 0.45 * (1 - p);
+                                                      return Transform.scale(
+                                                        scale: s,
                                                         child: Container(
-                                                          height: 4,
-                                                          color: theme.colorScheme.onSurface.withOpacity(isDark ? 0.18 : 0.12),
-                                                          alignment: Alignment.centerLeft,
-                                                          child: FractionallySizedBox(
-                                                            widthFactor: _videoProgressController.value.clamp(0.0, 1.0),
-                                                            child: Container(
-                                                              color: theme.colorScheme.primary,
-                                                            ),
+                                                          width: 8,
+                                                          height: 8,
+                                                          decoration: BoxDecoration(
+                                                            color: theme
+                                                                .colorScheme
+                                                                .error
+                                                                .withOpacity(o),
+                                                            shape:
+                                                                BoxShape.circle,
+                                                            boxShadow: [
+                                                              BoxShadow(
+                                                                color: theme
+                                                                    .colorScheme
+                                                                    .error
+                                                                    .withOpacity(
+                                                                      0.35 * o,
+                                                                    ),
+                                                                blurRadius:
+                                                                    10 + 10 * p,
+                                                                spreadRadius:
+                                                                    0.5 +
+                                                                    0.8 * p,
+                                                              ),
+                                                            ],
                                                           ),
                                                         ),
                                                       );
                                                     },
                                                   ),
-                                                ),
-                                                AnimatedSwitcher(
-                                                  duration: const Duration(milliseconds: 220),
-                                                  switchInCurve: Curves.easeOut,
-                                                  switchOutCurve: Curves.easeOut,
-                                                  transitionBuilder: (child, anim) {
-                                                    final curved = CurvedAnimation(parent: anim, curve: Curves.easeOut);
-                                                    return FadeTransition(
-                                                      opacity: curved,
-                                                      child: ScaleTransition(
-                                                        scale: Tween<double>(begin: 0.92, end: 1.0).animate(curved),
-                                                        child: SlideTransition(
-                                                          position: Tween<Offset>(
-                                                            begin: const Offset(0.12, 0),
-                                                            end: Offset.zero,
+                                                  const SizedBox(width: 8),
+                                                  Text(
+                                                    _videoRecordingDurationText,
+                                                    style: theme
+                                                        .textTheme
+                                                        .titleSmall
+                                                        ?.copyWith(
+                                                          fontWeight:
+                                                              FontWeight.w800,
+                                                          color: theme
+                                                              .colorScheme
+                                                              .onSurface,
+                                                        ),
+                                                  ),
+                                                  const SizedBox(width: 10),
+                                                  Expanded(
+                                                    child: AnimatedBuilder(
+                                                      animation:
+                                                          _videoProgressController,
+                                                      builder: (context, _) {
+                                                        return ClipRRect(
+                                                          borderRadius:
+                                                              BorderRadius.circular(
+                                                                999,
+                                                              ),
+                                                          child: Container(
+                                                            height: 4,
+                                                            color: theme
+                                                                .colorScheme
+                                                                .onSurface
+                                                                .withOpacity(
+                                                                  isDark
+                                                                      ? 0.18
+                                                                      : 0.12,
+                                                                ),
+                                                            alignment: Alignment
+                                                                .centerLeft,
+                                                            child: FractionallySizedBox(
+                                                              widthFactor:
+                                                                  _videoProgressController
+                                                                      .value
+                                                                      .clamp(
+                                                                        0.0,
+                                                                        1.0,
+                                                                      ),
+                                                              child: Container(
+                                                                color: theme
+                                                                    .colorScheme
+                                                                    .primary,
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        );
+                                                      },
+                                                    ),
+                                                  ),
+                                                  AnimatedSwitcher(
+                                                    duration: const Duration(
+                                                      milliseconds: 220,
+                                                    ),
+                                                    switchInCurve:
+                                                        Curves.easeOut,
+                                                    switchOutCurve:
+                                                        Curves.easeOut,
+                                                    transitionBuilder: (child, anim) {
+                                                      final curved =
+                                                          CurvedAnimation(
+                                                            parent: anim,
+                                                            curve:
+                                                                Curves.easeOut,
+                                                          );
+                                                      return FadeTransition(
+                                                        opacity: curved,
+                                                        child: ScaleTransition(
+                                                          scale: Tween<double>(
+                                                            begin: 0.92,
+                                                            end: 1.0,
                                                           ).animate(curved),
-                                                          child: child,
+                                                          child: SlideTransition(
+                                                            position:
+                                                                Tween<Offset>(
+                                                                  begin:
+                                                                      const Offset(
+                                                                        0.12,
+                                                                        0,
+                                                                      ),
+                                                                  end: Offset
+                                                                      .zero,
+                                                                ).animate(
+                                                                  curved,
+                                                                ),
+                                                            child: child,
+                                                          ),
                                                         ),
-                                                      ),
-                                                    );
-                                                  },
-                                                  child: _videoRecordingLocked
-                                                      ? Row(
-                                                          key: const ValueKey('locked_actions'),
-                                                          mainAxisSize: MainAxisSize.min,
-                                                          children: [
-                                                            const SizedBox(width: 10),
-                                                            GestureDetector(
-                                                              onTap: () async {
-                                                                if (!mounted) return;
-                                                                final next = !_videoFlashEnabled;
-                                                                setState(() {
-                                                                  _videoFlashEnabled = next;
-                                                                });
-                                                                final ok = await _setVideoTorch?.call(next);
-                                                                if (ok != true && mounted) {
+                                                      );
+                                                    },
+                                                    child: _videoRecordingLocked
+                                                        ? Row(
+                                                            key: const ValueKey(
+                                                              'locked_actions',
+                                                            ),
+                                                            mainAxisSize:
+                                                                MainAxisSize
+                                                                    .min,
+                                                            children: [
+                                                              const SizedBox(
+                                                                width: 10,
+                                                              ),
+                                                              GestureDetector(
+                                                                onTap: () async {
+                                                                  if (!mounted) {
+                                                                    return;
+                                                                  }
+                                                                  final next =
+                                                                      !_videoFlashEnabled;
                                                                   setState(() {
-                                                                    _videoFlashEnabled = !next;
+                                                                    _videoFlashEnabled =
+                                                                        next;
                                                                   });
-                                                                }
-                                                              },
-                                                              child: GlassSurface(
-                                                                borderRadius: 12,
-                                                                blurSigma: 12,
-                                                                width: 32,
-                                                                height: 32,
-                                                                child: Center(
-                                                                  child: HugeIcon(
-                                                                    icon: _videoFlashEnabled
-                                                                        ? HugeIcons.strokeRoundedFlash
-                                                                        : HugeIcons.strokeRoundedFlashOff,
-                                                                    size: 20,
-                                                                    color: theme.colorScheme.onSurface.withOpacity(0.9),
+                                                                  final ok =
+                                                                      await _setVideoTorch
+                                                                          ?.call(
+                                                                            next,
+                                                                          );
+                                                                  if (ok !=
+                                                                          true &&
+                                                                      mounted) {
+                                                                    setState(() {
+                                                                      _videoFlashEnabled =
+                                                                          !next;
+                                                                    });
+                                                                  }
+                                                                },
+                                                                child: GlassSurface(
+                                                                  borderRadius:
+                                                                      12,
+                                                                  blurSigma: 12,
+                                                                  width: 32,
+                                                                  height: 32,
+                                                                  child: Center(
+                                                                    child: HugeIcon(
+                                                                      icon:
+                                                                          _videoFlashEnabled
+                                                                          ? HugeIcons.strokeRoundedFlash
+                                                                          : HugeIcons.strokeRoundedFlashOff,
+                                                                      size: 20,
+                                                                      color: theme
+                                                                          .colorScheme
+                                                                          .onSurface
+                                                                          .withOpacity(
+                                                                            0.9,
+                                                                          ),
+                                                                    ),
                                                                   ),
                                                                 ),
                                                               ),
-                                                            ),
-                                                            const SizedBox(width: 8),
-                                                            GestureDetector(
-                                                              onTap: () async {
-                                                                if (!mounted) return;
-                                                                final next = !_videoUseFrontCamera;
-                                                                setState(() {
-                                                                  _videoUseFrontCamera = next;
-                                                                });
-                                                                final ok = await _setVideoUseFrontCamera?.call(next);
-                                                                if (ok != true && mounted) {
+                                                              const SizedBox(
+                                                                width: 8,
+                                                              ),
+                                                              GestureDetector(
+                                                                onTap: () async {
+                                                                  if (!mounted) {
+                                                                    return;
+                                                                  }
+                                                                  final next =
+                                                                      !_videoUseFrontCamera;
                                                                   setState(() {
-                                                                    _videoUseFrontCamera = !next;
+                                                                    _videoUseFrontCamera =
+                                                                        next;
                                                                   });
-                                                                }
-                                                              },
-                                                              child: GlassSurface(
-                                                                borderRadius: 12,
-                                                                blurSigma: 12,
-                                                                width: 32,
-                                                                height: 32,
-                                                                child: Center(
-                                                                  child: HugeIcon(
-                                                                    icon: HugeIcons.strokeRoundedExchange01,
-                                                                    size: 20,
-                                                                    color: theme.colorScheme.onSurface.withOpacity(0.9),
+                                                                  final ok =
+                                                                      await _setVideoUseFrontCamera
+                                                                          ?.call(
+                                                                            next,
+                                                                          );
+                                                                  if (ok !=
+                                                                          true &&
+                                                                      mounted) {
+                                                                    setState(() {
+                                                                      _videoUseFrontCamera =
+                                                                          !next;
+                                                                    });
+                                                                  }
+                                                                },
+                                                                child: GlassSurface(
+                                                                  borderRadius:
+                                                                      12,
+                                                                  blurSigma: 12,
+                                                                  width: 32,
+                                                                  height: 32,
+                                                                  child: Center(
+                                                                    child: HugeIcon(
+                                                                      icon: HugeIcons
+                                                                          .strokeRoundedExchange01,
+                                                                      size: 20,
+                                                                      color: theme
+                                                                          .colorScheme
+                                                                          .onSurface
+                                                                          .withOpacity(
+                                                                            0.9,
+                                                                          ),
+                                                                    ),
                                                                   ),
                                                                 ),
                                                               ),
-                                                            ),
-                                                            const SizedBox(width: 8),
-                                                            GestureDetector(
-                                                              onTap: () {
-                                                                _stopVideoRecording?.call();
-                                                              },
-                                                              child: GlassSurface(
-                                                                borderRadius: 12,
-                                                                blurSigma: 12,
-                                                                width: 32,
-                                                                height: 32,
-                                                                child: Center(
-                                                                  child: HugeIcon(
-                                                                    icon: HugeIcons.strokeRoundedSent,
-                                                                    size: 20,
-                                                                    color: theme.colorScheme.onSurface.withOpacity(0.9),
+                                                              const SizedBox(
+                                                                width: 8,
+                                                              ),
+                                                              GestureDetector(
+                                                                onTap: () {
+                                                                  _stopVideoRecording
+                                                                      ?.call();
+                                                                },
+                                                                child: GlassSurface(
+                                                                  borderRadius:
+                                                                      12,
+                                                                  blurSigma: 12,
+                                                                  width: 32,
+                                                                  height: 32,
+                                                                  child: Center(
+                                                                    child: HugeIcon(
+                                                                      icon: HugeIcons
+                                                                          .strokeRoundedSent,
+                                                                      size: 20,
+                                                                      color: theme
+                                                                          .colorScheme
+                                                                          .onSurface
+                                                                          .withOpacity(
+                                                                            0.9,
+                                                                          ),
+                                                                    ),
                                                                   ),
                                                                 ),
                                                               ),
+                                                            ],
+                                                          )
+                                                        : const SizedBox(
+                                                            key: ValueKey(
+                                                              'hold_actions_spacer',
                                                             ),
-                                                          ],
-                                                        )
-                                                      : const SizedBox(
-                                                          key: ValueKey('hold_actions_spacer'),
-                                                        ),
-                                                ),
-                                              ],
+                                                          ),
+                                                  ),
+                                                ],
+                                              ),
                                             ),
                                           ),
                                         ),
-                                      ),
-                                    );
-                                  },
-                                )
-                              ],
+                                      );
+                                    },
+                                  ),
+                                ],
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
-                    ),
                   ],
                 );
               },
@@ -1972,10 +2268,10 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
     for (final id in ids) {
       final mid = int.tryParse(id);
       if (mid == null || mid <= 0) continue;
-      final msg = _messages.where((m) => m.id == id).cast<ChatMessage?>().firstWhere(
-            (m) => m != null,
-            orElse: () => null,
-          );
+      final msg = _messages
+          .where((m) => m.id == id)
+          .cast<ChatMessage?>()
+          .firstWhere((m) => m != null, orElse: () => null);
       if (msg == null) continue;
       if (msg.attachments.isNotEmpty) continue;
       final payload = await repo.buildEncryptedWsMessage(
@@ -1997,7 +2293,10 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
     _exitSelectionMode();
   }
 
-  Future<void> _showMessageContextMenu(ChatMessage msg, Offset globalPosition) async {
+  Future<void> _showMessageContextMenu(
+    ChatMessage msg,
+    Offset globalPosition,
+  ) async {
     Future<void> doCopy() async {
       final t = msg.text.trim();
       if (t.isEmpty) return;
@@ -2053,7 +2352,9 @@ class _ChatPageState extends State<ChatPage> with TickerProviderStateMixin, Widg
         RenContextMenuEntry.action(
           RenContextMenuAction<String>(
             icon: HugeIcon(icon: HugeIcons.strokeRoundedArrowTurnForward),
-            label: msg.attachments.isNotEmpty ? 'Переслать (без файлов)' : 'Переслать',
+            label: msg.attachments.isNotEmpty
+                ? 'Переслать (без файлов)'
+                : 'Переслать',
             value: 'share',
           ),
         ),

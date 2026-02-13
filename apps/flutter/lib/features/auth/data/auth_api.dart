@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 
 import 'package:ren/core/constants/api_url.dart';
 
@@ -29,11 +30,8 @@ class AuthApi {
     } on DioException catch (e) {
       final status = e.response?.statusCode;
       switch (status) {
-
         case 401:
-          throw ApiException(
-            'Неверный логин или пароль.',
-          );
+          throw ApiException('Неверный логин или пароль.');
         case 500:
           throw ApiException('Ошибка сервера. Попробуйте позже.');
         default:
@@ -41,7 +39,9 @@ class AuthApi {
           final serverMessage = (e.response?.data is Map<String, dynamic>)
               ? (e.response?.data['message'] as String?)
               : null;
-          print(e);
+          if (kDebugMode) {
+            debugPrint('AuthApi.login failed (status=$status)');
+          }
           throw ApiException(
             serverMessage ??
                 'Неизвестная ошибка${status != null ? ' ($status)' : ''}.',
