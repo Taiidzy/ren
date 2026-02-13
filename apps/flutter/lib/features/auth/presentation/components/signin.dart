@@ -18,8 +18,7 @@ class SignInForm extends StatefulWidget {
   State<SignInForm> createState() => _SignInFormState();
 }
 
-class _SignInFormState extends State<SignInForm>
-    with TickerProviderStateMixin {
+class _SignInFormState extends State<SignInForm> with TickerProviderStateMixin {
   final _loginController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _obscurePassword = true;
@@ -45,12 +44,6 @@ class _SignInFormState extends State<SignInForm>
     final login = _loginController.text.trim();
     final password = _passwordController.text;
 
-    setState(() {
-      _isLoading = true;
-    });
-
-    _animationController.repeat(reverse: true);
-
     if (login.isEmpty || password.isEmpty) {
       setState(() {
         _isLoading = false;
@@ -59,23 +52,26 @@ class _SignInFormState extends State<SignInForm>
       return;
     }
 
+    setState(() {
+      _isLoading = true;
+      _loginError = '';
+    });
+
+    _animationController.repeat(reverse: true);
+
     try {
-      if (!mounted) return;
-
-      final login = _loginController.text.trim();
-      final password = _passwordController.text;
-
       final repo = context.read<AuthRepository>();
       final result = await repo.login(login, password, _rememberMe);
+      if (!mounted) return;
       if (result.id >= 0) {
-        Navigator.of(context).pushReplacement(
-          adaptivePageRoute((_) => SplashPage()),
-        );
+        Navigator.of(
+          context,
+        ).pushReplacement(adaptivePageRoute((_) => const SplashPage()));
       }
     } catch (error) {
       debugPrint(error.toString());
+      if (!mounted) return;
       setState(() {
-        _isLoading = false;
         _loginError = error.toString();
       });
     } finally {
