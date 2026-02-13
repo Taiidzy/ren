@@ -1,5 +1,12 @@
 PODS:
+  - audio_session (0.0.1):
+    - FlutterMacOS
   - device_info_plus (0.0.1):
+    - FlutterMacOS
+  - ffmpeg_kit_min_gpl (6.0.3-LTS):
+    - ffmpeg_kit_min_gpl/min-gpl-lts (= 6.0.3-LTS)
+    - FlutterMacOS
+  - ffmpeg_kit_min_gpl/min-gpl-lts (6.0.3-LTS):
     - FlutterMacOS
   - file_picker (0.0.1):
     - FlutterMacOS
@@ -11,10 +18,13 @@ PODS:
     - Flutter
     - FlutterMacOS
   - FlutterMacOS (1.0.0)
+  - just_audio (0.0.1):
+    - Flutter
+    - FlutterMacOS
   - path_provider_foundation (0.0.1):
     - Flutter
     - FlutterMacOS
-  - record_macos (0.2.0):
+  - record_macos (1.1.0):
     - FlutterMacOS
   - share_plus (0.0.1):
     - FlutterMacOS
@@ -23,20 +33,27 @@ PODS:
     - FlutterMacOS
 
 DEPENDENCIES:
+  - audio_session (from `Flutter/ephemeral/.symlinks/plugins/audio_session/macos`)
   - device_info_plus (from `Flutter/ephemeral/.symlinks/plugins/device_info_plus/macos`)
+  - ffmpeg_kit_min_gpl (from `Flutter/ephemeral/.symlinks/plugins/ffmpeg_kit_min_gpl/macos`)
   - file_picker (from `Flutter/ephemeral/.symlinks/plugins/file_picker/macos`)
   - file_selector_macos (from `Flutter/ephemeral/.symlinks/plugins/file_selector_macos/macos`)
   - flutter_local_notifications (from `Flutter/ephemeral/.symlinks/plugins/flutter_local_notifications/macos`)
   - flutter_secure_storage_darwin (from `Flutter/ephemeral/.symlinks/plugins/flutter_secure_storage_darwin/darwin`)
   - FlutterMacOS (from `Flutter/ephemeral`)
+  - just_audio (from `Flutter/ephemeral/.symlinks/plugins/just_audio/darwin`)
   - path_provider_foundation (from `Flutter/ephemeral/.symlinks/plugins/path_provider_foundation/darwin`)
   - record_macos (from `Flutter/ephemeral/.symlinks/plugins/record_macos/macos`)
   - share_plus (from `Flutter/ephemeral/.symlinks/plugins/share_plus/macos`)
   - video_player_avfoundation (from `Flutter/ephemeral/.symlinks/plugins/video_player_avfoundation/darwin`)
 
 EXTERNAL SOURCES:
+  audio_session:
+    :path: Flutter/ephemeral/.symlinks/plugins/audio_session/macos
   device_info_plus:
     :path: Flutter/ephemeral/.symlinks/plugins/device_info_plus/macos
+  ffmpeg_kit_min_gpl:
+    :path: Flutter/ephemeral/.symlinks/plugins/ffmpeg_kit_min_gpl/macos
   file_picker:
     :path: Flutter/ephemeral/.symlinks/plugins/file_picker/macos
   file_selector_macos:
@@ -47,6 +64,8 @@ EXTERNAL SOURCES:
     :path: Flutter/ephemeral/.symlinks/plugins/flutter_secure_storage_darwin/darwin
   FlutterMacOS:
     :path: Flutter/ephemeral
+  just_audio:
+    :path: Flutter/ephemeral/.symlinks/plugins/just_audio/darwin
   path_provider_foundation:
     :path: Flutter/ephemeral/.symlinks/plugins/path_provider_foundation/darwin
   record_macos:
@@ -57,14 +76,17 @@ EXTERNAL SOURCES:
     :path: Flutter/ephemeral/.symlinks/plugins/video_player_avfoundation/darwin
 
 SPEC CHECKSUMS:
+  audio_session: eaca2512cf2b39212d724f35d11f46180ad3a33e
   device_info_plus: 4fb280989f669696856f8b129e4a5e3cd6c48f76
+  ffmpeg_kit_min_gpl: 7652ed36842e34999a766a4f88439278715ebbab
   file_picker: 7584aae6fa07a041af2b36a2655122d42f578c1a
   file_selector_macos: 9e9e068e90ebee155097d00e89ae91edb2374db7
   flutter_local_notifications: 7e5a17a1dbc00d83dc10d43c2c4c05f2ceed233c
   flutter_secure_storage_darwin: acdb3f316ed05a3e68f856e0353b133eec373a23
   FlutterMacOS: d0db08ddef1a9af05a5ec4b724367152bb0500b1
+  just_audio: 4e391f57b79cad2b0674030a00453ca5ce817eed
   path_provider_foundation: bb55f6dbba17d0dccd6737fe6f7f34fbd0376880
-  record_macos: fcfa993538261e6fdb5b3ce08b82000be6ddec71
+  record_macos: 43194b6c06ca6f8fa132e2acea72b202b92a0f5b
   share_plus: 510bf0af1a42cd602274b4629920c9649c52f4cc
   video_player_avfoundation: dd410b52df6d2466a42d28550e33e4146928280a
 

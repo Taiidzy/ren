@@ -92,63 +92,57 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
               ),
             ),
             child: SafeArea(
-              child: Builder(
-                builder: (context) {
-                  final media = MediaQuery.of(context);
-                  // Более агрессивное определение необходимости скролла
-                  final bool allowScroll =
-                      media.viewInsets.bottom > 0 ||
-                      media.size.height < 600; // Уменьшено с 700
-
-                  final content = Center(
-                    child: Padding(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: size.width * 0.08,
-                        vertical: 16, // Уменьшено с 20
-                      ),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  return ScrollConfiguration(
+                    behavior: const ScrollBehavior().copyWith(
+                      overscroll: false,
+                    ),
+                    child: SingleChildScrollView(
+                      padding: EdgeInsets.zero,
                       child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 400),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const SizedBox(height: 16), // Уменьшено с 20
-                            _buildHeader(isDark),
-                            const SizedBox(height: 30), // Уменьшено с 50
-                            AnimatedBuilder(
-                              animation: _formAnimation,
-                              builder: (context, child) {
-                                return Transform.translate(
-                                  offset: Offset(
-                                    0,
-                                    (1 - _formAnimation.value) * 30,
-                                  ),
-                                  child: Opacity(
-                                    opacity: _formAnimation.value,
-                                    child: _buildMainCard(isDark),
-                                  ),
-                                );
-                              },
+                        constraints: BoxConstraints(
+                          minHeight: constraints.maxHeight,
+                        ),
+                        child: Center(
+                          child: Padding(
+                            padding: EdgeInsets.symmetric(
+                              horizontal: size.width * 0.08,
+                              vertical: 16,
                             ),
-                            const SizedBox(height: 16), // Уменьшено с 20
-                          ],
+                            child: ConstrainedBox(
+                              constraints: const BoxConstraints(maxWidth: 400),
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const SizedBox(height: 16),
+                                  _buildHeader(isDark),
+                                  const SizedBox(height: 30),
+                                  AnimatedBuilder(
+                                    animation: _formAnimation,
+                                    builder: (context, child) {
+                                      return Transform.translate(
+                                        offset: Offset(
+                                          0,
+                                          (1 - _formAnimation.value) * 30,
+                                        ),
+                                        child: Opacity(
+                                          opacity: _formAnimation.value,
+                                          child: _buildMainCard(isDark),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                  const SizedBox(height: 16),
+                                ],
+                              ),
+                            ),
+                          ),
                         ),
                       ),
                     ),
                   );
-
-                  if (allowScroll) {
-                    return ScrollConfiguration(
-                      behavior: const ScrollBehavior().copyWith(
-                        overscroll: false,
-                      ),
-                      child: SingleChildScrollView(
-                        padding: EdgeInsets.zero,
-                        child: content,
-                      ),
-                    );
-                  } else {
-                    return content;
-                  }
                 },
               ),
             ),
@@ -182,11 +176,14 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
       borderRadius: 24,
       blurSigma: 18,
       padding: const EdgeInsets.all(20), // Уменьшено с 28
-      borderColor:
-          isDark ? Colors.white.withOpacity(0.15) : Colors.white.withOpacity(0.4),
+      borderColor: isDark
+          ? Colors.white.withOpacity(0.15)
+          : Colors.white.withOpacity(0.4),
       boxShadow: [
         BoxShadow(
-          color: isDark ? Colors.black.withOpacity(0.3) : Colors.black.withOpacity(0.08),
+          color: isDark
+              ? Colors.black.withOpacity(0.3)
+              : Colors.black.withOpacity(0.08),
           blurRadius: 24,
           offset: const Offset(0, 8),
         ),
@@ -217,8 +214,9 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
       height: 46,
       padding: const EdgeInsets.all(3),
       borderWidth: 0.5,
-      borderColor:
-          isDark ? Colors.white.withOpacity(0.1) : Colors.white.withOpacity(0.25),
+      borderColor: isDark
+          ? Colors.white.withOpacity(0.1)
+          : Colors.white.withOpacity(0.25),
       child: Row(
         children: [
           _buildTabItem('Вход', 0, isDark),
@@ -240,25 +238,22 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
           height: 40,
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(20),
-            color:
-                isSelected
-                    ? (isDark
-                        ? Colors.white.withOpacity(0.15)
-                        : Colors.white.withOpacity(0.5))
-                    : Colors.transparent,
-            boxShadow:
-                isSelected
-                    ? [
-                      BoxShadow(
-                        color:
-                            isDark
-                                ? Colors.black.withOpacity(0.2)
-                                : Colors.black.withOpacity(0.05),
-                        blurRadius: 8,
-                        offset: const Offset(0, 2),
-                      ),
-                    ]
-                    : null,
+            color: isSelected
+                ? (isDark
+                      ? Colors.white.withOpacity(0.15)
+                      : Colors.white.withOpacity(0.5))
+                : Colors.transparent,
+            boxShadow: isSelected
+                ? [
+                    BoxShadow(
+                      color: isDark
+                          ? Colors.black.withOpacity(0.2)
+                          : Colors.black.withOpacity(0.05),
+                      blurRadius: 8,
+                      offset: const Offset(0, 2),
+                    ),
+                  ]
+                : null,
           ),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,

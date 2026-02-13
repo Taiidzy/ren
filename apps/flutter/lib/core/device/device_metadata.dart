@@ -31,7 +31,10 @@ class DeviceMetadataProvider {
           _join([manufacturer, model, release]),
           'Android device',
         );
-        return DeviceMetadata(deviceName: pretty, appVersion: _appVersion);
+        return DeviceMetadata(
+          deviceName: _toHttpHeaderValue(pretty),
+          appVersion: _appVersion,
+        );
       }
 
       if (Platform.isIOS) {
@@ -47,7 +50,10 @@ class DeviceMetadataProvider {
           _join([name, model, system]),
           'iOS device',
         );
-        return DeviceMetadata(deviceName: pretty, appVersion: _appVersion);
+        return DeviceMetadata(
+          deviceName: _toHttpHeaderValue(pretty),
+          appVersion: _appVersion,
+        );
       }
 
       if (Platform.isMacOS) {
@@ -63,7 +69,10 @@ class DeviceMetadataProvider {
           _join([computer, model, os]),
           'macOS device',
         );
-        return DeviceMetadata(deviceName: pretty, appVersion: _appVersion);
+        return DeviceMetadata(
+          deviceName: _toHttpHeaderValue(pretty),
+          appVersion: _appVersion,
+        );
       }
 
       if (Platform.isWindows) {
@@ -76,7 +85,10 @@ class DeviceMetadataProvider {
           _join([computer, product, version]),
           'Windows device',
         );
-        return DeviceMetadata(deviceName: pretty, appVersion: _appVersion);
+        return DeviceMetadata(
+          deviceName: _toHttpHeaderValue(pretty),
+          appVersion: _appVersion,
+        );
       }
 
       if (Platform.isLinux) {
@@ -89,7 +101,10 @@ class DeviceMetadataProvider {
           _join([name, version, machine]),
           'Linux device',
         );
-        return DeviceMetadata(deviceName: pretty, appVersion: _appVersion);
+        return DeviceMetadata(
+          deviceName: _toHttpHeaderValue(pretty),
+          appVersion: _appVersion,
+        );
       }
     } catch (_) {
       // Fallback below.
@@ -97,7 +112,10 @@ class DeviceMetadataProvider {
 
     final fallback =
         '${Platform.operatingSystem[0].toUpperCase()}${Platform.operatingSystem.substring(1)} ${Platform.operatingSystemVersion}';
-    return DeviceMetadata(deviceName: fallback, appVersion: _appVersion);
+    return DeviceMetadata(
+      deviceName: _toHttpHeaderValue(fallback),
+      appVersion: _appVersion,
+    );
   }
 
   static String _pick(Map<String, dynamic> data, List<String> keys) {
@@ -127,11 +145,19 @@ class DeviceMetadataProvider {
         .map((v) => v.trim())
         .where((v) => v.isNotEmpty && v.toLowerCase() != 'unknown')
         .toSet()
-        .join(' • ');
+        .join(' | ');
   }
 
   static String _nonEmptyOrFallback(String value, String fallback) {
     final normalized = value.trim();
     return normalized.isEmpty ? fallback : normalized;
+  }
+
+  static String _toHttpHeaderValue(String value) {
+    final ascii = value
+        .replaceAll(RegExp(r'[^\x20-\x7E]'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    return ascii.isEmpty ? 'Unknown device' : ascii;
   }
 }
