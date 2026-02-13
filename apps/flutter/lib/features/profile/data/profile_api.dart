@@ -172,4 +172,21 @@ class ProfileApi {
       );
     }
   }
+
+  Future<void> logout() async {
+    final token = await _requireToken();
+    try {
+      await dio.post(
+        '${Apiurl.api}/auth/logout',
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+    } on DioException catch (e) {
+      throw ApiException(
+        (e.response?.data is String)
+            ? e.response?.data as String
+            : 'Ошибка завершения текущей сессии',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
 }

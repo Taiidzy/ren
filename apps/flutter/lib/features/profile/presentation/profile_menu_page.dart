@@ -5,6 +5,7 @@ import 'package:ren/core/secure/secure_storage.dart';
 import 'package:ren/features/auth/presentation/auth_page.dart';
 import 'package:ren/features/profile/presentation/widgets/personalization_sheet.dart';
 import 'package:ren/features/profile/presentation/widgets/profile_edit_sheet.dart';
+import 'package:ren/features/profile/data/profile_repository.dart';
 import 'package:ren/features/profile/presentation/profile_store.dart';
 import 'package:ren/features/profile/presentation/security_page.dart';
 import 'package:ren/shared/widgets/adaptive_page_route.dart';
@@ -123,6 +124,10 @@ class ProfileMenuPage extends StatelessWidget {
     );
 
     if (shouldLogout != true) return;
+
+    try {
+      await context.read<ProfileRepository>().logout();
+    } catch (_) {}
 
     await SecureStorage.deleteAllKeys();
     if (!context.mounted) return;

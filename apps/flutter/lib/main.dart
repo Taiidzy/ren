@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import 'package:dio/dio.dart';
 
 import 'package:ren/features/splash/presentation/splash_page.dart';
+import 'package:ren/features/auth/presentation/auth_page.dart';
 
 import 'package:ren/theme/themes.dart';
 
@@ -31,6 +32,7 @@ import 'package:ren/features/profile/presentation/profile_store.dart';
 import 'package:ren/core/realtime/realtime_client.dart';
 import 'package:ren/core/notifications/local_notifications.dart';
 import 'package:ren/core/network/auth_session_interceptor.dart';
+import 'package:ren/shared/widgets/adaptive_page_route.dart';
 
 final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
 
@@ -93,7 +95,20 @@ class MyApp extends StatelessWidget {
         Provider<Dio>(
           create: (_) {
             final dio = Dio();
-            dio.interceptors.add(AuthSessionInterceptor(dio));
+            dio.interceptors.add(
+              AuthSessionInterceptor(
+                dio,
+                onUnauthorized: () async {
+                  final nav = rootNavigatorKey.currentState;
+                  final ctx = rootNavigatorKey.currentContext;
+                  if (nav == null || ctx == null) return;
+                  nav.pushAndRemoveUntil(
+                    adaptivePageRoute((_) => const AuthPage()),
+                    (route) => false,
+                  );
+                },
+              ),
+            );
             return dio;
           },
         ),

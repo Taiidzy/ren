@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:hugeicons/hugeicons.dart';
 import 'package:provider/provider.dart';
 
 import 'package:ren/features/profile/data/profile_repository.dart';
@@ -125,6 +126,42 @@ class _SecurityPageState extends State<SecurityPage> {
     return '$dd.$mm.$yyyy $hh:$min';
   }
 
+  List<List<dynamic>> _deviceIcon(String name) {
+    final lower = name.toLowerCase();
+
+    if (lower.contains('android')) {
+      return HugeIcons.strokeRoundedAndroid;
+    }
+
+    if (lower.contains('iphone') ||
+        lower.contains('ios') ||
+        lower.contains('mobile') ||
+        lower.contains('phone')) {
+      return HugeIcons.strokeRoundedSmartPhone01;
+    }
+
+    if (lower.contains('ipad') || lower.contains('tablet')) {
+      return HugeIcons.strokeRoundedSmartPhoneLandscape;
+    }
+
+    if (lower.contains('mac') || lower.contains('apple')) {
+      return HugeIcons.strokeRoundedApple;
+    }
+
+    if (lower.contains('windows') ||
+        lower.contains('linux') ||
+        lower.contains('desktop') ||
+        lower.contains('computer')) {
+      return HugeIcons.strokeRoundedComputer;
+    }
+
+    if (lower.contains('laptop')) {
+      return HugeIcons.strokeRoundedLaptop;
+    }
+
+    return HugeIcons.strokeRoundedDeviceAccess;
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -149,29 +186,76 @@ class _SecurityPageState extends State<SecurityPage> {
             child: Column(
               children: [
                 GlassSurface(
-                  borderRadius: 16,
-                  blurSigma: 12,
+                  borderRadius: 26,
+                  blurSigma: 16,
                   width: double.infinity,
-                  borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.12),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 12,
-                  ),
-                  onTap: _isBusy ? null : _terminateOtherSessions,
-                  child: Row(
+                  borderColor: baseInk.withOpacity(isDark ? 0.24 : 0.14),
+                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                  child: Column(
                     children: [
-                      Icon(
-                        Icons.gpp_good_outlined,
-                        color: theme.colorScheme.onSurface.withOpacity(0.9),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          'Выйти из всех других устройств',
-                          style: theme.textTheme.titleSmall?.copyWith(
-                            color: theme.colorScheme.onSurface,
-                            fontWeight: FontWeight.w600,
+                      GlassSurface(
+                        borderRadius: 18,
+                        blurSigma: 14,
+                        width: 94,
+                        height: 110,
+                        borderColor: baseInk.withOpacity(isDark ? 0.22 : 0.12),
+                        child: Center(
+                          child: HugeIcon(
+                            icon: HugeIcons.strokeRoundedShield01,
+                            color: theme.colorScheme.onSurface.withOpacity(
+                              0.92,
+                            ),
+                            size: 46,
                           ),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        'Щит аккаунта',
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w800,
+                          color: theme.colorScheme.onSurface,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Управляй активными входами и закрывай лишние устройства',
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurface.withOpacity(0.74),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      GlassSurface(
+                        borderRadius: 14,
+                        blurSigma: 12,
+                        width: double.infinity,
+                        borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.12),
+                        onTap: _isBusy ? null : _terminateOtherSessions,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
+                        child: Row(
+                          children: [
+                            HugeIcon(
+                              icon: HugeIcons.strokeRoundedShieldKey,
+                              color: theme.colorScheme.onSurface.withOpacity(
+                                0.9,
+                              ),
+                              size: 20,
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                'Выйти из всех других устройств',
+                                style: theme.textTheme.titleSmall?.copyWith(
+                                  color: theme.colorScheme.onSurface,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ],
@@ -246,11 +330,10 @@ class _SecurityPageState extends State<SecurityPage> {
             children: [
               Row(
                 children: [
-                  Icon(
-                    s.isCurrent
-                        ? Icons.smartphone_rounded
-                        : Icons.devices_rounded,
+                  HugeIcon(
+                    icon: _deviceIcon(s.deviceName),
                     color: theme.colorScheme.onSurface.withOpacity(0.9),
+                    size: 21,
                   ),
                   const SizedBox(width: 8),
                   Expanded(

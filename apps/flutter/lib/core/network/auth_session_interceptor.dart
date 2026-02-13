@@ -10,9 +10,13 @@ import 'package:ren/core/secure/secure_storage.dart';
 class AuthSessionInterceptor extends Interceptor {
   final Dio _dio;
   final Dio _refreshDio;
+  final Future<void> Function()? _onUnauthorized;
   Completer<bool>? _refreshCompleter;
+  bool _didDispatchUnauthorized = false;
 
-  AuthSessionInterceptor(this._dio) : _refreshDio = Dio();
+  AuthSessionInterceptor(this._dio, {Future<void> Function()? onUnauthorized})
+    : _refreshDio = Dio(),
+      _onUnauthorized = onUnauthorized;
 
   bool _isPublicAuthPath(String path) {
     return path.endsWith('/auth/login') ||
@@ -56,7 +60,7 @@ class AuthSessionInterceptor extends Interceptor {
 
     final refreshed = await _refreshTokens();
     if (!refreshed) {
-      await SecureStorage.deleteAllKeys();
+      await _handleUnauthorized();
       handler.next(err);
       return;
     }
@@ -130,6 +134,19 @@ class AuthSessionInterceptor extends Interceptor {
       return _refreshCompleter!.future;
     } finally {
       _refreshCompleter = null;
+    }
+  }
+
+  Future<void> _handleUnauthorized() async {
+    await SecureStorage.deleteAllKeys();
+    if (_didDispatchUnauthorized) return;
+    _didDispatchUnauthorized = true;
+    try {
+      await _onUnauthorized?.call();
+    } finally {
+      Future<void>.delayed(const Duration(milliseconds: 800), () {
+        _didDispatchUnauthorized = false;
+      });
     }
   }
 }

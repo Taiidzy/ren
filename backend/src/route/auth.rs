@@ -4,8 +4,10 @@ use axum::{
     http::{HeaderMap, StatusCode},
     routing::{delete, get, post},
 };
+use serde::Deserialize;
 use sqlx::Row;
 use std::net::SocketAddr;
+use std::time::Duration;
 
 use crate::AppState;
 use crate::middleware::CurrentUser;
@@ -16,7 +18,7 @@ use crate::models::auth::{
 
 use argon2::Argon2;
 use password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
-use rand_core::OsRng;
+use rand_core::{OsRng, RngCore};
 
 use chrono::{Duration as ChronoDuration, Utc};
 use jsonwebtoken::{EncodingKey, Header, encode};
@@ -28,6 +30,7 @@ pub fn router() -> Router<AppState> {
         .route("/auth/register", post(register))
         .route("/auth/login", post(login))
         .route("/auth/refresh", post(refresh))
+        .route("/auth/logout", post(logout))
         .route(
             "/auth/sessions",
             get(list_sessions).delete(delete_other_sessions),
@@ -191,7 +194,7 @@ async fn login(
 
     let remember_me = payload.remember_me.unwrap_or(false);
     let ip_address = extract_ip(&headers, addr);
-    let city = extract_city(&headers);
+    let city = resolve_city(&headers, &ip_address).await;
     let app_version =
         extract_header(&headers, "x-app-version").unwrap_or_else(|| "unknown".to_string());
     let user_agent =
@@ -208,7 +211,7 @@ async fn login(
     let session_expires_at = Utc::now() + refresh_ttl;
 
     let session_id = Uuid::new_v4();
-    let refresh_token = format!("{}{}", Uuid::new_v4(), Uuid::new_v4());
+    let refresh_token = generate_refresh_token();
     let refresh_hash = hash_refresh_token(&state.jwt_secret, &refresh_token);
 
     sqlx::query(
@@ -308,7 +311,7 @@ async fn refresh(
     let login: String = row.try_get("login").unwrap_or_default();
     let username: String = row.try_get("username").unwrap_or_default();
 
-    let new_refresh_token = format!("{}{}", Uuid::new_v4(), Uuid::new_v4());
+    let new_refresh_token = generate_refresh_token();
     let new_refresh_hash = hash_refresh_token(&state.jwt_secret, &new_refresh_token);
 
     let refresh_ttl = if remember_me {
@@ -319,7 +322,7 @@ async fn refresh(
     let new_expires_at = Utc::now() + refresh_ttl;
 
     let ip_address = extract_ip(&headers, addr);
-    let city = extract_city(&headers);
+    let city = resolve_city(&headers, &ip_address).await;
     let app_version =
         extract_header(&headers, "x-app-version").unwrap_or_else(|| "unknown".to_string());
     let user_agent =
@@ -529,12 +532,42 @@ async fn delete_other_sessions(
     Ok(StatusCode::NO_CONTENT)
 }
 
+async fn logout(
+    State(state): State<AppState>,
+    CurrentUser {
+        id: user_id,
+        session_id,
+    }: CurrentUser,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let _ = sqlx::query(
+        r#"
+        UPDATE auth_sessions
+        SET revoked_at = now()
+        WHERE id = $1
+          AND user_id = $2
+          AND revoked_at IS NULL
+        "#,
+    )
+    .bind(session_id)
+    .bind(user_id)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Ошибка БД: {}", e),
+        )
+    })?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 fn issue_access_token(
     state: &AppState,
     user: &UserAuthResponse,
     session_id: Uuid,
 ) -> Result<String, (StatusCode, String)> {
-    let expires_at = Utc::now() + ChronoDuration::minutes(20);
+    let expires_at = Utc::now() + ChronoDuration::minutes(15);
     let claims = Claims {
         sub: user.id,
         sid: session_id.to_string(),
@@ -564,6 +597,17 @@ fn hash_refresh_token(secret: &str, refresh_token: &str) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+fn generate_refresh_token() -> String {
+    let mut bytes = [0u8; 48];
+    OsRng.fill_bytes(&mut bytes);
+    let mut token = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        use std::fmt::Write;
+        let _ = write!(&mut token, "{:02x}", b);
+    }
+    token
+}
+
 fn extract_ip(headers: &HeaderMap, addr: SocketAddr) -> String {
     if let Some(forwarded) = extract_header(headers, "x-forwarded-for") {
         let ip = forwarded.split(',').next().map(str::trim).unwrap_or("");
@@ -581,12 +625,11 @@ fn extract_ip(headers: &HeaderMap, addr: SocketAddr) -> String {
     addr.ip().to_string()
 }
 
-fn extract_city(headers: &HeaderMap) -> String {
+fn extract_city_from_headers(headers: &HeaderMap) -> Option<String> {
     extract_header(headers, "x-geo-city")
         .or_else(|| extract_header(headers, "x-city"))
         .or_else(|| extract_header(headers, "cf-ipcity"))
         .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| "Unknown".to_string())
 }
 
 fn extract_header(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -594,4 +637,51 @@ fn extract_header(headers: &HeaderMap, name: &str) -> Option<String> {
         .get(name)
         .and_then(|v| v.to_str().ok())
         .map(|v| v.trim().to_string())
+}
+
+async fn resolve_city(headers: &HeaderMap, ip_address: &str) -> String {
+    if let Some(city) = extract_city_from_headers(headers) {
+        return city;
+    }
+
+    if ip_address.is_empty()
+        || ip_address == "127.0.0.1"
+        || ip_address == "::1"
+        || ip_address.eq_ignore_ascii_case("unknown")
+    {
+        return "Unknown".to_string();
+    }
+
+    resolve_city_by_ipwhois(ip_address)
+        .await
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| "Unknown".to_string())
+}
+
+#[derive(Deserialize)]
+struct IpWhoisResponse {
+    success: Option<bool>,
+    city: Option<String>,
+}
+
+async fn resolve_city_by_ipwhois(ip_address: &str) -> Option<String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .ok()?;
+
+    let template = std::env::var("IP_GEO_URL_TEMPLATE")
+        .unwrap_or_else(|_| "https://ipwhois.app/json/{ip}".to_string());
+    let url = template.replace("{ip}", ip_address);
+    let response = client.get(url).send().await.ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+
+    let body = response.json::<IpWhoisResponse>().await.ok()?;
+    if body.success == Some(false) {
+        return None;
+    }
+
+    body.city.map(|v| v.trim().to_string())
 }

@@ -46,6 +46,10 @@ class ProfileRepository {
     await api.deleteOtherSessions();
   }
 
+  Future<void> logout() async {
+    await api.logout();
+  }
+
   ProfileUser _normalize(ProfileUser u) {
     final avatar = u.avatar;
     final normalizedAvatar = _avatarUrl(avatar);
