@@ -7,6 +7,8 @@ class AuthUser {
   final String? pkebyrk;
   final String? pubk;
   final String token;
+  final String refreshToken;
+  final String sessionId;
 
   AuthUser({
     required this.id,
@@ -17,6 +19,8 @@ class AuthUser {
     this.pkebyrk,
     this.pubk,
     required this.token,
+    required this.refreshToken,
+    required this.sessionId,
   });
 }
 

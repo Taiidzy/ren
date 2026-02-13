@@ -5,7 +5,9 @@ import 'package:ren/core/secure/secure_storage.dart';
 import 'package:ren/features/auth/presentation/auth_page.dart';
 import 'package:ren/features/profile/presentation/widgets/personalization_sheet.dart';
 import 'package:ren/features/profile/presentation/widgets/profile_edit_sheet.dart';
+import 'package:ren/features/profile/data/profile_repository.dart';
 import 'package:ren/features/profile/presentation/profile_store.dart';
+import 'package:ren/features/profile/presentation/security_page.dart';
 import 'package:ren/shared/widgets/adaptive_page_route.dart';
 import 'package:ren/shared/widgets/background.dart';
 import 'package:ren/shared/widgets/glass_overlays.dart';
@@ -31,7 +33,10 @@ class ProfileMenuPage extends StatelessWidget {
         return Dialog(
           backgroundColor: Colors.transparent,
           elevation: 0,
-          insetPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 24),
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: 18,
+            vertical: 24,
+          ),
           child: GlassSurface(
             borderRadius: 22,
             blurSigma: 14,
@@ -119,6 +124,10 @@ class ProfileMenuPage extends StatelessWidget {
     );
 
     if (shouldLogout != true) return;
+
+    try {
+      await context.read<ProfileRepository>().logout();
+    } catch (_) {}
 
     await SecureStorage.deleteAllKeys();
     if (!context.mounted) return;
@@ -224,9 +233,11 @@ class ProfileMenuPage extends StatelessWidget {
                       ),
                       const SizedBox(height: 10),
                       _MenuItem(
-                        icon: HugeIcons.strokeRoundedLockPassword,
-                        title: 'Приватность',
-                        onTap: () {},
+                        materialIcon: Icons.shield_outlined,
+                        title: 'Безопасность',
+                        onTap: () {
+                          SecurityPage.show(context);
+                        },
                       ),
                       const SizedBox(height: 10),
                       _MenuItem(
@@ -270,17 +281,19 @@ class ProfileMenuPage extends StatelessWidget {
 }
 
 class _MenuItem extends StatelessWidget {
-  final List<List<dynamic>> icon;
+  final List<List<dynamic>>? icon;
+  final IconData? materialIcon;
   final String title;
   final VoidCallback onTap;
   final bool isDanger;
 
   const _MenuItem({
-    required this.icon,
+    this.icon,
+    this.materialIcon,
     required this.title,
     required this.onTap,
     this.isDanger = false,
-  });
+  }) : assert(icon != null || materialIcon != null);
 
   @override
   Widget build(BuildContext context) {
@@ -288,9 +301,7 @@ class _MenuItem extends StatelessWidget {
     final isDark = theme.brightness == Brightness.dark;
     final baseInk = isDark ? Colors.white : Colors.black;
 
-    final bg = isDanger
-        ? const Color(0xFF991B1B).withOpacity(0.55)
-        : null;
+    final bg = isDanger ? const Color(0xFF991B1B).withOpacity(0.55) : null;
 
     return GlassSurface(
       borderRadius: 16,
@@ -302,11 +313,18 @@ class _MenuItem extends StatelessWidget {
       onTap: onTap,
       child: Row(
         children: [
-          HugeIcon(
-            icon: icon,
-            color: theme.colorScheme.onSurface.withOpacity(0.9),
-            size: 20.0,
-          ),
+          if (icon != null)
+            HugeIcon(
+              icon: icon!,
+              color: theme.colorScheme.onSurface.withOpacity(0.9),
+              size: 20.0,
+            )
+          else
+            Icon(
+              materialIcon,
+              color: theme.colorScheme.onSurface.withOpacity(0.9),
+              size: 20.0,
+            ),
           const SizedBox(width: 12),
           Expanded(
             child: Text(

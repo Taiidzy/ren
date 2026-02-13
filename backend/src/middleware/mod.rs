@@ -1,20 +1,31 @@
-use axum::{async_trait, extract::{FromRequestParts, State, MatchedPath, ConnectInfo, Request}, http::{request::Parts, StatusCode, header}, middleware::Next, response::Response};
 use axum::body::{Body, Bytes, to_bytes};
 use axum::extract::FromRef;
-use jsonwebtoken::{decode, DecodingKey, Validation};
+use axum::{
+    async_trait,
+    extract::{ConnectInfo, FromRequestParts, MatchedPath, Request, State},
+    http::{StatusCode, header, request::Parts},
+    middleware::Next,
+    response::Response,
+};
+use jsonwebtoken::{DecodingKey, Validation, decode};
 use sqlx::Row;
+use uuid::Uuid;
 
 use crate::AppState;
 use crate::models::auth::Claims;
+use chrono::Local;
 use std::net::SocketAddr;
 use std::time::Instant;
-use chrono::Local;
 
 // Экстрактор текущего пользователя из заголовка Authorization: Bearer <JWT>
-// Пример использования: fn handler(State(state): State<AppState>, CurrentUser { id }: CurrentUser) { ... }
+// Пример использования: fn handler(State(state): State<AppState>, CurrentUser { id, .. }: CurrentUser) { ... }
 
 // Утилита: убедиться, что пользователь является участником чата
-pub async fn ensure_member(state: &AppState, chat_id: i32, user_id: i32) -> Result<(), (StatusCode, String)> {
+pub async fn ensure_member(
+    state: &AppState,
+    chat_id: i32,
+    user_id: i32,
+) -> Result<(), (StatusCode, String)> {
     let exists: Option<i32> = sqlx::query_scalar(
         r#"SELECT 1 FROM chat_participants WHERE chat_id = $1 AND user_id = $2 LIMIT 1"#,
     )
@@ -22,16 +33,25 @@ pub async fn ensure_member(state: &AppState, chat_id: i32, user_id: i32) -> Resu
     .bind(user_id)
     .fetch_optional(&state.pool)
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Ошибка БД: {}", e),
+        )
+    })?;
 
     if exists.is_none() {
-        return Err((StatusCode::FORBIDDEN, "Нет доступа: вы не являетесь участником чата".into()));
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Нет доступа: вы не являетесь участником чата".into(),
+        ));
     }
     Ok(())
 }
 #[derive(Clone, Copy, Debug)]
 pub struct CurrentUser {
     pub id: i32,
+    pub session_id: Uuid,
 }
 
 #[async_trait]
@@ -44,9 +64,13 @@ where
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         // Получаем AppState через стандартный State-экстрактор
-        let State(app_state): State<AppState> = State::from_request_parts(parts, state)
-            .await
-            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Не удалось получить состояние приложения".to_string()))?;
+        let State(app_state): State<AppState> =
+            State::from_request_parts(parts, state).await.map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Не удалось получить состояние приложения".to_string(),
+                )
+            })?;
 
         // Достаём токен из заголовка Authorization: Bearer <JWT>.
         // Для WebSocket upgrade некоторые клиенты/прокси могут не прокидывать Authorization,
@@ -59,7 +83,10 @@ where
             auth_header
                 .strip_prefix("Bearer ")
                 .or_else(|| auth_header.strip_prefix("bearer "))
-                .ok_or((StatusCode::UNAUTHORIZED, "Некорректный формат заголовка Authorization".to_string()))?
+                .ok_or((
+                    StatusCode::UNAUTHORIZED,
+                    "Некорректный формат заголовка Authorization".to_string(),
+                ))?
                 .to_string()
         } else {
             let query = parts.uri.query().unwrap_or("");
@@ -74,7 +101,10 @@ where
                 }
             }
             token_q
-                .ok_or((StatusCode::UNAUTHORIZED, "Отсутствует заголовок Authorization или query token".to_string()))?
+                .ok_or((
+                    StatusCode::UNAUTHORIZED,
+                    "Отсутствует заголовок Authorization или query token".to_string(),
+                ))?
                 .to_string()
         };
 
@@ -84,9 +114,68 @@ where
             &DecodingKey::from_secret(app_state.jwt_secret.as_bytes()),
             &Validation::default(),
         )
-        .map_err(|_| (StatusCode::UNAUTHORIZED, "Невалидный или просроченный токен".to_string()))?;
+        .map_err(|_| {
+            (
+                StatusCode::UNAUTHORIZED,
+                "Невалидный или просроченный токен".to_string(),
+            )
+        })?;
 
-        Ok(CurrentUser { id: data.claims.sub })
+        if data.claims.token_type != "access" {
+            return Err((StatusCode::UNAUTHORIZED, "Неверный тип токена".to_string()));
+        }
+
+        let session_id = Uuid::parse_str(&data.claims.sid).map_err(|_| {
+            (
+                StatusCode::UNAUTHORIZED,
+                "Некорректный sid в токене".to_string(),
+            )
+        })?;
+
+        let active: Option<i32> = sqlx::query_scalar(
+            r#"
+            SELECT 1
+            FROM auth_sessions
+            WHERE id = $1
+              AND user_id = $2
+              AND revoked_at IS NULL
+              AND expires_at > now()
+            LIMIT 1
+            "#,
+        )
+        .bind(session_id)
+        .bind(data.claims.sub)
+        .fetch_optional(&app_state.pool)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Ошибка проверки сессии".to_string(),
+            )
+        })?;
+
+        if active.is_none() {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                "Сессия недействительна".to_string(),
+            ));
+        }
+
+        let _ = sqlx::query(
+            r#"
+            UPDATE auth_sessions
+            SET last_seen_at = now()
+            WHERE id = $1
+            "#,
+        )
+        .bind(session_id)
+        .execute(&app_state.pool)
+        .await;
+
+        Ok(CurrentUser {
+            id: data.claims.sub,
+            session_id,
+        })
     }
 }
 
@@ -96,8 +185,24 @@ pub async fn logging(req: Request, next: Next) -> Response {
     let method = req.method().clone();
     let uri = req.uri().clone();
     let query = uri.query().unwrap_or("").to_string();
-    let path = req.extensions().get::<MatchedPath>().map(|p| p.as_str().to_string()).unwrap_or_else(|| uri.path().to_string());
-    let from = req.extensions().get::<ConnectInfo<SocketAddr>>().map(|c| c.0.ip().to_string()).unwrap_or_else(|| "-".to_string());
+    let path = req
+        .extensions()
+        .get::<MatchedPath>()
+        .map(|p| p.as_str().to_string())
+        .unwrap_or_else(|| uri.path().to_string());
+    let connect_ip = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|c| c.0.ip().to_string())
+        .unwrap_or_else(|| "-".to_string());
+    let forwarded_ip = req
+        .headers()
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let from = forwarded_ip.unwrap_or(connect_ip);
 
     // IMPORTANT: do not consume request body for multipart uploads (it breaks parsing).
     // We also bypass body preview for /media endpoints.
@@ -109,8 +214,8 @@ pub async fn logging(req: Request, next: Next) -> Response {
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    let should_skip_body = path.starts_with("/media")
-        || content_type.to_ascii_lowercase().starts_with("multipart/");
+    let should_skip_body =
+        path.starts_with("/media") || content_type.to_ascii_lowercase().starts_with("multipart/");
 
     if should_skip_body {
         let req = Request::from_parts(parts, body);
@@ -137,7 +242,8 @@ pub async fn logging(req: Request, next: Next) -> Response {
     }
 
     // Read and clone body with limit
-    let bytes: Bytes = match to_bytes(body, 64 * 1024).await { // 64KB limit
+    let bytes: Bytes = match to_bytes(body, 64 * 1024).await {
+        // 64KB limit
         Ok(b) => b,
         Err(_) => Bytes::new(),
     };
@@ -151,7 +257,10 @@ pub async fn logging(req: Request, next: Next) -> Response {
                 let max = 2000.min(s.len());
                 let snippet = &s[..max];
                 // Quick heuristic: if body likely contains secrets, redact.
-                if snippet.contains("\"password\"") || snippet.contains("\"token\"") || snippet.contains("Bearer ") {
+                if snippet.contains("\"password\"")
+                    || snippet.contains("\"token\"")
+                    || snippet.contains("Bearer ")
+                {
                     String::from("<redacted>")
                 } else {
                     snippet.to_string()
@@ -186,7 +295,11 @@ pub async fn logging(req: Request, next: Next) -> Response {
 }
 
 // Утилита: убедиться, что пользователь — admin в указанном чате
-pub async fn ensure_admin(state: &AppState, chat_id: i32, user_id: i32) -> Result<(), (StatusCode, String)> {
+pub async fn ensure_admin(
+    state: &AppState,
+    chat_id: i32,
+    user_id: i32,
+) -> Result<(), (StatusCode, String)> {
     let row = sqlx::query(
         r#"
         SELECT role
@@ -198,15 +311,26 @@ pub async fn ensure_admin(state: &AppState, chat_id: i32, user_id: i32) -> Resul
     .bind(user_id)
     .fetch_optional(&state.pool)
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Ошибка БД: {}", e),
+        )
+    })?;
 
     let Some(row) = row else {
-        return Err((StatusCode::FORBIDDEN, "Вы не являетесь участником этого чата".into()));
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Вы не являетесь участником этого чата".into(),
+        ));
     };
 
     let role: String = row.try_get("role").unwrap_or_else(|_| "member".to_string());
     if role != "admin" {
-        return Err((StatusCode::FORBIDDEN, "Недостаточно прав (нужна роль admin)".into()));
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Недостаточно прав (нужна роль admin)".into(),
+        ));
     }
     Ok(())
 }

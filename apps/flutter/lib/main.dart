@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import 'package:dio/dio.dart';
 
 import 'package:ren/features/splash/presentation/splash_page.dart';
+import 'package:ren/features/auth/presentation/auth_page.dart';
 
 import 'package:ren/theme/themes.dart';
 
@@ -30,6 +31,8 @@ import 'package:ren/features/profile/presentation/profile_store.dart';
 
 import 'package:ren/core/realtime/realtime_client.dart';
 import 'package:ren/core/notifications/local_notifications.dart';
+import 'package:ren/core/network/auth_session_interceptor.dart';
+import 'package:ren/shared/widgets/adaptive_page_route.dart';
 
 final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
 
@@ -87,11 +90,28 @@ class MyApp extends StatelessWidget {
         ChangeNotifierProvider<BackgroundSettings>(
           create: (_) => BackgroundSettings(),
         ),
-        ChangeNotifierProvider<ThemeSettings>(
-          create: (_) => ThemeSettings(),
-        ),
+        ChangeNotifierProvider<ThemeSettings>(create: (_) => ThemeSettings()),
         Provider<RenSdk>.value(value: RenSdk.instance),
-        Provider<Dio>(create: (_) => Dio()),
+        Provider<Dio>(
+          create: (_) {
+            final dio = Dio();
+            dio.interceptors.add(
+              AuthSessionInterceptor(
+                dio,
+                onUnauthorized: () async {
+                  final nav = rootNavigatorKey.currentState;
+                  final ctx = rootNavigatorKey.currentContext;
+                  if (nav == null || ctx == null) return;
+                  nav.pushAndRemoveUntil(
+                    adaptivePageRoute((_) => const AuthPage()),
+                    (route) => false,
+                  );
+                },
+              ),
+            );
+            return dio;
+          },
+        ),
         ProxyProvider<Dio, AuthApi>(update: (_, dio, __) => AuthApi(dio)),
         ProxyProvider<Dio, SplashApi>(update: (_, dio, __) => SplashApi(dio)),
         ProxyProvider<Dio, ChatsApi>(update: (_, dio, __) => ChatsApi(dio)),

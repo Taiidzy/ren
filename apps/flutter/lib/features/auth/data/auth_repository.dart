@@ -2,7 +2,6 @@ import 'package:ren/features/auth/data/auth_api.dart';
 import 'package:ren/features/auth/domain/auth_user.dart';
 import 'package:ren/features/auth/domain/auth_models.dart';
 
-
 import 'package:ren/core/secure/secure_storage.dart';
 import 'package:ren/core/constants/keys.dart';
 
@@ -42,15 +41,21 @@ class AuthRepository {
     final w = (wrapped?['wrapped'] ?? '').trim();
     final eph = (wrapped?['ephemeral_public_key'] ?? '').trim();
     final n = (wrapped?['nonce'] ?? '').trim();
-    final unwrapped = (wrapped == null) ? null : renSdk.unwrapSymmetricKey(w, eph, n, priv);
+    final unwrapped = (wrapped == null)
+        ? null
+        : renSdk.unwrapSymmetricKey(w, eph, n, priv);
     if (unwrapped == null || unwrapped.isEmpty) {
       await SecureStorage.deleteAllKeys();
-      throw Exception('E2EE keys mismatch: server returned incompatible pubk/pkebymk');
+      throw Exception(
+        'E2EE keys mismatch: server returned incompatible pubk/pkebymk',
+      );
     }
 
     await SecureStorage.writeKey(Keys.privateKey, priv);
     await SecureStorage.writeKey(Keys.publicKey, pub);
     await SecureStorage.writeKey(Keys.token, resp.token);
+    await SecureStorage.writeKey(Keys.refreshToken, resp.refreshToken);
+    await SecureStorage.writeKey(Keys.sessionId, resp.sessionId);
     await SecureStorage.writeKey(Keys.userId, resp.user.id.toString());
 
     return AuthUser(
@@ -62,6 +67,8 @@ class AuthRepository {
       pkebyrk: resp.user.pkebyrk,
       pubk: resp.user.pubk,
       token: resp.token,
+      refreshToken: resp.refreshToken,
+      sessionId: resp.sessionId,
     );
   }
 

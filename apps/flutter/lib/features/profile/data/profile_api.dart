@@ -108,11 +108,7 @@ class ProfileApi {
       final resp = await dio.post(
         '${Apiurl.api}/users/avatar',
         data: form,
-        options: Options(
-          headers: {
-            'Authorization': 'Bearer $token',
-          },
-        ),
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
       );
       return (resp.data as Map<String, dynamic>?) ?? <String, dynamic>{};
     } on DioException catch (e) {
@@ -120,6 +116,75 @@ class ProfileApi {
         (e.response?.data is String)
             ? e.response?.data as String
             : 'Ошибка удаления аватара',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
+  Future<List<dynamic>> sessions() async {
+    final token = await _requireToken();
+    try {
+      final resp = await dio.get(
+        '${Apiurl.api}/auth/sessions',
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+      return (resp.data as List<dynamic>?) ?? const [];
+    } on DioException catch (e) {
+      throw ApiException(
+        (e.response?.data is String)
+            ? e.response?.data as String
+            : 'Ошибка загрузки сессий',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
+  Future<void> deleteSession(String sessionId) async {
+    final token = await _requireToken();
+    try {
+      await dio.delete(
+        '${Apiurl.api}/auth/sessions/$sessionId',
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+    } on DioException catch (e) {
+      throw ApiException(
+        (e.response?.data is String)
+            ? e.response?.data as String
+            : 'Ошибка удаления сессии',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
+  Future<void> deleteOtherSessions() async {
+    final token = await _requireToken();
+    try {
+      await dio.delete(
+        '${Apiurl.api}/auth/sessions',
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+    } on DioException catch (e) {
+      throw ApiException(
+        (e.response?.data is String)
+            ? e.response?.data as String
+            : 'Ошибка завершения других сессий',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
+  Future<void> logout() async {
+    final token = await _requireToken();
+    try {
+      await dio.post(
+        '${Apiurl.api}/auth/logout',
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+    } on DioException catch (e) {
+      throw ApiException(
+        (e.response?.data is String)
+            ? e.response?.data as String
+            : 'Ошибка завершения текущей сессии',
         statusCode: e.response?.statusCode,
       );
     }

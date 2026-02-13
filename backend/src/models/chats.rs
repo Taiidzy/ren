@@ -46,8 +46,8 @@ pub struct Message {
     pub id: i64,
     pub chat_id: i64,
     pub sender_id: i64,
-    pub message: String,                    // зашифрованное сообщение
-    pub message_type: String,               // 'text' | 'file' | 'image' и т.д.
+    pub message: String,      // зашифрованное сообщение
+    pub message_type: String, // 'text' | 'file' | 'image' и т.д.
     pub created_at: String,
     pub edited_at: Option<String>,
     pub reply_to_message_id: Option<i64>,
@@ -57,10 +57,10 @@ pub struct Message {
     pub deleted_at: Option<String>,
     pub deleted_by: Option<i64>,
     pub is_read: bool,
-    pub has_files: Option<bool>,            // опционально, для обратной совместимости
+    pub has_files: Option<bool>, // опционально, для обратной совместимости
     pub metadata: Option<Vec<FileMetadata>>, // метаданные файлов
-    pub envelopes: Option<Value>,           // JSON объект: {"userId": Envelope}
-    pub status: Option<String>,              // "pending" | "sent" (для клиента)
+    pub envelopes: Option<Value>, // JSON объект: {"userId": Envelope}
+    pub status: Option<String>,  // "pending" | "sent" (для клиента)
 }
 
 // Для обратной совместимости: body теперь алиас для message
@@ -72,7 +72,7 @@ impl Message {
 
 #[derive(Deserialize, Clone)]
 pub struct CreateChatRequest {
-    pub kind: String,              // 'private' | 'group'
-    pub title: Option<String>,     // только для групп
-    pub user_ids: Vec<i32>,        // участники (включая текущего пользователя)
+    pub kind: String,          // 'private' | 'group'
+    pub title: Option<String>, // только для групп
+    pub user_ids: Vec<i32>,    // участники (включая текущего пользователя)
 }

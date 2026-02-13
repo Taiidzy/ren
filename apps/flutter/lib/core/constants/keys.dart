@@ -1,5 +1,7 @@
 class Keys {
   static const String token = 'token';
+  static const String refreshToken = 'refreshToken';
+  static const String sessionId = 'sessionId';
   static const String privateKey = 'privateKey';
   static const String publicKey = 'publicKey';
   static const String userId = 'userId';

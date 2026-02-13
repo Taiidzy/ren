@@ -41,6 +41,7 @@ class AuthApi {
           final serverMessage = (e.response?.data is Map<String, dynamic>)
               ? (e.response?.data['message'] as String?)
               : null;
+          print(e);
           throw ApiException(
             serverMessage ??
                 'Неизвестная ошибка${status != null ? ' ($status)' : ''}.',

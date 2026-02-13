@@ -37,14 +37,24 @@ class ApiUser {
 class LoginResponse {
   final String? message;
   final String token;
+  final String refreshToken;
+  final String sessionId;
   final ApiUser user;
 
-  LoginResponse({this.message, required this.token, required this.user});
+  LoginResponse({
+    this.message,
+    required this.token,
+    required this.refreshToken,
+    required this.sessionId,
+    required this.user,
+  });
 
   factory LoginResponse.fromMap(Map<String, dynamic> map) {
     return LoginResponse(
       message: map['message'] as String?,
       token: map['token'] as String? ?? '',
+      refreshToken: map['refresh_token'] as String? ?? '',
+      sessionId: map['session_id'] as String? ?? '',
       user: ApiUser.fromMap(map['user'] as Map<String, dynamic>?),
     );
   }
