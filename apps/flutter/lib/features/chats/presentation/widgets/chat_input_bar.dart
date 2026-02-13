@@ -800,84 +800,82 @@ class _ChatInputBarState extends State<ChatInputBar> {
                         ),
                       );
                     },
-                    child: _isRecording
-                        ? Padding(
-                            key: const ValueKey('recording_ui'),
-                            padding: const EdgeInsets.symmetric(horizontal: 14),
-                            child: Row(
-                              children: [
-                                Container(
-                                  width: 10,
-                                  height: 10,
-                                  decoration: BoxDecoration(
-                                    color: theme.colorScheme.error,
-                                    shape: BoxShape.circle,
-                                  ),
-                                ),
-                                const SizedBox(width: 10),
-                                Text(
-                                  _durationText,
-                                  style: theme.textTheme.titleMedium?.copyWith(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w700,
-                                    color: theme.colorScheme.onSurface,
-                                  ),
-                                ),
-                                const Spacer(),
-                                if (_isRecordingLocked) ...[
-                                  Text(
-                                    'Отмена',
-                                    style: theme.textTheme.bodyMedium?.copyWith(
-                                      color: theme.colorScheme.onSurface.withOpacity(0.75),
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 10),
-                                  GlassSurface(
-                                    borderRadius: 18,
-                                    blurSigma: 12,
-                                    width: 32,
-                                    height: 32,
-                                    onTap: () {
-                                      _recorderKey.currentState?.cancelRecording();
-                                    },
-                                    child: Center(
-                                      child: Icon(
-                                        Icons.close,
-                                        size: 16,
-                                        color: theme.colorScheme.onSurface.withOpacity(0.85),
-                                      ),
-                                    ),
-                                  ),
-                                ] else ...[
-                                  ShimmerText(
-                                    text: '< Свайп для отмены',
-                                    color: theme.colorScheme.onSurface.withOpacity(0.6),
-                                  ),
-                                  const SizedBox(width: 20),
-                                ],
-                              ],
-                            ),
-                          )
-                        : TextField(
-                            key: const ValueKey('input_field'),
-                            controller: widget.controller,
-                            focusNode: widget.focusNode,
-                            style: TextStyle(
-                              color: theme.colorScheme.onSurface,
-                              fontSize: 14,
-                            ),
-                            cursorColor: theme.colorScheme.primary,
-                            decoration: InputDecoration(
-                              hintText: 'Введите сообщение...',
-                              hintStyle: TextStyle(
-                                color: theme.colorScheme.onSurface.withOpacity(0.55),
-                              ),
-                              filled: false,
-                              border: InputBorder.none,
-                              contentPadding: const EdgeInsets.symmetric(horizontal: 14),
+                    child: _isRecording ? Padding(
+                      key: const ValueKey('recording_ui'),
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 10,
+                            height: 10,
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.error,
+                              shape: BoxShape.circle,
                             ),
                           ),
+                          const SizedBox(width: 10),
+                          Text(
+                            _durationText,
+                            style: theme.textTheme.titleMedium?.copyWith(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                              color: theme.colorScheme.onSurface,
+                            ),
+                          ),
+                          const Spacer(),
+                          if (_isRecordingLocked) ...[
+                            Text(
+                              'Отмена',
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                color: theme.colorScheme.onSurface.withOpacity(0.75),
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            GlassSurface(
+                              borderRadius: 18,
+                              blurSigma: 12,
+                              width: 32,
+                              height: 32,
+                              onTap: () {
+                                _recorderKey.currentState?.cancelRecording();
+                              },
+                              child: Center(
+                                child: Icon(
+                                  Icons.close,
+                                  size: 16,
+                                  color: theme.colorScheme.onSurface.withOpacity(0.85),
+                                ),
+                              ),
+                            ),
+                          ] else ...[
+                            ShimmerText(
+                              text: '< Свайп для отмены',
+                              color: theme.colorScheme.onSurface.withOpacity(0.6),
+                            ),
+                            const SizedBox(width: 20),
+                          ],
+                        ],
+                      ),
+                    ) : TextField(
+                      key: const ValueKey('input_field'),
+                      controller: widget.controller,
+                      focusNode: widget.focusNode,
+                      style: TextStyle(
+                        color: theme.colorScheme.onSurface,
+                        fontSize: 14,
+                      ),
+                      cursorColor: theme.colorScheme.primary,
+                      decoration: InputDecoration(
+                        hintText: 'Введите сообщение...',
+                        hintStyle: TextStyle(
+                          color: theme.colorScheme.onSurface.withOpacity(0.55),
+                        ),
+                        filled: false,
+                        border: InputBorder.none,
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 14),
+                      ),
+                    ),
                   ),
                 ),
               ),

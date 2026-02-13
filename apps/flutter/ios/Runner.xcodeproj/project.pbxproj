@@ -300,13 +300,9 @@
 			inputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-Runner/Pods-Runner-frameworks-${CONFIGURATION}-input-files.xcfilelist",
 			);
-			inputPaths = (
-			);
 			name = "[CP] Embed Pods Frameworks";
 			outputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-Runner/Pods-Runner-frameworks-${CONFIGURATION}-output-files.xcfilelist",
-			);
-			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -358,13 +354,9 @@
 			inputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-Runner/Pods-Runner-resources-${CONFIGURATION}-input-files.xcfilelist",
 			);
-			inputPaths = (
-			);
 			name = "[CP] Copy Pods Resources";
 			outputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-Runner/Pods-Runner-resources-${CONFIGURATION}-output-files.xcfilelist",
-			);
-			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -512,6 +504,10 @@
 				);
 				OTHER_LDFLAGS = (
 					"$(inherited)",
+					"-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a",
+					"-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a",
+					"-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a",
+					"-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a",
 					"-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = taiidzy.ren;
@@ -700,6 +696,10 @@
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a",
+					"-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a",
+					"-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a",
+					"-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a",
+					"-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = taiidzy.ren;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -727,6 +727,10 @@
 				);
 				OTHER_LDFLAGS = (
 					"$(inherited)",
+					"-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a",
+					"-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a",
+					"-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a",
+					"-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a",
 					"-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = taiidzy.ren;

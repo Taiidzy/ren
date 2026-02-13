@@ -614,9 +614,8 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
             child: Padding(
               padding: const EdgeInsets.fromLTRB(64, 0, 64, 4),
               child: GlassSurface(
-                borderRadius: 8,
                 blurSigma: 12,
-                borderColor: baseInk.withOpacity(isDark ? 0.18 : 0.10),
+                borderColor: baseInk.withOpacity(0),
                 child: TextField(
                   cursorColor: theme.colorScheme.primary,
                   style: TextStyle(
@@ -640,19 +639,17 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                       minWidth: 0,
                       minHeight: 0,
                     ),
-                    suffixIcon: (_query.isEmpty)
-                        ? null
-                        : IconButton(
-                            icon: HugeIcon(
-                              icon: HugeIcons.strokeRoundedCancel01,
-                              color: theme.colorScheme.onSurface.withOpacity(0.8),
-                              size: 16.0,
-                            ),
-                            onPressed: () {
-                              _searchCtrl.clear();
-                              FocusScope.of(context).unfocus();
-                            },
-                          ),
+                    suffixIcon: (_query.isEmpty) ? null : IconButton(
+                      icon: HugeIcon(
+                        icon: HugeIcons.strokeRoundedCancel01,
+                        color: theme.colorScheme.onSurface.withOpacity(0.8),
+                        size: 16.0,
+                      ),
+                      onPressed: () {
+                        _searchCtrl.clear();
+                        FocusScope.of(context).unfocus();
+                      },
+                    ),
                     filled: false,
                     isDense: true,
                     contentPadding: const EdgeInsets.symmetric(

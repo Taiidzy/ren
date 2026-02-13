@@ -47,8 +47,6 @@ dependencies:
   web_socket_channel: ^3.0.3
   http: ^1.6.0
   mime: ^2.0.0
-  image: ^4.7.2
-  image_cropper: ^8.0.2
   open_filex: ^4.6.0
   video_player: ^2.9.2
   ffmpeg_kit_min_gpl: 6.0.3+2-LTS
@@ -61,6 +59,7 @@ dependencies:
   vibration: ^3.1.5
   just_audio: ^0.9.40
   ffi: ^2.1.4
+  crop_your_image: ^2.0.0
 
 dev_dependencies:
   flutter_test:

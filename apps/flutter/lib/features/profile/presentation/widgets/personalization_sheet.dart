@@ -9,7 +9,7 @@ import 'package:ren/shared/widgets/animated_gradient.dart';
 import 'package:ren/shared/widgets/glass_overlays.dart';
 import 'package:ren/shared/widgets/glass_surface.dart';
 
-class BackgroundPersonalizationSheet {
+class PersonalizationSheet {
   static Future<void> show(BuildContext context) async {
     await GlassOverlays.showGlassBottomSheet<void>(
       context,
