@@ -1,11 +1,11 @@
 pub mod auth;
-pub mod users;
 pub mod chats;
-pub mod ws;
 pub mod media;
+pub mod users;
+pub mod ws;
 
-use axum::Router;
 use crate::AppState;
+use axum::Router;
 
 // Общий роутер для модуля route (если позже появятся другие подмодули)
 pub fn router() -> Router<AppState> {

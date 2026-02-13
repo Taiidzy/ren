@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
@@ -51,8 +52,7 @@ pub struct UserRegisterRequest {
 pub struct LoginRequest {
     pub login: String,
     pub password: String,
-    // Если true — выдаём долгоживущий токен ("запомнить меня")
-    // Если не передан или false — токен на 24 часа
+    // Если true — более длинная refresh-сессия
     pub remember_me: Option<bool>,
 }
 
@@ -61,14 +61,41 @@ pub struct LoginRequest {
 pub struct LoginResponse {
     pub message: String,
     pub user: UserAuthResponse,
-    // Сгенерированный JWT-токен, который клиент сохранит (например, в localStorage)
     pub token: String,
+    pub refresh_token: String,
+    pub session_id: String,
+}
+
+#[derive(Deserialize)]
+pub struct RefreshRequest {
+    pub refresh_token: String,
+}
+
+#[derive(Serialize)]
+pub struct RefreshResponse {
+    pub token: String,
+    pub refresh_token: String,
+    pub session_id: String,
+}
+
+#[derive(Serialize)]
+pub struct SessionResponse {
+    pub id: String,
+    pub device_name: String,
+    pub ip_address: String,
+    pub city: String,
+    pub app_version: String,
+    pub login_at: DateTime<Utc>,
+    pub last_seen_at: DateTime<Utc>,
+    pub is_current: bool,
 }
 
 // Полезная нагрузка (claims) для JWT
 #[derive(Serialize, Deserialize)]
 pub struct Claims {
     pub sub: i32,
+    pub sid: String,
+    pub token_type: String,
     pub login: String,
     pub username: String,
     pub exp: i64,

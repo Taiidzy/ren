@@ -1,17 +1,17 @@
 use axum::{
-    extract::{Path, State, Query},
+    Json, Router,
+    extract::{Path, Query, State},
     http::StatusCode,
     routing::{delete, get, post},
-    Json, Router,
 };
 use serde::Deserialize;
 use serde_json::Value;
 use sqlx::{Postgres, Row, Transaction};
 
-use crate::{AppState};
-use crate::models::chats::{Chat, Message, CreateChatRequest, FileMetadata};
+use crate::AppState;
 use crate::middleware::CurrentUser; // экстрактор текущего пользователя
-use crate::middleware::{ensure_member};
+use crate::middleware::ensure_member;
+use crate::models::chats::{Chat, CreateChatRequest, FileMetadata, Message};
 
 // Модели вынесены в crate::models::chats
 
@@ -24,7 +24,10 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/chats", post(create_chat).get(list_chats))
         .route("/chats/:chat_id/messages", get(get_messages))
-        .route("/chats/:id/favorite", post(add_favorite).delete(remove_favorite))
+        .route(
+            "/chats/:id/favorite",
+            post(add_favorite).delete(remove_favorite),
+        )
         .route("/chats/:id", delete(delete_or_leave_chat))
 }
 
@@ -40,24 +43,36 @@ struct GetMessagesQuery {
 // ---------------------------
 async fn create_chat(
     State(state): State<AppState>,
-    CurrentUser { id: current_user_id }: CurrentUser,
+    CurrentUser {
+        id: current_user_id,
+        ..
+    }: CurrentUser,
     Json(body): Json<CreateChatRequest>,
 ) -> Result<Json<Chat>, (StatusCode, String)> {
     // Простые проверки
     if body.kind == "private" {
         if body.user_ids.len() != 2 || !body.user_ids.contains(&current_user_id) {
-            return Err((StatusCode::BAD_REQUEST, "Для private-чата нужно ровно 2 участника, включая текущего пользователя".into()));
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "Для private-чата нужно ровно 2 участника, включая текущего пользователя".into(),
+            ));
         }
     }
 
-    let mut tx: Transaction<'_, Postgres> = state.pool.begin().await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Не удалось начать транзакцию: {}", e)))?;
+    let mut tx: Transaction<'_, Postgres> = state.pool.begin().await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Не удалось начать транзакцию: {}", e),
+        )
+    })?;
 
     // Для private-чата сначала проверим, существует ли уже чат с этой парой (каноническая пара user_a<=user_b)
     if body.kind == "private" {
         let mut a = body.user_ids[0];
         let mut b = body.user_ids[1];
-        if a > b { std::mem::swap(&mut a, &mut b); }
+        if a > b {
+            std::mem::swap(&mut a, &mut b);
+        }
         // Сначала пробуем найти по canonical-паре user_a/user_b (новая схема)
         let existing = sqlx::query(
             r#"
@@ -71,15 +86,26 @@ async fn create_chat(
         .bind(b)
         .fetch_optional(&mut *tx)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Ошибка БД: {}", e),
+            )
+        })?;
 
         if let Some(row) = existing {
             let chat = Chat {
                 id: row.try_get("id").unwrap_or_default(),
-                kind: row.try_get::<String,_>("kind").unwrap_or_default(),
+                kind: row.try_get::<String, _>("kind").unwrap_or_default(),
                 title: row.try_get("title").ok(),
-                created_at: row.try_get::<chrono::DateTime<chrono::Utc>,_>("created_at").map(|t| t.to_rfc3339()).unwrap_or_default(),
-                updated_at: row.try_get::<chrono::DateTime<chrono::Utc>,_>("updated_at").map(|t| t.to_rfc3339()).unwrap_or_default(),
+                created_at: row
+                    .try_get::<chrono::DateTime<chrono::Utc>, _>("created_at")
+                    .map(|t| t.to_rfc3339())
+                    .unwrap_or_default(),
+                updated_at: row
+                    .try_get::<chrono::DateTime<chrono::Utc>, _>("updated_at")
+                    .map(|t| t.to_rfc3339())
+                    .unwrap_or_default(),
                 is_archived: row.try_get("is_archived").ok(),
                 is_favorite: Some(false),
                 peer_id: None,
@@ -95,7 +121,12 @@ async fn create_chat(
             .bind(current_user_id)
             .execute(&mut *tx)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка добавления участника: {}", e)))?;
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Ошибка добавления участника: {}", e),
+                )
+            })?;
 
             tx.commit().await.ok();
             return Ok(Json(chat));
@@ -116,7 +147,12 @@ async fn create_chat(
         .bind(b)
         .fetch_optional(&mut *tx)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Ошибка БД: {}", e),
+            )
+        })?;
 
         if let Some(row) = existing_old {
             let chat_id: i32 = row.try_get("id").unwrap_or_default();
@@ -136,14 +172,25 @@ async fn create_chat(
             .bind(current_user_id)
             .execute(&mut *tx)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка добавления участника: {}", e)))?;
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Ошибка добавления участника: {}", e),
+                )
+            })?;
 
             let chat = Chat {
                 id: chat_id,
-                kind: row.try_get::<String,_>("kind").unwrap_or_default(),
+                kind: row.try_get::<String, _>("kind").unwrap_or_default(),
                 title: row.try_get("title").ok(),
-                created_at: row.try_get::<chrono::DateTime<chrono::Utc>,_>("created_at").map(|t| t.to_rfc3339()).unwrap_or_default(),
-                updated_at: row.try_get::<chrono::DateTime<chrono::Utc>,_>("updated_at").map(|t| t.to_rfc3339()).unwrap_or_default(),
+                created_at: row
+                    .try_get::<chrono::DateTime<chrono::Utc>, _>("created_at")
+                    .map(|t| t.to_rfc3339())
+                    .unwrap_or_default(),
+                updated_at: row
+                    .try_get::<chrono::DateTime<chrono::Utc>, _>("updated_at")
+                    .map(|t| t.to_rfc3339())
+                    .unwrap_or_default(),
                 is_archived: row.try_get("is_archived").ok(),
                 is_favorite: Some(false),
                 peer_id: None,
@@ -160,7 +207,9 @@ async fn create_chat(
         // Для private сохраняем каноническую пару
         let mut a = body.user_ids[0];
         let mut b = body.user_ids[1];
-        if a > b { std::mem::swap(&mut a, &mut b); }
+        if a > b {
+            std::mem::swap(&mut a, &mut b);
+        }
         sqlx::query(
             r#"
             INSERT INTO chats (kind, title, user_a, user_b)
@@ -174,7 +223,12 @@ async fn create_chat(
         .bind(b)
         .fetch_one(&mut *tx)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка создания чата: {}", e)))?
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Ошибка создания чата: {}", e),
+            )
+        })?
     } else {
         sqlx::query(
             r#"
@@ -187,7 +241,12 @@ async fn create_chat(
         .bind(&body.title)
         .fetch_one(&mut *tx)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка создания чата: {}", e)))?
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Ошибка создания чата: {}", e),
+            )
+        })?
     };
     let chat_id: i32 = row.try_get("id").unwrap_or_default();
 
@@ -219,15 +278,25 @@ async fn create_chat(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка добавления текущего пользователя: {}", e)))?;
     }
 
-    tx.commit().await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Не удалось зафиксировать транзакцию: {}", e)))?;
+    tx.commit().await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Не удалось зафиксировать транзакцию: {}", e),
+        )
+    })?;
 
     let chat = Chat {
         id: chat_id,
-        kind: row.try_get::<String,_>("kind").unwrap_or_default(),
+        kind: row.try_get::<String, _>("kind").unwrap_or_default(),
         title: row.try_get("title").ok(),
-        created_at: row.try_get::<chrono::DateTime<chrono::Utc>,_>("created_at").map(|t| t.to_rfc3339()).unwrap_or_default(),
-        updated_at: row.try_get::<chrono::DateTime<chrono::Utc>,_>("updated_at").map(|t| t.to_rfc3339()).unwrap_or_default(),
+        created_at: row
+            .try_get::<chrono::DateTime<chrono::Utc>, _>("created_at")
+            .map(|t| t.to_rfc3339())
+            .unwrap_or_default(),
+        updated_at: row
+            .try_get::<chrono::DateTime<chrono::Utc>, _>("updated_at")
+            .map(|t| t.to_rfc3339())
+            .unwrap_or_default(),
         is_archived: row.try_get("is_archived").ok(),
         is_favorite: Some(false),
         peer_id: None,
@@ -243,7 +312,10 @@ async fn create_chat(
 // ---------------------------
 async fn list_chats(
     State(state): State<AppState>,
-    CurrentUser { id: current_user_id }: CurrentUser,
+    CurrentUser {
+        id: current_user_id,
+        ..
+    }: CurrentUser,
 ) -> Result<Json<Vec<Chat>>, (StatusCode, String)> {
     let rows = sqlx::query(
         r#"
@@ -296,18 +368,33 @@ async fn list_chats(
     .bind(current_user_id)
     .fetch_all(&state.pool)
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Ошибка БД: {}", e),
+        )
+    })?;
 
     let items = rows
         .into_iter()
         .map(|row| Chat {
             id: row.try_get("id").unwrap_or_default(),
-            kind: row.try_get::<String,_>("kind").unwrap_or_default(),
+            kind: row.try_get::<String, _>("kind").unwrap_or_default(),
             title: row.try_get("title").ok(),
-            created_at: row.try_get::<chrono::DateTime<chrono::Utc>,_>("created_at").map(|t| t.to_rfc3339()).unwrap_or_default(),
-            updated_at: row.try_get::<chrono::DateTime<chrono::Utc>,_>("updated_at").map(|t| t.to_rfc3339()).unwrap_or_default(),
+            created_at: row
+                .try_get::<chrono::DateTime<chrono::Utc>, _>("created_at")
+                .map(|t| t.to_rfc3339())
+                .unwrap_or_default(),
+            updated_at: row
+                .try_get::<chrono::DateTime<chrono::Utc>, _>("updated_at")
+                .map(|t| t.to_rfc3339())
+                .unwrap_or_default(),
             is_archived: row.try_get("is_archived").ok(),
-            is_favorite: row.try_get::<bool,_>("is_favorite").ok().map(Some).unwrap_or(Some(false)),
+            is_favorite: row
+                .try_get::<bool, _>("is_favorite")
+                .ok()
+                .map(Some)
+                .unwrap_or(Some(false)),
             peer_id: row.try_get("peer_id").ok(),
             peer_username: row.try_get("peer_username").ok(),
             peer_avatar: row.try_get("peer_avatar").ok(),
@@ -322,7 +409,10 @@ async fn list_chats(
 // ---------------------------
 async fn get_messages(
     State(state): State<AppState>,
-    CurrentUser { id: current_user_id }: CurrentUser,
+    CurrentUser {
+        id: current_user_id,
+        ..
+    }: CurrentUser,
     Path(chat_id): Path<i32>,
     Query(q): Query<GetMessagesQuery>,
 ) -> Result<Json<Vec<Message>>, (StatusCode, String)> {
@@ -370,31 +460,44 @@ async fn get_messages(
     .bind(limit)
     .fetch_all(&state.pool)
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Ошибка БД: {}", e),
+        )
+    })?;
 
     let items: Vec<Message> = rows
         .into_iter()
         .map(|row| {
             let metadata_value: Option<Value> = row.try_get("metadata").ok().flatten();
-            let metadata_vec: Option<Vec<FileMetadata>> = metadata_value
-                .and_then(|v| serde_json::from_value(v).ok());
-            
+            let metadata_vec: Option<Vec<FileMetadata>> =
+                metadata_value.and_then(|v| serde_json::from_value(v).ok());
+
             let has_files = metadata_vec.as_ref().map(|m| !m.is_empty());
-            
+
             Message {
                 id: row.try_get("id").unwrap_or_default(),
                 chat_id: row.try_get("chat_id").unwrap_or_default(),
                 sender_id: row.try_get("sender_id").unwrap_or_default(),
                 message: row.try_get("message").unwrap_or_default(),
-                message_type: row.try_get("message_type").unwrap_or_else(|_| "text".to_string()),
-                created_at: row.try_get::<chrono::DateTime<chrono::Utc>,_>("created_at").map(|t| t.to_rfc3339()).unwrap_or_default(),
-                edited_at: row.try_get::<chrono::DateTime<chrono::Utc>,_>("edited_at").ok().map(|t| t.to_rfc3339()),
+                message_type: row
+                    .try_get("message_type")
+                    .unwrap_or_else(|_| "text".to_string()),
+                created_at: row
+                    .try_get::<chrono::DateTime<chrono::Utc>, _>("created_at")
+                    .map(|t| t.to_rfc3339())
+                    .unwrap_or_default(),
+                edited_at: row
+                    .try_get::<chrono::DateTime<chrono::Utc>, _>("edited_at")
+                    .ok()
+                    .map(|t| t.to_rfc3339()),
                 reply_to_message_id: row.try_get("reply_to_message_id").ok(),
                 forwarded_from_message_id: row.try_get("forwarded_from_message_id").ok(),
                 forwarded_from_chat_id: row.try_get("forwarded_from_chat_id").ok(),
                 forwarded_from_sender_id: row.try_get("forwarded_from_sender_id").ok(),
                 deleted_at: row
-                    .try_get::<chrono::DateTime<chrono::Utc>,_>("deleted_at")
+                    .try_get::<chrono::DateTime<chrono::Utc>, _>("deleted_at")
                     .ok()
                     .map(|t| t.to_rfc3339()),
                 deleted_by: row.try_get("deleted_by").ok(),
@@ -416,7 +519,10 @@ async fn get_messages(
 // ---------------------------
 async fn delete_or_leave_chat(
     State(state): State<AppState>,
-    CurrentUser { id: current_user_id }: CurrentUser,
+    CurrentUser {
+        id: current_user_id,
+        ..
+    }: CurrentUser,
     Path(id): Path<i32>,
     Query(opts): Query<DeleteOptions>,
 ) -> Result<StatusCode, (StatusCode, String)> {
@@ -433,9 +539,16 @@ async fn delete_or_leave_chat(
     .bind(current_user_id)
     .fetch_optional(&state.pool)
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Ошибка БД: {}", e),
+        )
+    })?;
 
-    let Some(row) = row else { return Err((StatusCode::NOT_FOUND, "Чат не найден".into())); };
+    let Some(row) = row else {
+        return Err((StatusCode::NOT_FOUND, "Чат не найден".into()));
+    };
     let kind: String = row.try_get("kind").unwrap_or_default();
     let _role: String = row.try_get("role").unwrap_or_else(|_| "member".to_string());
 
@@ -446,7 +559,12 @@ async fn delete_or_leave_chat(
             .bind(id)
             .execute(&state.pool)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка удаления чата: {}", e)))?;
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Ошибка удаления чата: {}", e),
+                )
+            })?;
         return Ok(StatusCode::NO_CONTENT);
     } else {
         // private: если for_all=true — удаляем чат полностью
@@ -457,7 +575,12 @@ async fn delete_or_leave_chat(
                 .bind(id)
                 .execute(&state.pool)
                 .await
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка удаления приватного чата: {}", e)))?;
+                .map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Ошибка удаления приватного чата: {}", e),
+                    )
+                })?;
             return Ok(StatusCode::NO_CONTENT);
         }
         // private: удаляем только участие текущего пользователя
@@ -468,16 +591,25 @@ async fn delete_or_leave_chat(
             .bind(current_user_id)
             .execute(&state.pool)
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка выхода из чата: {}", e)))?;
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Ошибка выхода из чата: {}", e),
+                )
+            })?;
 
         // Если участников больше нет — удаляем сам чат (упрощённо, вместо фонового джоба)
-        let participants_left: Option<i64> = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM chat_participants WHERE chat_id = $1",
-        )
-        .bind(id)
-        .fetch_optional(&state.pool)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+        let participants_left: Option<i64> =
+            sqlx::query_scalar("SELECT COUNT(*) FROM chat_participants WHERE chat_id = $1")
+                .bind(id)
+                .fetch_optional(&state.pool)
+                .await
+                .map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Ошибка БД: {}", e),
+                    )
+                })?;
 
         if participants_left.unwrap_or(0) == 0 {
             sqlx::query("DELETE FROM chats WHERE id = $1")
@@ -496,19 +628,26 @@ async fn delete_or_leave_chat(
 // ---------------------------
 async fn add_favorite(
     State(state): State<AppState>,
-    CurrentUser { id: current_user_id }: CurrentUser,
+    CurrentUser {
+        id: current_user_id,
+        ..
+    }: CurrentUser,
     Path(id): Path<i32>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     // Только участник чата может добавлять в избранное
     ensure_member(&state, id, current_user_id).await?;
 
-    let cnt: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*)::INT8 FROM chat_favorites WHERE user_id = $1",
-    )
-    .bind(current_user_id)
-    .fetch_one(&state.pool)
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+    let cnt: i64 =
+        sqlx::query_scalar("SELECT COUNT(*)::INT8 FROM chat_favorites WHERE user_id = $1")
+            .bind(current_user_id)
+            .fetch_one(&state.pool)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Ошибка БД: {}", e),
+                )
+            })?;
 
     if cnt >= 5 {
         return Err((StatusCode::BAD_REQUEST, "Лимит избранных чатов: 5".into()));
@@ -521,7 +660,12 @@ async fn add_favorite(
     .bind(id)
     .execute(&state.pool)
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Ошибка БД: {}", e),
+        )
+    })?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -531,7 +675,10 @@ async fn add_favorite(
 // ---------------------------
 async fn remove_favorite(
     State(state): State<AppState>,
-    CurrentUser { id: current_user_id }: CurrentUser,
+    CurrentUser {
+        id: current_user_id,
+        ..
+    }: CurrentUser,
     Path(id): Path<i32>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     // Только участник чата может менять избранное
@@ -542,7 +689,12 @@ async fn remove_favorite(
         .bind(id)
         .execute(&state.pool)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Ошибка БД: {}", e),
+            )
+        })?;
 
     Ok(StatusCode::NO_CONTENT)
 }

@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:ren/core/constants/api_url.dart';
 import 'package:ren/features/profile/data/profile_api.dart';
 import 'package:ren/features/profile/domain/profile_user.dart';
+import 'package:ren/features/profile/domain/security_session.dart';
 
 class ProfileRepository {
   final ProfileApi api;
@@ -27,6 +28,22 @@ class ProfileRepository {
   Future<ProfileUser> removeAvatar() async {
     final json = await api.removeAvatar();
     return _normalize(ProfileUser.fromMap(json));
+  }
+
+  Future<List<SecuritySession>> sessions() async {
+    final list = await api.sessions();
+    return list
+        .whereType<Map<String, dynamic>>()
+        .map(SecuritySession.fromMap)
+        .toList();
+  }
+
+  Future<void> deleteSession(String sessionId) async {
+    await api.deleteSession(sessionId);
+  }
+
+  Future<void> deleteOtherSessions() async {
+    await api.deleteOtherSessions();
   }
 
   ProfileUser _normalize(ProfileUser u) {

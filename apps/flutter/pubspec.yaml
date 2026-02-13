@@ -60,6 +60,7 @@ dependencies:
   just_audio: ^0.9.40
   ffi: ^2.1.4
   crop_your_image: ^2.0.0
+  device_info_plus: ^11.5.0
 
 dev_dependencies:
   flutter_test:

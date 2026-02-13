@@ -30,6 +30,7 @@ import 'package:ren/features/profile/presentation/profile_store.dart';
 
 import 'package:ren/core/realtime/realtime_client.dart';
 import 'package:ren/core/notifications/local_notifications.dart';
+import 'package:ren/core/network/auth_session_interceptor.dart';
 
 final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
 
@@ -87,11 +88,15 @@ class MyApp extends StatelessWidget {
         ChangeNotifierProvider<BackgroundSettings>(
           create: (_) => BackgroundSettings(),
         ),
-        ChangeNotifierProvider<ThemeSettings>(
-          create: (_) => ThemeSettings(),
-        ),
+        ChangeNotifierProvider<ThemeSettings>(create: (_) => ThemeSettings()),
         Provider<RenSdk>.value(value: RenSdk.instance),
-        Provider<Dio>(create: (_) => Dio()),
+        Provider<Dio>(
+          create: (_) {
+            final dio = Dio();
+            dio.interceptors.add(AuthSessionInterceptor(dio));
+            return dio;
+          },
+        ),
         ProxyProvider<Dio, AuthApi>(update: (_, dio, __) => AuthApi(dio)),
         ProxyProvider<Dio, SplashApi>(update: (_, dio, __) => SplashApi(dio)),
         ProxyProvider<Dio, ChatsApi>(update: (_, dio, __) => ChatsApi(dio)),

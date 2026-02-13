@@ -1,14 +1,14 @@
 // ---------------------------
 // Импорты
 // ---------------------------
-use axum::{routing::get, Router, middleware::from_fn};
-use tower_http::cors::CorsLayer;
-use sqlx::{postgres::PgPoolOptions, PgPool};
-use tokio::net::TcpListener;
+use axum::{Router, middleware::from_fn, routing::get};
+use dashmap::{DashMap, DashSet};
+use sqlx::{PgPool, postgres::PgPoolOptions};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use dashmap::{DashMap, DashSet};
+use tokio::net::TcpListener;
 use tokio::sync::broadcast;
+use tower_http::cors::CorsLayer;
 
 // Подключаем модуль с маршрутами
 mod route;
@@ -39,14 +39,22 @@ pub struct AppState {
 async fn async_main() {
     // Загружаем переменные окружения из файла .env (если он есть).
     let _ = dotenvy::dotenv();
-    let postgres_user = std::env::var("POSTGRES_USER").expect("Переменная окружения POSTGRES_USER не установлена");
-    let postgres_password = std::env::var("POSTGRES_PASSWORD").expect("Переменная окружения POSTGRES_PASSWORD не установлена");
-    let postgres_host = std::env::var("POSTGRES_HOST").expect("Переменная окружения POSTGRES_HOST не установлена");
+    let postgres_user =
+        std::env::var("POSTGRES_USER").expect("Переменная окружения POSTGRES_USER не установлена");
+    let postgres_password = std::env::var("POSTGRES_PASSWORD")
+        .expect("Переменная окружения POSTGRES_PASSWORD не установлена");
+    let postgres_host =
+        std::env::var("POSTGRES_HOST").expect("Переменная окружения POSTGRES_HOST не установлена");
     let postgres_port = std::env::var("POSTGRES_PORT").unwrap_or_else(|_| "8081".to_string());
-    let postgres_db = std::env::var("POSTGRES_DB").expect("Переменная окружения POSTGRES_DB не установлена");
-    let database_url = format!("postgres://{}:{}@{}:{}/{}", postgres_user, postgres_password, postgres_host, postgres_port, postgres_db);
+    let postgres_db =
+        std::env::var("POSTGRES_DB").expect("Переменная окружения POSTGRES_DB не установлена");
+    let database_url = format!(
+        "postgres://{}:{}@{}:{}/{}",
+        postgres_user, postgres_password, postgres_host, postgres_port, postgres_db
+    );
     // Секрет для подписи JWT, обязателен
-    let jwt_secret = std::env::var("JWT_SECRET").expect("Переменная окружения JWT_SECRET не установлена");
+    let jwt_secret =
+        std::env::var("JWT_SECRET").expect("Переменная окружения JWT_SECRET не установлена");
 
     // Порт для прослушивания
     let port = 8081;
@@ -72,7 +80,14 @@ async fn async_main() {
     let user_hub = Arc::new(DashMap::new());
     let online_users = Arc::new(DashSet::new());
     let in_chat = Arc::new(DashSet::new());
-    let state = AppState { pool, jwt_secret, ws_hub, user_hub, online_users, in_chat };
+    let state = AppState {
+        pool,
+        jwt_secret,
+        ws_hub,
+        user_hub,
+        online_users,
+        in_chat,
+    };
 
     // Сборка роутера приложения.
     // Добавим простой health-check и подключим роуты авторизации.
@@ -88,9 +103,12 @@ async fn async_main() {
     let listener = TcpListener::bind(addr)
         .await
         .expect("Не удалось открыть порт для прослушивания");
-    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-        .await
-        .expect("Сервер завершился с ошибкой");
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .expect("Сервер завершился с ошибкой");
 }
 
 fn main() {

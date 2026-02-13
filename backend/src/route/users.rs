@@ -1,21 +1,21 @@
 use axum::{
-    extract::{Query, State, Path as PathExtractor},
+    Json, Router,
+    extract::{Path as PathExtractor, Query, State},
     http::{StatusCode, header},
     response::Response,
     routing::{get, patch},
-    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 
-use crate::{AppState};
-use crate::models::auth::UserResponse; // используем общую модель пользователя
+use crate::AppState;
 use crate::middleware::CurrentUser; // экстрактор текущего пользователя
+use crate::models::auth::UserResponse; // используем общую модель пользователя
+use axum::extract::Multipart as MultipartExtractor;
+use std::path::Component;
 use std::path::Path;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
-use std::path::Component;
-use axum::extract::Multipart as MultipartExtractor;
 
 // Конструктор роутера для users: подключаем маршруты профиля
 // - GET /users/me       — вернуть текущего пользователя
@@ -42,7 +42,7 @@ struct SearchUsersQuery {
 
 async fn search_users(
     State(state): State<AppState>,
-    CurrentUser { id: my_id }: CurrentUser,
+    CurrentUser { id: my_id, .. }: CurrentUser,
     Query(params): Query<SearchUsersQuery>,
 ) -> Result<Json<Vec<UserResponse>>, (StatusCode, String)> {
     let q = params.q.trim();
@@ -76,7 +76,12 @@ async fn search_users(
     .bind(limit)
     .fetch_all(&state.pool)
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Ошибка БД: {}", e),
+        )
+    })?;
 
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
@@ -97,7 +102,7 @@ async fn search_users(
 // 3) По id из токена читаем пользователя из БД и возвращаем его данные
 async fn me(
     State(state): State<AppState>,
-    CurrentUser { id }: CurrentUser,
+    CurrentUser { id, .. }: CurrentUser,
 ) -> Result<Json<UserResponse>, (StatusCode, String)> {
     // Загружаем пользователя из БД по id (берём из JWT через CurrentUser)
     let row = sqlx::query(
@@ -110,7 +115,12 @@ async fn me(
     .bind(id)
     .fetch_optional(&state.pool)
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Ошибка БД: {}", e),
+        )
+    })?;
 
     let Some(row) = row else {
         // Пользователь мог быть удалён — токен валиден, но пользователя в БД нет
@@ -135,12 +145,15 @@ struct UpdateUsernameRequest {
 
 async fn update_username(
     State(state): State<AppState>,
-    CurrentUser { id }: CurrentUser,
+    CurrentUser { id, .. }: CurrentUser,
     Json(payload): Json<UpdateUsernameRequest>,
 ) -> Result<Json<UserResponse>, (StatusCode, String)> {
     // Простая валидация
     if payload.username.trim().is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "Имя пользователя не может быть пустым".into()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Имя пользователя не может быть пустым".into(),
+        ));
     }
 
     // Обновляем username; ловим конфликт уникальности (PG 23505)
@@ -161,10 +174,16 @@ async fn update_username(
             if db_err.code().as_deref() == Some("23505") {
                 (StatusCode::CONFLICT, "Имя пользователя уже занято".into())
             } else {
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", db_err))
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Ошибка БД: {}", db_err),
+                )
             }
         }
-        other => (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка: {}", other)),
+        other => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Ошибка: {}", other),
+        ),
     })?;
 
     let user = UserResponse {
@@ -179,7 +198,7 @@ async fn update_username(
 
 async fn update_avatar(
     State(state): State<AppState>,
-    CurrentUser { id }: CurrentUser,
+    CurrentUser { id, .. }: CurrentUser,
     mut multipart: MultipartExtractor,
 ) -> Result<Json<UserResponse>, (StatusCode, String)> {
     // Получаем текущий путь к аватару для возможного удаления
@@ -187,8 +206,13 @@ async fn update_avatar(
         .bind(id)
         .fetch_optional(&state.pool)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
-    
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Ошибка БД: {}", e),
+            )
+        })?;
+
     let current_avatar_path = current_avatar_row
         .and_then(|row| row.try_get::<Option<String>, _>("avatar").ok())
         .flatten();
@@ -199,24 +223,28 @@ async fn update_avatar(
     // Поэтому boundary НЕЛЬЗЯ триммить — иначе multer не найдёт финальный разделитель и вернёт
     // "incomplete multipart stream".
 
-
     // Извлекаем файл из multipart
     let mut avatar_data: Option<Vec<u8>> = None;
     let mut avatar_filename: Option<String> = None;
     let mut remove_avatar = false;
 
-    while let Some(field) = multipart
-        .next_field()
-        .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Ошибка чтения multipart: {}", e)))?
-    {
+    while let Some(field) = multipart.next_field().await.map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Ошибка чтения multipart: {}", e),
+        )
+    })? {
         let name = field.name().unwrap_or("").to_string();
 
         match name.as_str() {
             "avatar" => {
                 avatar_filename = field.file_name().map(|s| s.to_string());
-                let data = field.bytes().await
-                    .map_err(|e| (StatusCode::BAD_REQUEST, format!("Ошибка чтения файла avatar: {}", e)))?;
+                let data = field.bytes().await.map_err(|e| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        format!("Ошибка чтения файла avatar: {}", e),
+                    )
+                })?;
                 if !data.is_empty() {
                     avatar_data = Some(data.to_vec());
                 }
@@ -229,7 +257,6 @@ async fn update_avatar(
         }
     }
 
-
     // Сохраняем копию текущего пути для последующего удаления
     let old_avatar_path = current_avatar_path.clone();
 
@@ -241,13 +268,20 @@ async fn update_avatar(
         // 5MB должно быть достаточно для большинства аватаров.
         const MAX_AVATAR_BYTES: usize = 5 * 1024 * 1024;
         if data.len() > MAX_AVATAR_BYTES {
-            return Err((StatusCode::BAD_REQUEST, "Слишком большой файл аватара".into()));
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "Слишком большой файл аватара".into(),
+            ));
         }
 
         // Создаем директорию для аватаров, если её нет
         let avatars_dir = Path::new("uploads/avatars");
-        fs::create_dir_all(avatars_dir).await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Не удалось создать директорию для аватаров: {}", e)))?;
+        fs::create_dir_all(avatars_dir).await.map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Не удалось создать директорию для аватаров: {}", e),
+            )
+        })?;
 
         // Определяем расширение файла
         let extension_raw = avatar_filename
@@ -264,14 +298,26 @@ async fn update_avatar(
 
         // Генерируем путь с использованием id пользователя
         let new_path = format!("uploads/avatars/user_{}.{}", id, extension);
-        
+
         // Сохраняем файл
-        let mut file = fs::File::create(&new_path).await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Не удалось создать файл аватара: {}", e)))?;
-        file.write_all(&data).await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Не удалось записать файл аватара: {}", e)))?;
-        file.sync_all().await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Не удалось синхронизировать файл аватара: {}", e)))?;
+        let mut file = fs::File::create(&new_path).await.map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Не удалось создать файл аватара: {}", e),
+            )
+        })?;
+        file.write_all(&data).await.map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Не удалось записать файл аватара: {}", e),
+            )
+        })?;
+        file.sync_all().await.map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Не удалось синхронизировать файл аватара: {}", e),
+            )
+        })?;
 
         Some(format!("avatars/user_{}.{}", id, extension))
     } else {
@@ -302,7 +348,12 @@ async fn update_avatar(
     .bind(id)
     .fetch_one(&state.pool)
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Ошибка БД: {}", e),
+        )
+    })?;
 
     let user = UserResponse {
         id: row.try_get("id").unwrap_or_default(),
@@ -316,21 +367,31 @@ async fn update_avatar(
 
 async fn delete_me(
     State(state): State<AppState>,
-    CurrentUser { id }: CurrentUser,
+    CurrentUser { id, .. }: CurrentUser,
 ) -> Result<StatusCode, (StatusCode, String)> {
     // Получаем путь к аватару перед удалением пользователя
     let avatar_row = sqlx::query("SELECT avatar FROM users WHERE id = $1")
         .bind(id)
         .fetch_optional(&state.pool)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
-    
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Ошибка БД: {}", e),
+            )
+        })?;
+
     // Удаляем текущего пользователя
     sqlx::query("DELETE FROM users WHERE id = $1")
         .bind(id)
         .execute(&state.pool)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Ошибка БД: {}", e),
+            )
+        })?;
 
     // Удаляем файл аватара, если он был
     if let Some(row) = avatar_row {
@@ -359,8 +420,12 @@ async fn get_public_key(
     State(state): State<AppState>,
     PathExtractor(user_id_str): PathExtractor<String>,
 ) -> Result<Json<PublicKeyResponse>, (StatusCode, String)> {
-    let user_id: i32 = user_id_str.parse()
-        .map_err(|_| (StatusCode::BAD_REQUEST, "Некорректный ID пользователя".into()))?;
+    let user_id: i32 = user_id_str.parse().map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            "Некорректный ID пользователя".into(),
+        )
+    })?;
 
     let row = sqlx::query(
         r#"
@@ -372,7 +437,12 @@ async fn get_public_key(
     .bind(user_id)
     .fetch_optional(&state.pool)
     .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка БД: {}", e)))?;
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Ошибка БД: {}", e),
+        )
+    })?;
 
     let Some(row) = row else {
         return Err((StatusCode::NOT_FOUND, "Пользователь не найден".into()));
@@ -411,7 +481,8 @@ async fn get_avatar(
 
     let file_path = Path::new("uploads").join(rel);
 
-    let content = fs::read(&file_path).await
+    let content = fs::read(&file_path)
+        .await
         .map_err(|_| (StatusCode::NOT_FOUND, "Файл не найден".into()))?;
 
     // Определяем Content-Type по расширению
@@ -427,5 +498,10 @@ async fn get_avatar(
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, content_type)
         .body(axum::body::Body::from(content))
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка создания ответа: {}", e)))?)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Ошибка создания ответа: {}", e),
+            )
+        })?)
 }
