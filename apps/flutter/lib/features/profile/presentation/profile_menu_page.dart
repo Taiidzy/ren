@@ -236,9 +236,7 @@ class ProfileMenuPage extends StatelessWidget {
                         materialIcon: Icons.shield_outlined,
                         title: 'Безопасность',
                         onTap: () {
-                          Navigator.of(context).push(
-                            adaptivePageRoute((_) => const SecurityPage()),
-                          );
+                          SecurityPage.show(context);
                         },
                       ),
                       const SizedBox(height: 10),

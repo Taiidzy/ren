@@ -1,21 +1,31 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:hugeicons/hugeicons.dart';
 import 'package:provider/provider.dart';
 
 import 'package:ren/features/profile/data/profile_repository.dart';
 import 'package:ren/features/profile/domain/security_session.dart';
-import 'package:ren/shared/widgets/background.dart';
 import 'package:ren/shared/widgets/glass_overlays.dart';
 import 'package:ren/shared/widgets/glass_surface.dart';
 
-class SecurityPage extends StatefulWidget {
-  const SecurityPage({super.key});
-
-  @override
-  State<SecurityPage> createState() => _SecurityPageState();
+class SecurityPage {
+  static Future<void> show(BuildContext context) async {
+    await GlassOverlays.showGlassBottomSheet<void>(
+      context,
+      builder: (_) => const _SecuritySheetBody(),
+    );
+  }
 }
 
-class _SecurityPageState extends State<SecurityPage> {
+class _SecuritySheetBody extends StatefulWidget {
+  const _SecuritySheetBody();
+
+  @override
+  State<_SecuritySheetBody> createState() => _SecuritySheetBodyState();
+}
+
+class _SecuritySheetBodyState extends State<_SecuritySheetBody> {
   bool _isLoading = true;
   bool _isBusy = false;
   String? _error;
@@ -129,35 +139,26 @@ class _SecurityPageState extends State<SecurityPage> {
   List<List<dynamic>> _deviceIcon(String name) {
     final lower = name.toLowerCase();
 
-    if (lower.contains('android')) {
-      return HugeIcons.strokeRoundedAndroid;
-    }
-
+    if (lower.contains('android')) return HugeIcons.strokeRoundedAndroid;
     if (lower.contains('iphone') ||
         lower.contains('ios') ||
         lower.contains('mobile') ||
         lower.contains('phone')) {
       return HugeIcons.strokeRoundedSmartPhone01;
     }
-
     if (lower.contains('ipad') || lower.contains('tablet')) {
       return HugeIcons.strokeRoundedSmartPhoneLandscape;
     }
-
     if (lower.contains('mac') || lower.contains('apple')) {
       return HugeIcons.strokeRoundedApple;
     }
-
     if (lower.contains('windows') ||
         lower.contains('linux') ||
         lower.contains('desktop') ||
         lower.contains('computer')) {
       return HugeIcons.strokeRoundedComputer;
     }
-
-    if (lower.contains('laptop')) {
-      return HugeIcons.strokeRoundedLaptop;
-    }
+    if (lower.contains('laptop')) return HugeIcons.strokeRoundedLaptop;
 
     return HugeIcons.strokeRoundedDeviceAccess;
   }
@@ -168,158 +169,117 @@ class _SecurityPageState extends State<SecurityPage> {
     final isDark = theme.brightness == Brightness.dark;
     final baseInk = isDark ? Colors.white : Colors.black;
 
-    return AppBackground(
-      imageOpacity: 1,
-      imageBlurSigma: 0,
-      imageFit: BoxFit.cover,
-      animate: true,
-      animationDuration: const Duration(seconds: 20),
-      child: Scaffold(
-        appBar: AppBar(
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          title: const Text('Безопасность'),
-        ),
-        body: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
-            child: Column(
+    return DraggableScrollableSheet(
+      initialChildSize: 0.78,
+      minChildSize: 0.45,
+      maxChildSize: 0.94,
+      builder: (context, scrollController) {
+        return GlassSurface(
+          blurSigma: 16,
+          borderRadiusGeometry: const BorderRadius.only(
+            topLeft: Radius.circular(26),
+            topRight: Radius.circular(26),
+          ),
+          borderColor: baseInk.withOpacity(isDark ? 0.22 : 0.12),
+          child: RefreshIndicator(
+            onRefresh: _loadSessions,
+            child: ListView(
+              controller: scrollController,
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 22),
               children: [
-                GlassSurface(
-                  borderRadius: 26,
-                  blurSigma: 16,
-                  width: double.infinity,
-                  borderColor: baseInk.withOpacity(isDark ? 0.24 : 0.14),
-                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-                  child: Column(
-                    children: [
-                      GlassSurface(
-                        borderRadius: 18,
-                        blurSigma: 14,
-                        width: 94,
-                        height: 110,
-                        borderColor: baseInk.withOpacity(isDark ? 0.22 : 0.12),
-                        child: Center(
-                          child: HugeIcon(
-                            icon: HugeIcons.strokeRoundedShield01,
-                            color: theme.colorScheme.onSurface.withOpacity(
-                              0.92,
-                            ),
-                            size: 46,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      Text(
-                        'Щит аккаунта',
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w800,
-                          color: theme.colorScheme.onSurface,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'Управляй активными входами и закрывай лишние устройства',
-                        textAlign: TextAlign.center,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurface.withOpacity(0.74),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      GlassSurface(
-                        borderRadius: 14,
-                        blurSigma: 12,
-                        width: double.infinity,
-                        borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.12),
-                        onTap: _isBusy ? null : _terminateOtherSessions,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 10,
-                        ),
-                        child: Row(
-                          children: [
-                            HugeIcon(
-                              icon: HugeIcons.strokeRoundedShieldKey,
-                              color: theme.colorScheme.onSurface.withOpacity(
-                                0.9,
-                              ),
-                              size: 20,
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Text(
-                                'Выйти из всех других устройств',
-                                style: theme.textTheme.titleSmall?.copyWith(
-                                  color: theme.colorScheme.onSurface,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
+                Center(
+                  child: Container(
+                    width: 44,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.onSurface.withOpacity(0.25),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
                   ),
                 ),
                 const SizedBox(height: 12),
-                Expanded(
-                  child: RefreshIndicator(
-                    onRefresh: _loadSessions,
-                    child: _buildList(theme, isDark, baseInk),
-                  ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Безопасность',
+                        style: theme.textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          color: theme.colorScheme.onSurface,
+                        ),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: _isBusy ? null : _loadSessions,
+                      child: Text(
+                        'Обновить',
+                        style: TextStyle(
+                          color: theme.colorScheme.onSurface.withOpacity(0.8),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
+                const SizedBox(height: 10),
+                _ShieldHeader(
+                  isDark: isDark,
+                  baseInk: baseInk,
+                  onTap: _isBusy ? null : _terminateOtherSessions,
+                ),
+                const SizedBox(height: 18),
+                _SectionTitle(title: 'Активные сессии'),
+                const SizedBox(height: 10),
+                ..._buildSessionWidgets(theme, isDark, baseInk),
               ],
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
-  Widget _buildList(ThemeData theme, bool isDark, Color baseInk) {
+  List<Widget> _buildSessionWidgets(
+    ThemeData theme,
+    bool isDark,
+    Color baseInk,
+  ) {
     if (_isLoading) {
-      return const Center(child: CircularProgressIndicator());
+      return const [
+        SizedBox(height: 34),
+        Center(child: CircularProgressIndicator()),
+      ];
     }
 
     if (_error != null) {
-      return ListView(
-        children: [
-          const SizedBox(height: 40),
-          Center(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Text(
-                _error!.replaceFirst('Exception: ', ''),
-                textAlign: TextAlign.center,
-                style: theme.textTheme.bodyMedium,
-              ),
-            ),
+      return [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 12),
+          child: Text(
+            _error!.replaceFirst('Exception: ', ''),
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodyMedium,
           ),
-        ],
-      );
+        ),
+      ];
     }
 
     if (_sessions.isEmpty) {
-      return ListView(
-        children: [
-          const SizedBox(height: 40),
-          Center(
-            child: Text(
-              'Активных сессий не найдено',
-              style: theme.textTheme.bodyMedium,
-            ),
+      return [
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          child: Text(
+            'Активных сессий не найдено',
+            style: theme.textTheme.bodyMedium,
+            textAlign: TextAlign.center,
           ),
-        ],
-      );
+        ),
+      ];
     }
 
-    return ListView.separated(
-      physics: const AlwaysScrollableScrollPhysics(),
-      itemCount: _sessions.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 10),
-      itemBuilder: (context, i) {
-        final s = _sessions[i];
-        return GlassSurface(
+    return _sessions.map((s) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: GlassSurface(
           borderRadius: 16,
           blurSigma: 12,
           width: double.infinity,
@@ -399,8 +359,136 @@ class _SecurityPageState extends State<SecurityPage> {
               ],
             ],
           ),
-        );
-      },
+        ),
+      );
+    }).toList();
+  }
+}
+
+class _ShieldHeader extends StatelessWidget {
+  final bool isDark;
+  final Color baseInk;
+  final VoidCallback? onTap;
+
+  const _ShieldHeader({
+    required this.isDark,
+    required this.baseInk,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return GlassSurface(
+      borderRadius: 18,
+      blurSigma: 14,
+      borderColor: baseInk.withOpacity(isDark ? 0.2 : 0.12),
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+      child: Column(
+        children: [
+          SizedBox(
+            height: 145,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                Positioned(
+                  bottom: 8,
+                  child: Transform.rotate(
+                    angle: math.pi / 4,
+                    child: GlassSurface(
+                      borderRadius: 10,
+                      blurSigma: 12,
+                      width: 44,
+                      height: 44,
+                      borderColor: baseInk.withOpacity(isDark ? 0.22 : 0.12),
+                      child: const SizedBox.shrink(),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  top: 6,
+                  child: GlassSurface(
+                    borderRadius: 24,
+                    blurSigma: 14,
+                    width: 112,
+                    height: 112,
+                    borderColor: baseInk.withOpacity(isDark ? 0.24 : 0.14),
+                    child: Center(
+                      child: HugeIcon(
+                        icon: HugeIcons.strokeRoundedShield01,
+                        color: theme.colorScheme.onSurface.withOpacity(0.94),
+                        size: 48,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Text(
+            'Щит аккаунта',
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w800,
+              color: theme.colorScheme.onSurface,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Управляй активными входами и закрывай лишние устройства',
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurface.withOpacity(0.74),
+            ),
+          ),
+          const SizedBox(height: 12),
+          GlassSurface(
+            borderRadius: 14,
+            blurSigma: 12,
+            width: double.infinity,
+            borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.12),
+            onTap: onTap,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: Row(
+              children: [
+                HugeIcon(
+                  icon: HugeIcons.strokeRoundedShieldKey,
+                  color: theme.colorScheme.onSurface.withOpacity(0.9),
+                  size: 20,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Выйти из всех других устройств',
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      color: theme.colorScheme.onSurface,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SectionTitle extends StatelessWidget {
+  final String title;
+
+  const _SectionTitle({required this.title});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Text(
+      title,
+      style: theme.textTheme.titleMedium?.copyWith(
+        fontWeight: FontWeight.w700,
+        color: theme.colorScheme.onSurface,
+      ),
     );
   }
 }
