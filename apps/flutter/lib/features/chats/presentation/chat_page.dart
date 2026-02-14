@@ -90,6 +90,8 @@ class _ChatPageState extends State<ChatPage>
   StreamSubscription? _rtSub;
 
   Timer? _loadOlderDebounce;
+  late final ValueNotifier<bool> _messagesSyncingN;
+  late final ChatsRepository _repo;
 
   bool _showVideoRecordingOverlay = false;
   String _videoRecordingDurationText = '0:00';
@@ -322,6 +324,11 @@ class _ChatPageState extends State<ChatPage>
   @override
   void initState() {
     super.initState();
+    final chatId = int.tryParse(widget.chat.id) ?? 0;
+    _repo = context.read<ChatsRepository>();
+    _messagesSyncingN = context.read<ChatsRepository>().messagesSyncingNotifier(
+      chatId,
+    );
     WidgetsBinding.instance.addObserver(this);
     _videoProgressController = AnimationController(
       vsync: this,
@@ -536,8 +543,21 @@ class _ChatPageState extends State<ChatPage>
     final chatId = int.tryParse(widget.chat.id) ?? 0;
     final repo = context.read<ChatsRepository>();
 
+    final cached = await repo.getCachedMessages(chatId);
+    if (mounted && cached.isNotEmpty) {
+      setState(() {
+        _messages
+          ..clear()
+          ..addAll(cached);
+        _reindexMessages();
+        _loading = false;
+        _hasMore = true;
+      });
+      _scheduleScrollToBottom(animated: false);
+    }
+
     try {
-      final list = await repo.fetchMessages(chatId, limit: 50);
+      final list = await repo.syncMessages(chatId, limit: 50);
       if (!mounted) return;
       setState(() {
         _messages
@@ -1174,6 +1194,8 @@ class _ChatPageState extends State<ChatPage>
   @override
   void dispose() {
     final chatId = int.tryParse(widget.chat.id) ?? 0;
+    final snapshot = List<ChatMessage>.from(_messages);
+    unawaited(_repo.saveMessagesSnapshot(chatId, snapshot));
     WidgetsBinding.instance.removeObserver(this);
     _videoProgressController.dispose();
     _videoLockedTransition.dispose();
@@ -1542,241 +1564,254 @@ class _ChatPageState extends State<ChatPage>
         builder: (context, child) {
           final selectionMode = _selectionModeN.value;
           final selectedIds = _selectedMessageIdsN.value;
-          return Scaffold(
-            resizeToAvoidBottomInset: false,
-            extendBodyBehindAppBar: true,
-            appBar: ChatPageAppBar(
-              chat: widget.chat,
-              selectionMode: selectionMode,
-              selectedCount: selectedIds.length,
-              peerOnline: _peerOnline,
-              peerTyping: _peerTyping,
-              onBack: () {
-                if (selectionMode) {
-                  _exitSelectionMode();
-                } else {
-                  Navigator.of(context).maybePop();
-                }
-              },
-              onShareSelected: () async {
-                await _forwardSelected();
-              },
-              onDeleteSelected: () {
-                final ids = Set<String>.from(selectedIds);
-                _deleteByIds(ids);
-                _deleteRemote(ids);
-              },
-              onMenu: () {},
-            ),
-            body: Builder(
-              builder: (context) {
-                final media = MediaQuery.of(context);
-                const double inputHeight = 44;
-                const double verticalPadding = 14;
+          return ValueListenableBuilder<bool>(
+            valueListenable: _messagesSyncingN,
+            builder: (context, isSyncing, _) {
+              return Scaffold(
+                resizeToAvoidBottomInset: false,
+                extendBodyBehindAppBar: true,
+                appBar: ChatPageAppBar(
+                  chat: widget.chat,
+                  selectionMode: selectionMode,
+                  selectedCount: selectedIds.length,
+                  peerOnline: _peerOnline,
+                  peerTyping: _peerTyping,
+                  isSyncing: isSyncing,
+                  onBack: () {
+                    if (selectionMode) {
+                      _exitSelectionMode();
+                    } else {
+                      Navigator.of(context).maybePop();
+                    }
+                  },
+                  onShareSelected: () async {
+                    await _forwardSelected();
+                  },
+                  onDeleteSelected: () {
+                    final ids = Set<String>.from(selectedIds);
+                    _deleteByIds(ids);
+                    _deleteRemote(ids);
+                  },
+                  onMenu: () {},
+                ),
+                body: Builder(
+                  builder: (context) {
+                    final media = MediaQuery.of(context);
+                    const double inputHeight = 44;
+                    const double verticalPadding = 14;
 
-                final double topInset = media.padding.top;
-                // viewInsets.bottom is already applied via AnimatedPadding below.
-                final double bottomInset = media.padding.bottom;
+                    final double topInset = media.padding.top;
+                    // viewInsets.bottom is already applied via AnimatedPadding below.
+                    final double bottomInset = media.padding.bottom;
 
-                final double listTopPadding = topInset + kToolbarHeight + 12;
-                final double listBottomPadding =
-                    bottomInset +
-                    media.viewInsets.bottom +
-                    inputHeight +
-                    verticalPadding +
-                    12;
+                    final double listTopPadding =
+                        topInset + kToolbarHeight + 12;
+                    final double listBottomPadding =
+                        bottomInset +
+                        media.viewInsets.bottom +
+                        inputHeight +
+                        verticalPadding +
+                        12;
 
-                final replyText = _replyTo == null
-                    ? ''
-                    : _messageSummary(_replyTo!);
+                    final replyText = _replyTo == null
+                        ? ''
+                        : _messageSummary(_replyTo!);
 
-                return Stack(
-                  children: [
-                    _buildMessagesPane(
-                      theme: theme,
-                      isDark: isDark,
-                      selectionMode: selectionMode,
-                      selectedIds: selectedIds,
-                      listTopPadding: listTopPadding,
-                      listBottomPadding: listBottomPadding,
-                    ),
-                    _buildInputPane(
-                      media: media,
-                      isDark: isDark,
-                      replyText: replyText,
-                    ),
+                    return Stack(
+                      children: [
+                        _buildMessagesPane(
+                          theme: theme,
+                          isDark: isDark,
+                          selectionMode: selectionMode,
+                          selectedIds: selectedIds,
+                          listTopPadding: listTopPadding,
+                          listBottomPadding: listBottomPadding,
+                        ),
+                        _buildInputPane(
+                          media: media,
+                          isDark: isDark,
+                          replyText: replyText,
+                        ),
 
-                    if (_showVideoRecordingOverlay)
-                      Positioned.fill(
-                        child: Stack(
-                          children: [
-                            Positioned.fill(
-                              child: IgnorePointer(
-                                ignoring: !_videoRecordingLocked,
-                                child: AnimatedBuilder(
-                                  animation: _videoLockedTransition,
-                                  builder: (context, _) {
-                                    final t = Curves.easeOut.transform(
-                                      _videoLockedTransition.value,
-                                    );
-                                    if (t <= 0) return const SizedBox();
-                                    return ClipRect(
-                                      child: BackdropFilter(
-                                        filter: ImageFilter.blur(
-                                          sigmaX: 14 * t,
-                                          sigmaY: 14 * t,
-                                        ),
-                                        child: Container(
-                                          color: Colors.black.withOpacity(
-                                            (isDark ? 0.25 : 0.10) * t,
-                                          ),
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                ),
-                              ),
-                            ),
-                            Center(
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  AnimatedBuilder(
-                                    animation: _videoLockedTransition,
-                                    builder: (context, _) {
-                                      final t = Curves.easeOutBack.transform(
-                                        _videoLockedTransition.value,
-                                      );
-                                      final pulse = _videoPulse.value;
-                                      final breathe = math.sin(
-                                        pulse * math.pi * 2,
-                                      );
-                                      final breathingScale =
-                                          1 + 0.006 * breathe;
-                                      final scale =
-                                          (1 - 0.02 * t) * breathingScale;
-                                      final dy = -8.0 * t;
-                                      return Transform.translate(
-                                        offset: Offset(0, dy),
-                                        child: Transform.scale(
-                                          scale: scale,
-                                          child: ClipRRect(
-                                            borderRadius: BorderRadius.circular(
-                                              32,
+                        if (_showVideoRecordingOverlay)
+                          Positioned.fill(
+                            child: Stack(
+                              children: [
+                                Positioned.fill(
+                                  child: IgnorePointer(
+                                    ignoring: !_videoRecordingLocked,
+                                    child: AnimatedBuilder(
+                                      animation: _videoLockedTransition,
+                                      builder: (context, _) {
+                                        final t = Curves.easeOut.transform(
+                                          _videoLockedTransition.value,
+                                        );
+                                        if (t <= 0) return const SizedBox();
+                                        return ClipRect(
+                                          child: BackdropFilter(
+                                            filter: ImageFilter.blur(
+                                              sigmaX: 14 * t,
+                                              sigmaY: 14 * t,
                                             ),
                                             child: Container(
-                                              width: 320,
-                                              height: 320,
-                                              color: theme.colorScheme.surface
-                                                  .withOpacity(
-                                                    isDark ? 0.55 : 0.80,
-                                                  ),
-                                              child: Stack(
-                                                children: [
-                                                  if (_videoCameraController !=
-                                                          null &&
-                                                      _videoCameraController!
-                                                          .value
-                                                          .isInitialized)
-                                                    Positioned.fill(
-                                                      child: ClipRRect(
-                                                        borderRadius:
-                                                            BorderRadius.circular(
-                                                              32,
-                                                            ),
-                                                        child: FittedBox(
-                                                          fit: BoxFit.cover,
-                                                          child: SizedBox(
-                                                            width:
-                                                                _videoCameraController!
-                                                                    .value
-                                                                    .previewSize
-                                                                    ?.height ??
-                                                                320,
-                                                            height:
-                                                                _videoCameraController!
-                                                                    .value
-                                                                    .previewSize
-                                                                    ?.width ??
-                                                                320,
-                                                            child: CameraPreview(
-                                                              _videoCameraController!,
-                                                            ),
-                                                          ),
-                                                        ),
-                                                      ),
-                                                    )
-                                                  else
-                                                    Center(
-                                                      child: HugeIcon(
-                                                        icon: HugeIcons
-                                                            .strokeRoundedVideo01,
-                                                        size: 92,
-                                                        color: theme
-                                                            .colorScheme
-                                                            .onSurface
-                                                            .withOpacity(0.85),
-                                                      ),
-                                                    ),
-                                                ],
+                                              color: Colors.black.withOpacity(
+                                                (isDark ? 0.25 : 0.10) * t,
                                               ),
                                             ),
                                           ),
-                                        ),
-                                      );
-                                    },
+                                        );
+                                      },
+                                    ),
                                   ),
-                                  const SizedBox(height: 14),
-                                  AnimatedBuilder(
-                                    animation: _videoLockedTransition,
-                                    builder: (context, _) {
-                                      final t = Curves.easeOut.transform(
-                                        _videoLockedTransition.value,
-                                      );
-                                      final capsuleScale = 1 + 0.01 * t;
-                                      final capsuleDy = -4.0 * t;
-                                      return Transform.translate(
-                                        offset: Offset(0, capsuleDy),
-                                        child: Transform.scale(
-                                          scale: capsuleScale,
-                                          child: GlassSurface(
-                                            borderRadius: 999,
-                                            blurSigma: 12,
-                                            padding: const EdgeInsets.fromLTRB(
-                                              12,
-                                              10,
-                                              12,
-                                              10,
+                                ),
+                                Center(
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      AnimatedBuilder(
+                                        animation: _videoLockedTransition,
+                                        builder: (context, _) {
+                                          final t = Curves.easeOutBack
+                                              .transform(
+                                                _videoLockedTransition.value,
+                                              );
+                                          final pulse = _videoPulse.value;
+                                          final breathe = math.sin(
+                                            pulse * math.pi * 2,
+                                          );
+                                          final breathingScale =
+                                              1 + 0.006 * breathe;
+                                          final scale =
+                                              (1 - 0.02 * t) * breathingScale;
+                                          final dy = -8.0 * t;
+                                          return Transform.translate(
+                                            offset: Offset(0, dy),
+                                            child: Transform.scale(
+                                              scale: scale,
+                                              child: ClipRRect(
+                                                borderRadius:
+                                                    BorderRadius.circular(32),
+                                                child: Container(
+                                                  width: 320,
+                                                  height: 320,
+                                                  color: theme
+                                                      .colorScheme
+                                                      .surface
+                                                      .withOpacity(
+                                                        isDark ? 0.55 : 0.80,
+                                                      ),
+                                                  child: Stack(
+                                                    children: [
+                                                      if (_videoCameraController !=
+                                                              null &&
+                                                          _videoCameraController!
+                                                              .value
+                                                              .isInitialized)
+                                                        Positioned.fill(
+                                                          child: ClipRRect(
+                                                            borderRadius:
+                                                                BorderRadius.circular(
+                                                                  32,
+                                                                ),
+                                                            child: FittedBox(
+                                                              fit: BoxFit.cover,
+                                                              child: SizedBox(
+                                                                width:
+                                                                    _videoCameraController!
+                                                                        .value
+                                                                        .previewSize
+                                                                        ?.height ??
+                                                                    320,
+                                                                height:
+                                                                    _videoCameraController!
+                                                                        .value
+                                                                        .previewSize
+                                                                        ?.width ??
+                                                                    320,
+                                                                child: CameraPreview(
+                                                                  _videoCameraController!,
+                                                                ),
+                                                              ),
+                                                            ),
+                                                          ),
+                                                        )
+                                                      else
+                                                        Center(
+                                                          child: HugeIcon(
+                                                            icon: HugeIcons
+                                                                .strokeRoundedVideo01,
+                                                            size: 92,
+                                                            color: theme
+                                                                .colorScheme
+                                                                .onSurface
+                                                                .withOpacity(
+                                                                  0.85,
+                                                                ),
+                                                          ),
+                                                        ),
+                                                    ],
+                                                  ),
+                                                ),
+                                              ),
                                             ),
-                                            child: SizedBox(
-                                              width: 320,
-                                              child: Row(
-                                                children: [
-                                                  AnimatedSwitcher(
-                                                    duration: const Duration(
-                                                      milliseconds: 220,
+                                          );
+                                        },
+                                      ),
+                                      const SizedBox(height: 14),
+                                      AnimatedBuilder(
+                                        animation: _videoLockedTransition,
+                                        builder: (context, _) {
+                                          final t = Curves.easeOut.transform(
+                                            _videoLockedTransition.value,
+                                          );
+                                          final capsuleScale = 1 + 0.01 * t;
+                                          final capsuleDy = -4.0 * t;
+                                          return Transform.translate(
+                                            offset: Offset(0, capsuleDy),
+                                            child: Transform.scale(
+                                              scale: capsuleScale,
+                                              child: GlassSurface(
+                                                borderRadius: 999,
+                                                blurSigma: 12,
+                                                padding:
+                                                    const EdgeInsets.fromLTRB(
+                                                      12,
+                                                      10,
+                                                      12,
+                                                      10,
                                                     ),
-                                                    switchInCurve:
-                                                        Curves.easeOut,
-                                                    switchOutCurve:
-                                                        Curves.easeOut,
-                                                    transitionBuilder: (child, anim) {
-                                                      final curved =
-                                                          CurvedAnimation(
-                                                            parent: anim,
-                                                            curve:
-                                                                Curves.easeOut,
-                                                          );
-                                                      return FadeTransition(
-                                                        opacity: curved,
-                                                        child: ScaleTransition(
-                                                          scale: Tween<double>(
-                                                            begin: 0.92,
-                                                            end: 1.0,
-                                                          ).animate(curved),
-                                                          child: SlideTransition(
-                                                            position:
-                                                                Tween<Offset>(
+                                                child: SizedBox(
+                                                  width: 320,
+                                                  child: Row(
+                                                    children: [
+                                                      AnimatedSwitcher(
+                                                        duration:
+                                                            const Duration(
+                                                              milliseconds: 220,
+                                                            ),
+                                                        switchInCurve:
+                                                            Curves.easeOut,
+                                                        switchOutCurve:
+                                                            Curves.easeOut,
+                                                        transitionBuilder: (child, anim) {
+                                                          final curved =
+                                                              CurvedAnimation(
+                                                                parent: anim,
+                                                                curve: Curves
+                                                                    .easeOut,
+                                                              );
+                                                          return FadeTransition(
+                                                            opacity: curved,
+                                                            child: ScaleTransition(
+                                                              scale:
+                                                                  Tween<double>(
+                                                                    begin: 0.92,
+                                                                    end: 1.0,
+                                                                  ).animate(
+                                                                    curved,
+                                                                  ),
+                                                              child: SlideTransition(
+                                                                position: Tween<Offset>(
                                                                   begin:
                                                                       const Offset(
                                                                         -0.10,
@@ -1784,183 +1819,197 @@ class _ChatPageState extends State<ChatPage>
                                                                       ),
                                                                   end: Offset
                                                                       .zero,
-                                                                ).animate(
-                                                                  curved,
-                                                                ),
-                                                            child: child,
-                                                          ),
-                                                        ),
-                                                      );
-                                                    },
-                                                    child: _videoRecordingLocked
-                                                        ? Row(
-                                                            key: const ValueKey(
-                                                              'locked_cancel',
+                                                                ).animate(curved),
+                                                                child: child,
+                                                              ),
                                                             ),
-                                                            mainAxisSize:
-                                                                MainAxisSize
-                                                                    .min,
-                                                            children: [
-                                                              GestureDetector(
-                                                                onTap: () {
-                                                                  _cancelVideoRecording
-                                                                      ?.call();
-                                                                },
-                                                                child: GlassSurface(
-                                                                  borderRadius:
-                                                                      12,
-                                                                  blurSigma: 12,
-                                                                  width: 32,
-                                                                  height: 32,
-                                                                  child: Center(
-                                                                    child: HugeIcon(
-                                                                      icon: HugeIcons
-                                                                          .strokeRoundedCancel01,
-                                                                      size: 20,
-                                                                      color: theme
-                                                                          .colorScheme
-                                                                          .onSurface
-                                                                          .withOpacity(
-                                                                            0.9,
-                                                                          ),
+                                                          );
+                                                        },
+                                                        child:
+                                                            _videoRecordingLocked
+                                                            ? Row(
+                                                                key: const ValueKey(
+                                                                  'locked_cancel',
+                                                                ),
+                                                                mainAxisSize:
+                                                                    MainAxisSize
+                                                                        .min,
+                                                                children: [
+                                                                  GestureDetector(
+                                                                    onTap: () {
+                                                                      _cancelVideoRecording
+                                                                          ?.call();
+                                                                    },
+                                                                    child: GlassSurface(
+                                                                      borderRadius:
+                                                                          12,
+                                                                      blurSigma:
+                                                                          12,
+                                                                      width: 32,
+                                                                      height:
+                                                                          32,
+                                                                      child: Center(
+                                                                        child: HugeIcon(
+                                                                          icon:
+                                                                              HugeIcons.strokeRoundedCancel01,
+                                                                          size:
+                                                                              20,
+                                                                          color: theme
+                                                                              .colorScheme
+                                                                              .onSurface
+                                                                              .withOpacity(
+                                                                                0.9,
+                                                                              ),
+                                                                        ),
+                                                                      ),
                                                                     ),
                                                                   ),
+                                                                  const SizedBox(
+                                                                    width: 10,
+                                                                  ),
+                                                                ],
+                                                              )
+                                                            : const SizedBox(
+                                                                key: ValueKey(
+                                                                  'hold_cancel_spacer',
                                                                 ),
                                                               ),
-                                                              const SizedBox(
-                                                                width: 10,
-                                                              ),
-                                                            ],
-                                                          )
-                                                        : const SizedBox(
-                                                            key: ValueKey(
-                                                              'hold_cancel_spacer',
-                                                            ),
-                                                          ),
-                                                  ),
-                                                  AnimatedBuilder(
-                                                    animation: _videoPulse,
-                                                    builder: (context, _) {
-                                                      final p = Curves.easeInOut
-                                                          .transform(
-                                                            _videoPulse.value,
-                                                          );
-                                                      final s = 1.0 + 0.18 * p;
-                                                      final o =
-                                                          0.55 + 0.45 * (1 - p);
-                                                      return Transform.scale(
-                                                        scale: s,
-                                                        child: Container(
-                                                          width: 8,
-                                                          height: 8,
-                                                          decoration: BoxDecoration(
-                                                            color: theme
-                                                                .colorScheme
-                                                                .error
-                                                                .withOpacity(o),
-                                                            shape:
-                                                                BoxShape.circle,
-                                                            boxShadow: [
-                                                              BoxShadow(
+                                                      ),
+                                                      AnimatedBuilder(
+                                                        animation: _videoPulse,
+                                                        builder: (context, _) {
+                                                          final p = Curves
+                                                              .easeInOut
+                                                              .transform(
+                                                                _videoPulse
+                                                                    .value,
+                                                              );
+                                                          final s =
+                                                              1.0 + 0.18 * p;
+                                                          final o =
+                                                              0.55 +
+                                                              0.45 * (1 - p);
+                                                          return Transform.scale(
+                                                            scale: s,
+                                                            child: Container(
+                                                              width: 8,
+                                                              height: 8,
+                                                              decoration: BoxDecoration(
                                                                 color: theme
                                                                     .colorScheme
                                                                     .error
                                                                     .withOpacity(
-                                                                      0.35 * o,
+                                                                      o,
                                                                     ),
-                                                                blurRadius:
-                                                                    10 + 10 * p,
-                                                                spreadRadius:
-                                                                    0.5 +
-                                                                    0.8 * p,
-                                                              ),
-                                                            ],
-                                                          ),
-                                                        ),
-                                                      );
-                                                    },
-                                                  ),
-                                                  const SizedBox(width: 8),
-                                                  Text(
-                                                    _videoRecordingDurationText,
-                                                    style: theme
-                                                        .textTheme
-                                                        .titleSmall
-                                                        ?.copyWith(
-                                                          fontWeight:
-                                                              FontWeight.w800,
-                                                          color: theme
-                                                              .colorScheme
-                                                              .onSurface,
-                                                        ),
-                                                  ),
-                                                  const SizedBox(width: 10),
-                                                  Expanded(
-                                                    child: AnimatedBuilder(
-                                                      animation:
-                                                          _videoProgressController,
-                                                      builder: (context, _) {
-                                                        return ClipRRect(
-                                                          borderRadius:
-                                                              BorderRadius.circular(
-                                                                999,
-                                                              ),
-                                                          child: Container(
-                                                            height: 4,
-                                                            color: theme
-                                                                .colorScheme
-                                                                .onSurface
-                                                                .withOpacity(
-                                                                  isDark
-                                                                      ? 0.18
-                                                                      : 0.12,
-                                                                ),
-                                                            alignment: Alignment
-                                                                .centerLeft,
-                                                            child: FractionallySizedBox(
-                                                              widthFactor:
-                                                                  _videoProgressController
-                                                                      .value
-                                                                      .clamp(
-                                                                        0.0,
-                                                                        1.0,
-                                                                      ),
-                                                              child: Container(
-                                                                color: theme
-                                                                    .colorScheme
-                                                                    .primary,
+                                                                shape: BoxShape
+                                                                    .circle,
+                                                                boxShadow: [
+                                                                  BoxShadow(
+                                                                    color: theme
+                                                                        .colorScheme
+                                                                        .error
+                                                                        .withOpacity(
+                                                                          0.35 *
+                                                                              o,
+                                                                        ),
+                                                                    blurRadius:
+                                                                        10 +
+                                                                        10 * p,
+                                                                    spreadRadius:
+                                                                        0.5 +
+                                                                        0.8 * p,
+                                                                  ),
+                                                                ],
                                                               ),
                                                             ),
-                                                          ),
-                                                        );
-                                                      },
-                                                    ),
-                                                  ),
-                                                  AnimatedSwitcher(
-                                                    duration: const Duration(
-                                                      milliseconds: 220,
-                                                    ),
-                                                    switchInCurve:
-                                                        Curves.easeOut,
-                                                    switchOutCurve:
-                                                        Curves.easeOut,
-                                                    transitionBuilder: (child, anim) {
-                                                      final curved =
-                                                          CurvedAnimation(
-                                                            parent: anim,
-                                                            curve:
-                                                                Curves.easeOut,
                                                           );
-                                                      return FadeTransition(
-                                                        opacity: curved,
-                                                        child: ScaleTransition(
-                                                          scale: Tween<double>(
-                                                            begin: 0.92,
-                                                            end: 1.0,
-                                                          ).animate(curved),
-                                                          child: SlideTransition(
-                                                            position:
-                                                                Tween<Offset>(
+                                                        },
+                                                      ),
+                                                      const SizedBox(width: 8),
+                                                      Text(
+                                                        _videoRecordingDurationText,
+                                                        style: theme
+                                                            .textTheme
+                                                            .titleSmall
+                                                            ?.copyWith(
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w800,
+                                                              color: theme
+                                                                  .colorScheme
+                                                                  .onSurface,
+                                                            ),
+                                                      ),
+                                                      const SizedBox(width: 10),
+                                                      Expanded(
+                                                        child: AnimatedBuilder(
+                                                          animation:
+                                                              _videoProgressController,
+                                                          builder: (context, _) {
+                                                            return ClipRRect(
+                                                              borderRadius:
+                                                                  BorderRadius.circular(
+                                                                    999,
+                                                                  ),
+                                                              child: Container(
+                                                                height: 4,
+                                                                color: theme
+                                                                    .colorScheme
+                                                                    .onSurface
+                                                                    .withOpacity(
+                                                                      isDark
+                                                                          ? 0.18
+                                                                          : 0.12,
+                                                                    ),
+                                                                alignment: Alignment
+                                                                    .centerLeft,
+                                                                child: FractionallySizedBox(
+                                                                  widthFactor:
+                                                                      _videoProgressController
+                                                                          .value
+                                                                          .clamp(
+                                                                            0.0,
+                                                                            1.0,
+                                                                          ),
+                                                                  child: Container(
+                                                                    color: theme
+                                                                        .colorScheme
+                                                                        .primary,
+                                                                  ),
+                                                                ),
+                                                              ),
+                                                            );
+                                                          },
+                                                        ),
+                                                      ),
+                                                      AnimatedSwitcher(
+                                                        duration:
+                                                            const Duration(
+                                                              milliseconds: 220,
+                                                            ),
+                                                        switchInCurve:
+                                                            Curves.easeOut,
+                                                        switchOutCurve:
+                                                            Curves.easeOut,
+                                                        transitionBuilder: (child, anim) {
+                                                          final curved =
+                                                              CurvedAnimation(
+                                                                parent: anim,
+                                                                curve: Curves
+                                                                    .easeOut,
+                                                              );
+                                                          return FadeTransition(
+                                                            opacity: curved,
+                                                            child: ScaleTransition(
+                                                              scale:
+                                                                  Tween<double>(
+                                                                    begin: 0.92,
+                                                                    end: 1.0,
+                                                                  ).animate(
+                                                                    curved,
+                                                                  ),
+                                                              child: SlideTransition(
+                                                                position: Tween<Offset>(
                                                                   begin:
                                                                       const Offset(
                                                                         0.12,
@@ -1968,178 +2017,186 @@ class _ChatPageState extends State<ChatPage>
                                                                       ),
                                                                   end: Offset
                                                                       .zero,
-                                                                ).animate(
-                                                                  curved,
-                                                                ),
-                                                            child: child,
-                                                          ),
-                                                        ),
-                                                      );
-                                                    },
-                                                    child: _videoRecordingLocked
-                                                        ? Row(
-                                                            key: const ValueKey(
-                                                              'locked_actions',
-                                                            ),
-                                                            mainAxisSize:
-                                                                MainAxisSize
-                                                                    .min,
-                                                            children: [
-                                                              const SizedBox(
-                                                                width: 10,
+                                                                ).animate(curved),
+                                                                child: child,
                                                               ),
-                                                              GestureDetector(
-                                                                onTap: () async {
-                                                                  if (!mounted) {
-                                                                    return;
-                                                                  }
-                                                                  final next =
-                                                                      !_videoFlashEnabled;
-                                                                  setState(() {
-                                                                    _videoFlashEnabled =
-                                                                        next;
-                                                                  });
-                                                                  final ok =
-                                                                      await _setVideoTorch
-                                                                          ?.call(
+                                                            ),
+                                                          );
+                                                        },
+                                                        child:
+                                                            _videoRecordingLocked
+                                                            ? Row(
+                                                                key: const ValueKey(
+                                                                  'locked_actions',
+                                                                ),
+                                                                mainAxisSize:
+                                                                    MainAxisSize
+                                                                        .min,
+                                                                children: [
+                                                                  const SizedBox(
+                                                                    width: 10,
+                                                                  ),
+                                                                  GestureDetector(
+                                                                    onTap: () async {
+                                                                      if (!mounted) {
+                                                                        return;
+                                                                      }
+                                                                      final next =
+                                                                          !_videoFlashEnabled;
+                                                                      setState(() {
+                                                                        _videoFlashEnabled =
+                                                                            next;
+                                                                      });
+                                                                      final ok =
+                                                                          await _setVideoTorch?.call(
                                                                             next,
                                                                           );
-                                                                  if (ok !=
-                                                                          true &&
-                                                                      mounted) {
-                                                                    setState(() {
-                                                                      _videoFlashEnabled =
-                                                                          !next;
-                                                                    });
-                                                                  }
-                                                                },
-                                                                child: GlassSurface(
-                                                                  borderRadius:
-                                                                      12,
-                                                                  blurSigma: 12,
-                                                                  width: 32,
-                                                                  height: 32,
-                                                                  child: Center(
-                                                                    child: HugeIcon(
-                                                                      icon:
-                                                                          _videoFlashEnabled
-                                                                          ? HugeIcons.strokeRoundedFlash
-                                                                          : HugeIcons.strokeRoundedFlashOff,
-                                                                      size: 20,
-                                                                      color: theme
-                                                                          .colorScheme
-                                                                          .onSurface
-                                                                          .withOpacity(
-                                                                            0.9,
-                                                                          ),
+                                                                      if (ok !=
+                                                                              true &&
+                                                                          mounted) {
+                                                                        setState(() {
+                                                                          _videoFlashEnabled =
+                                                                              !next;
+                                                                        });
+                                                                      }
+                                                                    },
+                                                                    child: GlassSurface(
+                                                                      borderRadius:
+                                                                          12,
+                                                                      blurSigma:
+                                                                          12,
+                                                                      width: 32,
+                                                                      height:
+                                                                          32,
+                                                                      child: Center(
+                                                                        child: HugeIcon(
+                                                                          icon:
+                                                                              _videoFlashEnabled
+                                                                              ? HugeIcons.strokeRoundedFlash
+                                                                              : HugeIcons.strokeRoundedFlashOff,
+                                                                          size:
+                                                                              20,
+                                                                          color: theme
+                                                                              .colorScheme
+                                                                              .onSurface
+                                                                              .withOpacity(
+                                                                                0.9,
+                                                                              ),
+                                                                        ),
+                                                                      ),
                                                                     ),
                                                                   ),
-                                                                ),
-                                                              ),
-                                                              const SizedBox(
-                                                                width: 8,
-                                                              ),
-                                                              GestureDetector(
-                                                                onTap: () async {
-                                                                  if (!mounted) {
-                                                                    return;
-                                                                  }
-                                                                  final next =
-                                                                      !_videoUseFrontCamera;
-                                                                  setState(() {
-                                                                    _videoUseFrontCamera =
-                                                                        next;
-                                                                  });
-                                                                  final ok =
-                                                                      await _setVideoUseFrontCamera
-                                                                          ?.call(
+                                                                  const SizedBox(
+                                                                    width: 8,
+                                                                  ),
+                                                                  GestureDetector(
+                                                                    onTap: () async {
+                                                                      if (!mounted) {
+                                                                        return;
+                                                                      }
+                                                                      final next =
+                                                                          !_videoUseFrontCamera;
+                                                                      setState(() {
+                                                                        _videoUseFrontCamera =
+                                                                            next;
+                                                                      });
+                                                                      final ok =
+                                                                          await _setVideoUseFrontCamera?.call(
                                                                             next,
                                                                           );
-                                                                  if (ok !=
-                                                                          true &&
-                                                                      mounted) {
-                                                                    setState(() {
-                                                                      _videoUseFrontCamera =
-                                                                          !next;
-                                                                    });
-                                                                  }
-                                                                },
-                                                                child: GlassSurface(
-                                                                  borderRadius:
-                                                                      12,
-                                                                  blurSigma: 12,
-                                                                  width: 32,
-                                                                  height: 32,
-                                                                  child: Center(
-                                                                    child: HugeIcon(
-                                                                      icon: HugeIcons
-                                                                          .strokeRoundedExchange01,
-                                                                      size: 20,
-                                                                      color: theme
-                                                                          .colorScheme
-                                                                          .onSurface
-                                                                          .withOpacity(
-                                                                            0.9,
-                                                                          ),
+                                                                      if (ok !=
+                                                                              true &&
+                                                                          mounted) {
+                                                                        setState(() {
+                                                                          _videoUseFrontCamera =
+                                                                              !next;
+                                                                        });
+                                                                      }
+                                                                    },
+                                                                    child: GlassSurface(
+                                                                      borderRadius:
+                                                                          12,
+                                                                      blurSigma:
+                                                                          12,
+                                                                      width: 32,
+                                                                      height:
+                                                                          32,
+                                                                      child: Center(
+                                                                        child: HugeIcon(
+                                                                          icon:
+                                                                              HugeIcons.strokeRoundedExchange01,
+                                                                          size:
+                                                                              20,
+                                                                          color: theme
+                                                                              .colorScheme
+                                                                              .onSurface
+                                                                              .withOpacity(
+                                                                                0.9,
+                                                                              ),
+                                                                        ),
+                                                                      ),
                                                                     ),
                                                                   ),
-                                                                ),
-                                                              ),
-                                                              const SizedBox(
-                                                                width: 8,
-                                                              ),
-                                                              GestureDetector(
-                                                                onTap: () {
-                                                                  _stopVideoRecording
-                                                                      ?.call();
-                                                                },
-                                                                child: GlassSurface(
-                                                                  borderRadius:
-                                                                      12,
-                                                                  blurSigma: 12,
-                                                                  width: 32,
-                                                                  height: 32,
-                                                                  child: Center(
-                                                                    child: HugeIcon(
-                                                                      icon: HugeIcons
-                                                                          .strokeRoundedSent,
-                                                                      size: 20,
-                                                                      color: theme
-                                                                          .colorScheme
-                                                                          .onSurface
-                                                                          .withOpacity(
-                                                                            0.9,
-                                                                          ),
+                                                                  const SizedBox(
+                                                                    width: 8,
+                                                                  ),
+                                                                  GestureDetector(
+                                                                    onTap: () {
+                                                                      _stopVideoRecording
+                                                                          ?.call();
+                                                                    },
+                                                                    child: GlassSurface(
+                                                                      borderRadius:
+                                                                          12,
+                                                                      blurSigma:
+                                                                          12,
+                                                                      width: 32,
+                                                                      height:
+                                                                          32,
+                                                                      child: Center(
+                                                                        child: HugeIcon(
+                                                                          icon:
+                                                                              HugeIcons.strokeRoundedSent,
+                                                                          size:
+                                                                              20,
+                                                                          color: theme
+                                                                              .colorScheme
+                                                                              .onSurface
+                                                                              .withOpacity(
+                                                                                0.9,
+                                                                              ),
+                                                                        ),
+                                                                      ),
                                                                     ),
                                                                   ),
+                                                                ],
+                                                              )
+                                                            : const SizedBox(
+                                                                key: ValueKey(
+                                                                  'hold_actions_spacer',
                                                                 ),
                                                               ),
-                                                            ],
-                                                          )
-                                                        : const SizedBox(
-                                                            key: ValueKey(
-                                                              'hold_actions_spacer',
-                                                            ),
-                                                          ),
+                                                      ),
+                                                    ],
                                                   ),
-                                                ],
+                                                ),
                                               ),
                                             ),
-                                          ),
-                                        ),
-                                      );
-                                    },
+                                          );
+                                        },
+                                      ),
+                                    ],
                                   ),
-                                ],
-                              ),
+                                ),
+                              ],
                             ),
-                          ],
-                        ),
-                      ),
-                  ],
-                );
-              },
-            ),
+                          ),
+                      ],
+                    );
+                  },
+                ),
+              );
+            },
           );
         },
       ),

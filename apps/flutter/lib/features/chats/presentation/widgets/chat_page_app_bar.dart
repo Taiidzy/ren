@@ -11,6 +11,7 @@ class ChatPageAppBar extends StatelessWidget implements PreferredSizeWidget {
   final int selectedCount;
   final bool peerOnline;
   final bool peerTyping;
+  final bool isSyncing;
 
   final VoidCallback onBack;
   final VoidCallback onShareSelected;
@@ -24,6 +25,7 @@ class ChatPageAppBar extends StatelessWidget implements PreferredSizeWidget {
     required this.selectedCount,
     required this.peerOnline,
     required this.peerTyping,
+    required this.isSyncing,
     required this.onBack,
     required this.onShareSelected,
     required this.onDeleteSelected,
@@ -100,12 +102,40 @@ class ChatPageAppBar extends StatelessWidget implements PreferredSizeWidget {
                               ),
                             ),
                             const SizedBox(height: 2),
-                            Text(
-                              peerTyping ? 'Печатает...' : (peerOnline ? 'Online' : 'Offline'),
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: theme.colorScheme.onSurface.withOpacity(0.65),
-                              ),
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  peerTyping
+                                      ? 'Печатает...'
+                                      : (peerOnline ? 'Online' : 'Offline'),
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: theme.colorScheme.onSurface
+                                        .withOpacity(0.65),
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                AnimatedSwitcher(
+                                  duration: const Duration(milliseconds: 180),
+                                  child: isSyncing
+                                      ? SizedBox(
+                                          key: const ValueKey('chat_syncing'),
+                                          width: 10,
+                                          height: 10,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 1.8,
+                                            color: theme.colorScheme.onSurface
+                                                .withOpacity(0.75),
+                                          ),
+                                        )
+                                      : const SizedBox(
+                                          key: ValueKey('chat_idle'),
+                                          width: 10,
+                                          height: 10,
+                                        ),
+                                ),
+                              ],
                             ),
                           ],
                         ),

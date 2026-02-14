@@ -9,7 +9,7 @@ import 'package:ren/features/profile/domain/security_session.dart';
 import 'package:ren/shared/widgets/glass_overlays.dart';
 import 'package:ren/shared/widgets/glass_surface.dart';
 
-class SecurityPage {
+class SecuritySheet {
   static Future<void> show(BuildContext context) async {
     await GlassOverlays.showGlassBottomSheet<void>(
       context,

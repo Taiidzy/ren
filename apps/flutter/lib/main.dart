@@ -123,7 +123,7 @@ class MyApp extends StatelessWidget {
           update: (_, api, __) => SplashRepository(api),
         ),
         ProxyProvider2<ChatsApi, RenSdk, ChatsRepository>(
-          update: (_, api, sdk, __) => ChatsRepository(api, sdk),
+          update: (_, api, sdk, prev) => prev ?? ChatsRepository(api, sdk),
         ),
 
         Provider<RealtimeClient>(create: (_) => RealtimeClient()),

@@ -5,9 +5,10 @@ import 'package:ren/core/secure/secure_storage.dart';
 import 'package:ren/features/auth/presentation/auth_page.dart';
 import 'package:ren/features/profile/presentation/widgets/personalization_sheet.dart';
 import 'package:ren/features/profile/presentation/widgets/profile_edit_sheet.dart';
+import 'package:ren/features/profile/presentation/widgets/storage_sheet.dart';
 import 'package:ren/features/profile/data/profile_repository.dart';
 import 'package:ren/features/profile/presentation/profile_store.dart';
-import 'package:ren/features/profile/presentation/security_page.dart';
+import 'package:ren/features/profile/presentation/widgets/security_sheet.dart';
 import 'package:ren/shared/widgets/adaptive_page_route.dart';
 import 'package:ren/shared/widgets/background.dart';
 import 'package:ren/shared/widgets/glass_overlays.dart';
@@ -236,7 +237,7 @@ class ProfileMenuPage extends StatelessWidget {
                         materialIcon: Icons.shield_outlined,
                         title: 'Безопасность',
                         onTap: () {
-                          SecurityPage.show(context);
+                          SecuritySheet.show(context);
                         },
                       ),
                       const SizedBox(height: 10),
@@ -257,7 +258,9 @@ class ProfileMenuPage extends StatelessWidget {
                       _MenuItem(
                         icon: HugeIcons.strokeRoundedDatabase,
                         title: 'Хранилище',
-                        onTap: () {},
+                        onTap: () {
+                          StorageSheet.show(context);
+                        },
                       ),
                       const SizedBox(height: 12),
                       _MenuItem(
