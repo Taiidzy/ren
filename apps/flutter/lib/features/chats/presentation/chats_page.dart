@@ -32,10 +32,7 @@ class _UserSearchTile extends StatelessWidget {
   final ChatUser user;
   final VoidCallback onTap;
 
-  const _UserSearchTile({
-    required this.user,
-    required this.onTap,
-  });
+  const _UserSearchTile({required this.user, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -55,8 +52,9 @@ class _UserSearchTile extends StatelessWidget {
             CircleAvatar(
               radius: 22,
               backgroundColor: theme.colorScheme.primary.withOpacity(0.08),
-              backgroundImage:
-                  (user.avatarUrl.isNotEmpty) ? NetworkImage(user.avatarUrl) : null,
+              backgroundImage: (user.avatarUrl.isNotEmpty)
+                  ? NetworkImage(user.avatarUrl)
+                  : null,
               child: (user.avatarUrl.isEmpty)
                   ? Text(
                       user.name.isNotEmpty ? user.name[0].toUpperCase() : '?',
@@ -108,7 +106,8 @@ class _UserSearchTile extends StatelessWidget {
 }
 
 class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
-  late Future<List<ChatPreview>> _chatsFuture;
+  List<ChatPreview> _chats = const [];
+  bool _isInitialChatsLoading = true;
   final Map<String, bool> _online = {};
   final Map<int, ChatPreview> _chatIndex = {};
   RealtimeClient? _rt;
@@ -127,16 +126,83 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
   Timer? _topBannerTimer;
 
   Future<void> _reloadChats() async {
+    await _syncChats();
+  }
+
+  bool _isChatsDifferent(List<ChatPreview> a, List<ChatPreview> b) {
+    if (identical(a, b)) return false;
+    if (a.length != b.length) return true;
+    for (var i = 0; i < a.length; i++) {
+      final x = a[i];
+      final y = b[i];
+      if (x.id != y.id ||
+          x.user.id != y.user.id ||
+          x.user.name != y.user.name ||
+          x.user.avatarUrl != y.user.avatarUrl ||
+          x.lastMessage != y.lastMessage ||
+          x.isFavorite != y.isFavorite ||
+          x.lastMessageAt.millisecondsSinceEpoch !=
+              y.lastMessageAt.millisecondsSinceEpoch) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  Future<void> _loadChatsOfflineFirst() async {
+    final repo = context.read<ChatsRepository>();
+    final cached = await repo.getCachedChats();
+    if (!mounted) return;
     setState(() {
-      _chatsFuture = context.read<ChatsRepository>().fetchChats();
+      _chats = cached;
+      _isInitialChatsLoading = false;
     });
+    if (cached.isNotEmpty) {
+      unawaited(_ensureRealtime(cached));
+    }
+    unawaited(_syncChats());
+  }
+
+  Future<void> _syncChats() async {
+    final repo = context.read<ChatsRepository>();
+    try {
+      final fresh = await repo.syncChats();
+      if (!mounted) return;
+      if (_isChatsDifferent(_chats, fresh)) {
+        setState(() {
+          _chats = fresh;
+          _isInitialChatsLoading = false;
+        });
+      } else if (_isInitialChatsLoading) {
+        setState(() {
+          _isInitialChatsLoading = false;
+        });
+      }
+      if (fresh.isNotEmpty) {
+        unawaited(_ensureRealtime(fresh));
+      }
+    } catch (e) {
+      if (!mounted) return;
+      if (_isInitialChatsLoading) {
+        setState(() {
+          _isInitialChatsLoading = false;
+        });
+      }
+      if (_chats.isEmpty) {
+        showGlassSnack(
+          context,
+          'Не удалось синхронизировать чаты: $e',
+          kind: GlassSnackKind.error,
+        );
+      }
+    }
   }
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _chatsFuture = context.read<ChatsRepository>().fetchChats();
+    unawaited(_loadChatsOfflineFirst());
     _searchCtrl.addListener(() {
       _searchDebounce?.cancel();
       _searchDebounce = Timer(const Duration(milliseconds: 250), () {
@@ -211,7 +277,10 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                     borderRadius: 18,
                     blurSigma: 14,
                     borderColor: baseInk.withOpacity(isDark ? 0.18 : 0.10),
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 12,
+                    ),
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(maxWidth: 520),
                       child: Row(
@@ -244,7 +313,8 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                                   maxLines: 2,
                                   overflow: TextOverflow.ellipsis,
                                   style: theme.textTheme.bodySmall?.copyWith(
-                                    color: theme.colorScheme.onSurface.withOpacity(0.85),
+                                    color: theme.colorScheme.onSurface
+                                        .withOpacity(0.85),
                                     fontWeight: FontWeight.w600,
                                   ),
                                 ),
@@ -255,7 +325,9 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                           Icon(
                             Icons.chevron_right,
                             size: 18,
-                            color: theme.colorScheme.onSurface.withOpacity(0.65),
+                            color: theme.colorScheme.onSurface.withOpacity(
+                              0.65,
+                            ),
                           ),
                         ],
                       ),
@@ -299,23 +371,26 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
     });
 
     final repo = context.read<ChatsRepository>();
-    repo.searchUsers(q).then((users) {
-      if (!mounted) return;
-      if (seq != _userSearchSeq) return;
-      setState(() {
-        _isSearchingUsers = false;
-        _userSearchError = null;
-        _userResults = users;
-      });
-    }).catchError((e) {
-      if (!mounted) return;
-      if (seq != _userSearchSeq) return;
-      setState(() {
-        _isSearchingUsers = false;
-        _userSearchError = e.toString();
-        _userResults = const [];
-      });
-    });
+    repo
+        .searchUsers(q)
+        .then((users) {
+          if (!mounted) return;
+          if (seq != _userSearchSeq) return;
+          setState(() {
+            _isSearchingUsers = false;
+            _userSearchError = null;
+            _userResults = users;
+          });
+        })
+        .catchError((e) {
+          if (!mounted) return;
+          if (seq != _userSearchSeq) return;
+          setState(() {
+            _isSearchingUsers = false;
+            _userSearchError = e.toString();
+            _userResults = const [];
+          });
+        });
   }
 
   Future<void> _createChatFlow() async {
@@ -328,9 +403,7 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
           content: TextField(
             controller: controller,
             keyboardType: TextInputType.number,
-            decoration: const InputDecoration(
-              labelText: 'ID пользователя',
-            ),
+            decoration: const InputDecoration(labelText: 'ID пользователя'),
           ),
           actions: [
             TextButton(
@@ -371,20 +444,19 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
       if (!mounted) return;
       await _reloadChats();
       if (!mounted) return;
-      Navigator.of(context).push(
-        adaptivePageRoute((_) => ChatPage(chat: chat)),
-      );
+      Navigator.of(
+        context,
+      ).push(adaptivePageRoute((_) => ChatPage(chat: chat)));
     } catch (e) {
       if (!mounted) return;
-      showGlassSnack(
-        context,
-        e.toString(),
-        kind: GlassSnackKind.error,
-      );
+      showGlassSnack(context, e.toString(), kind: GlassSnackKind.error);
     }
   }
 
-  Future<void> _showChatActionsAt(ChatPreview chat, Offset globalPosition) async {
+  Future<void> _showChatActionsAt(
+    ChatPreview chat,
+    Offset globalPosition,
+  ) async {
     final chatId = int.tryParse(chat.id) ?? 0;
     if (chatId <= 0) return;
 
@@ -394,21 +466,17 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
       entries: [
         RenContextMenuEntry.action(
           RenContextMenuAction<String>(
-            icon: HugeIcon(
-              icon: HugeIcons.strokeRoundedStar,
-              size: 20,
-            ),
-            label: chat.isFavorite ? 'Убрать из избранного' : 'Добавить в избранное',
+            icon: HugeIcon(icon: HugeIcons.strokeRoundedStar, size: 20),
+            label: chat.isFavorite
+                ? 'Убрать из избранного'
+                : 'Добавить в избранное',
             value: 'favorite',
           ),
         ),
         const RenContextMenuEntry.divider(),
         RenContextMenuEntry.action(
           RenContextMenuAction<String>(
-            icon: HugeIcon(
-              icon: HugeIcons.strokeRoundedDelete02,
-              size: 20,
-            ),
+            icon: HugeIcon(icon: HugeIcons.strokeRoundedDelete02, size: 20),
             label: 'Удалить чат',
             danger: true,
             value: 'delete',
@@ -427,11 +495,7 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
         await _reloadChats();
       } catch (e) {
         if (!mounted) return;
-        showGlassSnack(
-          context,
-          e.toString(),
-          kind: GlassSnackKind.error,
-        );
+        showGlassSnack(context, e.toString(), kind: GlassSnackKind.error);
       }
       return;
     }
@@ -465,11 +529,7 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
         await _reloadChats();
       } catch (e) {
         if (!mounted) return;
-        showGlassSnack(
-          context,
-          e.toString(),
-          kind: GlassSnackKind.error,
-        );
+        showGlassSnack(context, e.toString(), kind: GlassSnackKind.error);
       }
     }
   }
@@ -481,7 +541,9 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
     _chatIndex
       ..clear()
       ..addEntries(
-        chats.map((c) => MapEntry(int.tryParse(c.id) ?? 0, c)).where((e) => e.key > 0),
+        chats
+            .map((c) => MapEntry(int.tryParse(c.id) ?? 0, c))
+            .where((e) => e.key > 0),
       );
 
     if (!rt.isConnected) {
@@ -511,7 +573,9 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
       if (evt.type == 'notification_new') {
         final repo = context.read<ChatsRepository>();
         final chatIdDyn = evt.data['chat_id'] ?? evt.data['chatId'];
-        final chatId = (chatIdDyn is int) ? chatIdDyn : int.tryParse('$chatIdDyn') ?? 0;
+        final chatId = (chatIdDyn is int)
+            ? chatIdDyn
+            : int.tryParse('$chatIdDyn') ?? 0;
         if (chatId <= 0) return;
 
         final msg = evt.data['message'];
@@ -546,9 +610,9 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
             onTap: () {
               final c = _chatIndex[chatId];
               if (c == null) return;
-              Navigator.of(context).push(
-                adaptivePageRoute((_) => ChatPage(chat: c)),
-              );
+              Navigator.of(
+                context,
+              ).push(adaptivePageRoute((_) => ChatPage(chat: c)));
             },
           );
         } else {
@@ -583,13 +647,48 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
       animationDuration: Duration(seconds: 20),
       child: Scaffold(
         appBar: AppBar(
-          title: Text(
-            'Чаты',
-            style: TextStyle(
-              fontSize: 22,
-              fontWeight: FontWeight.bold,
-              color: theme.colorScheme.onSurface,
-            ),
+          title: ValueListenableBuilder<bool>(
+            valueListenable: context.read<ChatsRepository>().chatsSyncing,
+            builder: (context, isSyncing, _) {
+              return SizedBox(
+                width: 124,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    Text(
+                      'Чаты',
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                        color: theme.colorScheme.onSurface,
+                      ),
+                    ),
+                    Positioned(
+                      right: 0,
+                      child: AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 180),
+                        child: isSyncing
+                            ? SizedBox(
+                                key: const ValueKey('syncing'),
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: theme.colorScheme.onSurface
+                                      .withOpacity(0.8),
+                                ),
+                              )
+                            : const SizedBox(
+                                key: ValueKey('idle'),
+                                width: 14,
+                                height: 14,
+                              ),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
           ),
           centerTitle: true,
           backgroundColor: Colors.transparent,
@@ -603,9 +702,9 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                 size: 24.0,
               ),
               onPressed: () {
-                Navigator.of(context).push(
-                  adaptivePageRoute((_) => const ProfileMenuPage()),
-                );
+                Navigator.of(
+                  context,
+                ).push(adaptivePageRoute((_) => const ProfileMenuPage()));
               },
             ),
           ],
@@ -639,17 +738,21 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                       minWidth: 0,
                       minHeight: 0,
                     ),
-                    suffixIcon: (_query.isEmpty) ? null : IconButton(
-                      icon: HugeIcon(
-                        icon: HugeIcons.strokeRoundedCancel01,
-                        color: theme.colorScheme.onSurface.withOpacity(0.8),
-                        size: 16.0,
-                      ),
-                      onPressed: () {
-                        _searchCtrl.clear();
-                        FocusScope.of(context).unfocus();
-                      },
-                    ),
+                    suffixIcon: (_query.isEmpty)
+                        ? null
+                        : IconButton(
+                            icon: HugeIcon(
+                              icon: HugeIcons.strokeRoundedCancel01,
+                              color: theme.colorScheme.onSurface.withOpacity(
+                                0.8,
+                              ),
+                              size: 16.0,
+                            ),
+                            onPressed: () {
+                              _searchCtrl.clear();
+                              FocusScope.of(context).unfocus();
+                            },
+                          ),
                     filled: false,
                     isDense: true,
                     contentPadding: const EdgeInsets.symmetric(
@@ -669,16 +772,10 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
         ),
         body: SafeArea(
           bottom: false,
-          child: FutureBuilder<List<ChatPreview>>(
-            future: _chatsFuture,
-            builder: (context, snapshot) {
-              final chats = snapshot.data ?? const <ChatPreview>[];
-
-              final isLoading = snapshot.connectionState == ConnectionState.waiting;
-
-              if (snapshot.hasData) {
-                Future.microtask(() => _ensureRealtime(chats));
-              }
+          child: Builder(
+            builder: (context) {
+              final chats = _chats;
+              final isLoading = _isInitialChatsLoading && chats.isEmpty;
 
               final decoratedChats = chats
                   .map(
@@ -713,82 +810,103 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                   .where((u) => !chatUserIds.contains(u.id))
                   .toList(growable: false);
 
-              final favoriteChats = decoratedChats.where((c) => c.isFavorite).take(5).toList();
+              final favoriteChats = decoratedChats
+                  .where((c) => c.isFavorite)
+                  .take(5)
+                  .toList();
               final favorites = favoriteChats.map((c) => c.user).toList();
 
               return Padding(
                 padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
                 child: Column(
                   children: [
-                    favoriteChats.isEmpty ? const SizedBox.shrink() : GlassSurface(
-                      borderRadius: 22,
-                      blurSigma: 14,
-                      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
-                      borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.12),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Center(
-                            child: Text(
-                              'Избранные',
-                              style: theme.textTheme.titleMedium?.copyWith(
-                                fontWeight: FontWeight.w600,
-                                color: theme.colorScheme.onSurface,
-                              ),
+                    favoriteChats.isEmpty
+                        ? const SizedBox.shrink()
+                        : GlassSurface(
+                            borderRadius: 22,
+                            blurSigma: 14,
+                            padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+                            borderColor: baseInk.withOpacity(
+                              isDark ? 0.20 : 0.12,
                             ),
-                          ),
-                          const SizedBox(height: 12),
-                          SizedBox(
-                            height: 74,
-                            child: LayoutBuilder(
-                              builder: (context, constraints) {
-                                return SingleChildScrollView(
-                                  scrollDirection: Axis.horizontal,
-                                  child: ConstrainedBox(
-                                    constraints: BoxConstraints(
-                                      minWidth: constraints.maxWidth,
-                                    ),
-                                    child: Row(
-                                      mainAxisAlignment: MainAxisAlignment.center,
-                                      children: [
-                                        if (isLoading) ...[
-                                          for (int i = 0; i < 5; i++) ...[
-                                            if (i != 0) const SizedBox(width: 12),
-                                            const _SkeletonFavoriteItem(),
-                                          ]
-                                        ] else ...[
-                                          for (int i = 0; i < favorites.length; i++) ...[
-                                            if (i != 0) const SizedBox(width: 12),
-                                            _FavoriteItem(
-                                              user: favorites[i],
-                                              onTap: () {
-                                                final chat = favoriteChats[i];
-                                                Navigator.of(context).push(
-                                                  adaptivePageRoute(
-                                                    (_) => ChatPage(chat: chat),
-                                                  ),
-                                                );
-                                              },
-                                            ),
-                                          ],
-                                        ],
-                                      ],
-                                    ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Center(
+                                  child: Text(
+                                    'Избранные',
+                                    style: theme.textTheme.titleMedium
+                                        ?.copyWith(
+                                          fontWeight: FontWeight.w600,
+                                          color: theme.colorScheme.onSurface,
+                                        ),
                                   ),
-                                );
-                              },
+                                ),
+                                const SizedBox(height: 12),
+                                SizedBox(
+                                  height: 74,
+                                  child: LayoutBuilder(
+                                    builder: (context, constraints) {
+                                      return SingleChildScrollView(
+                                        scrollDirection: Axis.horizontal,
+                                        child: ConstrainedBox(
+                                          constraints: BoxConstraints(
+                                            minWidth: constraints.maxWidth,
+                                          ),
+                                          child: Row(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.center,
+                                            children: [
+                                              if (isLoading) ...[
+                                                for (int i = 0; i < 5; i++) ...[
+                                                  if (i != 0)
+                                                    const SizedBox(width: 12),
+                                                  const _SkeletonFavoriteItem(),
+                                                ],
+                                              ] else ...[
+                                                for (
+                                                  int i = 0;
+                                                  i < favorites.length;
+                                                  i++
+                                                ) ...[
+                                                  if (i != 0)
+                                                    const SizedBox(width: 12),
+                                                  _FavoriteItem(
+                                                    user: favorites[i],
+                                                    onTap: () {
+                                                      final chat =
+                                                          favoriteChats[i];
+                                                      Navigator.of(
+                                                        context,
+                                                      ).push(
+                                                        adaptivePageRoute(
+                                                          (_) => ChatPage(
+                                                            chat: chat,
+                                                          ),
+                                                        ),
+                                                      );
+                                                    },
+                                                  ),
+                                                ],
+                                              ],
+                                            ],
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                        ],
-                      ),
-                    ),
                     const SizedBox(height: 14),
                     Expanded(
                       child: isLoading
                           ? ListView.separated(
                               padding: const EdgeInsets.only(bottom: 16),
                               itemCount: 10,
-                              separatorBuilder: (_, __) => const SizedBox(height: 10),
+                              separatorBuilder: (_, __) =>
+                                  const SizedBox(height: 10),
                               itemBuilder: (context, index) {
                                 return const _SkeletonChatTile();
                               },
@@ -809,10 +927,13 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                                 for (final chat in visibleChats) ...[
                                   _ChatTile(
                                     chat: chat,
-                                    onLongPressAt: (pos) => _showChatActionsAt(chat, pos),
+                                    onLongPressAt: (pos) =>
+                                        _showChatActionsAt(chat, pos),
                                     onTap: () {
                                       Navigator.of(context).push(
-                                        adaptivePageRoute((_) => ChatPage(chat: chat)),
+                                        adaptivePageRoute(
+                                          (_) => ChatPage(chat: chat),
+                                        ),
                                       );
                                     },
                                   ),
@@ -821,7 +942,8 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                                 if (_query.trim().isNotEmpty) ...[
                                   Divider(
                                     height: 28,
-                                    color: theme.colorScheme.onSurface.withOpacity(0.18),
+                                    color: theme.colorScheme.onSurface
+                                        .withOpacity(0.18),
                                   ),
                                   Text(
                                     'Пользователи',
@@ -833,33 +955,44 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                                   const SizedBox(height: 10),
                                   if (_isSearchingUsers) ...[
                                     Padding(
-                                      padding: const EdgeInsets.symmetric(vertical: 10),
+                                      padding: const EdgeInsets.symmetric(
+                                        vertical: 10,
+                                      ),
                                       child: Center(
                                         child: SizedBox(
                                           width: 20,
                                           height: 20,
-                                          child: CircularProgressIndicator(strokeWidth: 2),
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                          ),
                                         ),
                                       ),
                                     ),
                                   ] else if (_userSearchError != null) ...[
                                     Padding(
-                                      padding: const EdgeInsets.symmetric(vertical: 10),
+                                      padding: const EdgeInsets.symmetric(
+                                        vertical: 10,
+                                      ),
                                       child: Text(
                                         _userSearchError ?? '',
-                                        style: theme.textTheme.bodySmall?.copyWith(
-                                          color: theme.colorScheme.error,
-                                        ),
+                                        style: theme.textTheme.bodySmall
+                                            ?.copyWith(
+                                              color: theme.colorScheme.error,
+                                            ),
                                       ),
                                     ),
                                   ] else if (visibleUsers.isEmpty) ...[
                                     Padding(
-                                      padding: const EdgeInsets.symmetric(vertical: 10),
+                                      padding: const EdgeInsets.symmetric(
+                                        vertical: 10,
+                                      ),
                                       child: Text(
                                         'Ничего не найдено',
-                                        style: theme.textTheme.bodySmall?.copyWith(
-                                          color: theme.colorScheme.onSurface.withOpacity(0.6),
-                                        ),
+                                        style: theme.textTheme.bodySmall
+                                            ?.copyWith(
+                                              color: theme.colorScheme.onSurface
+                                                  .withOpacity(0.6),
+                                            ),
                                       ),
                                     ),
                                   ] else ...[
@@ -867,7 +1000,8 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                                       _UserSearchTile(
                                         user: user,
                                         onTap: () async {
-                                          final peerId = int.tryParse(user.id) ?? 0;
+                                          final peerId =
+                                              int.tryParse(user.id) ?? 0;
                                           if (peerId <= 0) return;
 
                                           final existing = decoratedChats
@@ -881,19 +1015,25 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                                           if (existing != null) {
                                             if (!context.mounted) return;
                                             Navigator.of(context).push(
-                                              adaptivePageRoute((_) => ChatPage(chat: existing)),
+                                              adaptivePageRoute(
+                                                (_) => ChatPage(chat: existing),
+                                              ),
                                             );
                                             return;
                                           }
 
                                           try {
-                                            final repo = context.read<ChatsRepository>();
-                                            final chat = await repo.createPrivateChat(peerId);
+                                            final repo = context
+                                                .read<ChatsRepository>();
+                                            final chat = await repo
+                                                .createPrivateChat(peerId);
                                             if (!context.mounted) return;
                                             await _reloadChats();
                                             if (!context.mounted) return;
                                             Navigator.of(context).push(
-                                              adaptivePageRoute((_) => ChatPage(chat: chat)),
+                                              adaptivePageRoute(
+                                                (_) => ChatPage(chat: chat),
+                                              ),
                                             );
                                           } catch (e) {
                                             if (!context.mounted) return;
@@ -1052,50 +1192,50 @@ class _ChatTile extends StatelessWidget {
         borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.12),
         child: Row(
           children: [
-          RenAvatar(
-            url: chat.user.avatarUrl,
-            name: chat.user.name,
-            isOnline: chat.user.isOnline,
-            size: 44,
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  chat.user.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                    color: theme.colorScheme.onSurface,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  chat.lastMessage,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: theme.colorScheme.onSurface.withOpacity(0.70),
-                  ),
-                ),
-              ],
+            RenAvatar(
+              url: chat.user.avatarUrl,
+              name: chat.user.name,
+              isOnline: chat.user.isOnline,
+              size: 44,
             ),
-          ),
-          const SizedBox(width: 10),
-          Text(
-            _formatTime(chat.lastMessageAt),
-            style: TextStyle(
-              fontSize: 11,
-              color: theme.colorScheme.onSurface.withOpacity(0.60),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    chat.user.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: theme.colorScheme.onSurface,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    chat.lastMessage,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: theme.colorScheme.onSurface.withOpacity(0.70),
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+            const SizedBox(width: 10),
+            Text(
+              _formatTime(chat.lastMessageAt),
+              style: TextStyle(
+                fontSize: 11,
+                color: theme.colorScheme.onSurface.withOpacity(0.60),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -1114,11 +1254,7 @@ class _Pressable extends StatefulWidget {
   final VoidCallback? onTap;
   final GestureLongPressStartCallback? onLongPressStart;
 
-  const _Pressable({
-    required this.child,
-    this.onTap,
-    this.onLongPressStart,
-  });
+  const _Pressable({required this.child, this.onTap, this.onLongPressStart});
 
   @override
   State<_Pressable> createState() => _PressableState();

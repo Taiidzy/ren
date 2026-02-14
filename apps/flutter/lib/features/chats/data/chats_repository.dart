@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:ren/core/constants/api_url.dart';
+import 'package:ren/core/cache/chats_local_cache.dart';
 import 'package:ren/core/constants/keys.dart';
 import 'package:ren/core/sdk/ren_sdk.dart';
 import 'package:ren/core/secure/secure_storage.dart';
@@ -25,9 +26,15 @@ class OutgoingAttachment {
 class ChatsRepository {
   final ChatsApi api;
   final RenSdk renSdk;
+  final ChatsLocalCache _localCache = ChatsLocalCache();
+
+  final ValueNotifier<bool> chatsSyncing = ValueNotifier<bool>(false);
+  final Map<int, ValueNotifier<bool>> _messagesSyncingByChat =
+      <int, ValueNotifier<bool>>{};
 
   final Map<int, Uint8List> _ciphertextMemoryCache = <int, Uint8List>{};
-  final Map<int, Future<Uint8List>> _ciphertextInFlight = <int, Future<Uint8List>>{};
+  final Map<int, Future<Uint8List>> _ciphertextInFlight =
+      <int, Future<Uint8List>>{};
 
   Directory? _tempDirCache;
   Future<Directory>? _tempDirInFlight;
@@ -41,6 +48,13 @@ class ChatsRepository {
   final Map<int, String> _peerPublicKeyB64Cache = <int, String>{};
 
   ChatsRepository(this.api, this.renSdk);
+
+  ValueNotifier<bool> messagesSyncingNotifier(int chatId) {
+    return _messagesSyncingByChat.putIfAbsent(
+      chatId,
+      () => ValueNotifier<bool>(false),
+    );
+  }
 
   Future<Directory> _getTempDir() async {
     final cached = _tempDirCache;
@@ -161,19 +175,22 @@ class ChatsRepository {
     }
   }
 
-  Future<List<ChatPreview>> fetchChats() async {
+  Future<List<ChatPreview>> _fetchChatsRemote() async {
     final raw = await api.listChats();
     final items = <ChatPreview>[];
 
     for (final it in raw) {
       final m = (it as Map).cast<String, dynamic>();
-      final id = (m['id'] is int) ? m['id'] as int : int.tryParse('${m['id']}') ?? 0;
+      final id = (m['id'] is int)
+          ? m['id'] as int
+          : int.tryParse('${m['id']}') ?? 0;
       final peerId = (m['peer_id'] is int)
           ? m['peer_id'] as int
           : int.tryParse('${m['peer_id']}');
       final peerUsername = (m['peer_username'] as String?) ?? '';
       final peerAvatar = (m['peer_avatar'] as String?) ?? '';
-      final isFavorite = (m['is_favorite'] == true) || (m['isFavorite'] == true);
+      final isFavorite =
+          (m['is_favorite'] == true) || (m['isFavorite'] == true);
       final updatedAtStr = (m['updated_at'] as String?) ?? '';
 
       final updatedAt = DateTime.tryParse(updatedAtStr) ?? DateTime.now();
@@ -198,7 +215,32 @@ class ChatsRepository {
       );
     }
 
+    items.sort((a, b) => b.lastMessageAt.compareTo(a.lastMessageAt));
     return items;
+  }
+
+  Future<List<ChatPreview>> getCachedChats() async {
+    return _localCache.readChats();
+  }
+
+  Future<List<ChatPreview>> fetchChats() async {
+    final items = await _fetchChatsRemote();
+    await _localCache.writeChats(items);
+    return items;
+  }
+
+  Future<List<ChatPreview>> syncChats() async {
+    if (chatsSyncing.value) {
+      return getCachedChats();
+    }
+    chatsSyncing.value = true;
+    try {
+      final fresh = await _fetchChatsRemote();
+      await _localCache.writeChats(fresh);
+      return fresh;
+    } finally {
+      chatsSyncing.value = false;
+    }
   }
 
   Future<List<ChatUser>> searchUsers(String query, {int limit = 15}) async {
@@ -207,7 +249,9 @@ class ChatsRepository {
     for (final it in raw) {
       if (it is! Map) continue;
       final m = it.cast<String, dynamic>();
-      final id = (m['id'] is int) ? m['id'] as int : int.tryParse('${m['id']}') ?? 0;
+      final id = (m['id'] is int)
+          ? m['id'] as int
+          : int.tryParse('${m['id']}') ?? 0;
       final username = (m['username'] as String?) ?? '';
       final avatar = (m['avatar'] as String?) ?? '';
       if (id <= 0) continue;
@@ -241,7 +285,7 @@ class ChatsRepository {
     }
   }
 
-  Future<List<ChatMessage>> fetchMessages(
+  Future<List<ChatMessage>> _fetchMessagesRemote(
     int chatId, {
     int? limit,
     int? beforeId,
@@ -261,7 +305,9 @@ class ChatsRepository {
 
     for (final it in raw) {
       final m = (it as Map).cast<String, dynamic>();
-      final messageId = (m['id'] is int) ? m['id'] as int : int.tryParse('${m['id']}') ?? 0;
+      final messageId = (m['id'] is int)
+          ? m['id'] as int
+          : int.tryParse('${m['id']}') ?? 0;
       final senderId = (m['sender_id'] is int)
           ? m['sender_id'] as int
           : int.tryParse('${m['sender_id']}') ?? 0;
@@ -272,7 +318,8 @@ class ChatsRepository {
           : int.tryParse('${replyDyn ?? ''}');
 
       final createdAtStr = (m['created_at'] as String?) ?? '';
-      final createdAt = (DateTime.tryParse(createdAtStr) ?? DateTime.now()).toLocal();
+      final createdAt = (DateTime.tryParse(createdAtStr) ?? DateTime.now())
+          .toLocal();
 
       final encrypted = (m['message'] as String?) ?? '';
 
@@ -285,6 +332,8 @@ class ChatsRepository {
 
       final msgKey = decrypted.key;
       final attachments = await _tryDecryptAttachments(
+        chatId: chatId,
+        messageId: messageId,
         metadata: m['metadata'],
         msgKeyB64: msgKey,
       );
@@ -297,7 +346,9 @@ class ChatsRepository {
           text: decrypted.text,
           attachments: attachments,
           sentAt: createdAt,
-          replyToMessageId: (replyId != null && replyId > 0) ? replyId.toString() : null,
+          replyToMessageId: (replyId != null && replyId > 0)
+              ? replyId.toString()
+              : null,
         ),
       );
     }
@@ -305,7 +356,87 @@ class ChatsRepository {
     return out;
   }
 
+  Future<List<ChatMessage>> getCachedMessages(int chatId) async {
+    return _localCache.readMessages(chatId);
+  }
+
+  Future<void> _writeMessagesCache(
+    int chatId,
+    List<ChatMessage> remote, {
+    int? beforeId,
+    int? afterId,
+  }) async {
+    if (beforeId == null && afterId == null) {
+      await _localCache.writeMessages(chatId, remote);
+      return;
+    }
+
+    final cached = await _localCache.readMessages(chatId);
+    final byId = <String, ChatMessage>{};
+    for (final m in cached) {
+      byId[m.id] = m;
+    }
+    for (final m in remote) {
+      byId[m.id] = m;
+    }
+    final merged = byId.values.toList()
+      ..sort((a, b) => a.sentAt.compareTo(b.sentAt));
+    await _localCache.writeMessages(chatId, merged);
+  }
+
+  Future<List<ChatMessage>> fetchMessages(
+    int chatId, {
+    int? limit,
+    int? beforeId,
+    int? afterId,
+  }) async {
+    final remote = await _fetchMessagesRemote(
+      chatId,
+      limit: limit,
+      beforeId: beforeId,
+      afterId: afterId,
+    );
+    await _writeMessagesCache(
+      chatId,
+      remote,
+      beforeId: beforeId,
+      afterId: afterId,
+    );
+    return remote;
+  }
+
+  Future<List<ChatMessage>> syncMessages(
+    int chatId, {
+    int? limit,
+    int? beforeId,
+    int? afterId,
+  }) async {
+    final notifier = messagesSyncingNotifier(chatId);
+    if (!notifier.value) {
+      notifier.value = true;
+    }
+    try {
+      final remote = await _fetchMessagesRemote(
+        chatId,
+        limit: limit,
+        beforeId: beforeId,
+        afterId: afterId,
+      );
+      await _writeMessagesCache(
+        chatId,
+        remote,
+        beforeId: beforeId,
+        afterId: afterId,
+      );
+      return remote;
+    } finally {
+      notifier.value = false;
+    }
+  }
+
   Future<List<ChatAttachment>> _tryDecryptAttachments({
+    required int chatId,
+    required int messageId,
     required dynamic metadata,
     required String? msgKeyB64,
   }) async {
@@ -320,7 +451,6 @@ class ChatsRepository {
       return const [];
     }
 
-    final dir = await _getTempDir();
     final outByIndex = List<ChatAttachment?>.filled(metadata.length, null);
 
     Future<void> processAt(int index) async {
@@ -361,18 +491,23 @@ class ChatsRepository {
       }
 
       final bytes = (ciphertextBytes != null)
-          ? await renSdk.decryptFileBytesRawWithKeyBytes(ciphertextBytes, nonce, keyBytes)
+          ? await renSdk.decryptFileBytesRawWithKeyBytes(
+              ciphertextBytes,
+              nonce,
+              keyBytes,
+            )
           : (ciphertextB64 != null && ciphertextB64.isNotEmpty)
-              ? await renSdk.decryptFileBytes(ciphertextB64, nonce, key)
-              : null;
+          ? await renSdk.decryptFileBytes(ciphertextB64, nonce, key)
+          : null;
       if (bytes == null) return;
 
-      final safeName = filename.isNotEmpty
-          ? filename
-          : 'file_${DateTime.now().millisecondsSinceEpoch}';
-      final path = '${dir.path}/$safeName';
-      final f = File(path);
-      await f.writeAsBytes(bytes);
+      final path = await _localCache.saveMediaBytes(
+        chatId: chatId,
+        messageId: messageId,
+        fileId: fileId,
+        filename: filename,
+        bytes: bytes,
+      );
 
       outByIndex[index] = ChatAttachment(
         localPath: path,
@@ -443,24 +578,37 @@ class ChatsRepository {
       return (text: '[encrypted]', key: null);
     }
 
-    String? asString(dynamic v) => (v is String && v.trim().isNotEmpty) ? v.trim() : null;
+    String? asString(dynamic v) =>
+        (v is String && v.trim().isNotEmpty) ? v.trim() : null;
 
     final wrapped = asString(env['key']) ?? asString(env['wrapped']);
-    final eph = asString(env['ephem_pub_key']) ?? asString(env['ephemeral_public_key']);
+    final eph =
+        asString(env['ephem_pub_key']) ?? asString(env['ephemeral_public_key']);
     final wrapNonce = asString(env['iv']) ?? asString(env['nonce']);
 
     if (wrapped == null || eph == null || wrapNonce == null) {
-      debugPrint('decrypt: missing wrapped/eph/nonce in envelope for user=$myUserId');
+      debugPrint(
+        'decrypt: missing wrapped/eph/nonce in envelope for user=$myUserId',
+      );
       return (text: '[encrypted]', key: null);
     }
 
-    final msgKeyBytes = renSdk.unwrapSymmetricKeyBytes(wrapped, eph, wrapNonce, priv);
+    final msgKeyBytes = renSdk.unwrapSymmetricKeyBytes(
+      wrapped,
+      eph,
+      wrapNonce,
+      priv,
+    );
     if (msgKeyBytes == null || msgKeyBytes.isEmpty) {
       return (text: '[encrypted]', key: null);
     }
 
     final msgKey = base64Encode(msgKeyBytes);
-    final decrypted = renSdk.decryptMessageWithKeyBytes(ciphertext, nonce, msgKeyBytes);
+    final decrypted = renSdk.decryptMessageWithKeyBytes(
+      ciphertext,
+      nonce,
+      msgKeyBytes,
+    );
     if (decrypted == null) {
       debugPrint('decrypt: decryptMessage failed');
     }
@@ -489,9 +637,12 @@ class ChatsRepository {
       userIds: [myUserId, peerId],
     );
 
-    final id = (json['id'] is int) ? json['id'] as int : int.tryParse('${json['id']}') ?? 0;
+    final id = (json['id'] is int)
+        ? json['id'] as int
+        : int.tryParse('${json['id']}') ?? 0;
 
-    final isFavorite = (json['is_favorite'] == true) || (json['isFavorite'] == true);
+    final isFavorite =
+        (json['is_favorite'] == true) || (json['isFavorite'] == true);
 
     return ChatPreview(
       id: id.toString(),
@@ -562,7 +713,9 @@ class ChatsRepository {
         'privLen=${myPrivateKeyB64.length} pubLen=${myPublicKeyB64.length} '
         'wrappedLen=${selfWrapped.length} ephLen=${selfEph.length}',
       );
-      throw Exception('Ошибка E2EE: не удалось развернуть собственный envelope (ключи не совпадают)');
+      throw Exception(
+        'Ошибка E2EE: не удалось развернуть собственный envelope (ключи не совпадают)',
+      );
     }
 
     Map<String, dynamic> env(String userId, Map<String, String> w) {
@@ -633,7 +786,9 @@ class ChatsRepository {
     }
 
     // Upload ciphertext bytes to backend (store server-side)
-    final ciphertextBytes = base64Decode((encFile['ciphertext'] ?? '').toString());
+    final ciphertextBytes = base64Decode(
+      (encFile['ciphertext'] ?? '').toString(),
+    );
     final uploadResp = await api.uploadMedia(
       chatId: chatId,
       ciphertextBytes: ciphertextBytes,
@@ -681,7 +836,7 @@ class ChatsRepository {
         'enc_file': null,
         'nonce': encFile['nonce'],
         'file_creation_date': null,
-      }
+      },
     ];
 
     return {
@@ -746,7 +901,9 @@ class ChatsRepository {
       final filename = att.filename.isNotEmpty
           ? att.filename
           : 'file_${DateTime.now().millisecondsSinceEpoch}';
-      final mimetype = att.mimetype.isNotEmpty ? att.mimetype : 'application/octet-stream';
+      final mimetype = att.mimetype.isNotEmpty
+          ? att.mimetype
+          : 'application/octet-stream';
 
       final encFile = await renSdk.encryptFile(
         Uint8List.fromList(att.bytes),
@@ -758,7 +915,9 @@ class ChatsRepository {
         throw Exception('Не удалось зашифровать файл');
       }
 
-      final ciphertextBytes = base64Decode((encFile['ciphertext'] ?? '').toString());
+      final ciphertextBytes = base64Decode(
+        (encFile['ciphertext'] ?? '').toString(),
+      );
       final uploadResp = await api.uploadMedia(
         chatId: chatId,
         ciphertextBytes: ciphertextBytes,
@@ -766,7 +925,9 @@ class ChatsRepository {
         mimetype: mimetype,
       );
       final uploadedId = uploadResp['file_id'];
-      final fileId = (uploadedId is int) ? uploadedId : int.tryParse('$uploadedId') ?? 0;
+      final fileId = (uploadedId is int)
+          ? uploadedId
+          : int.tryParse('$uploadedId') ?? 0;
       if (fileId <= 0) {
         throw Exception('Не удалось загрузить ciphertext файла');
       }
@@ -815,9 +976,8 @@ class ChatsRepository {
     return decrypted.text;
   }
 
-  Future<({String text, List<ChatAttachment> attachments})> decryptIncomingWsMessageFull({
-    required Map<String, dynamic> message,
-  }) async {
+  Future<({String text, List<ChatAttachment> attachments})>
+  decryptIncomingWsMessageFull({required Map<String, dynamic> message}) async {
     final myUserId = await _getMyUserId();
     final myPrivateKeyB64 = await _getMyPrivateKeyB64();
 
@@ -831,12 +991,82 @@ class ChatsRepository {
       myPrivateKeyB64: myPrivateKeyB64,
     );
 
+    final chatId = (message['chat_id'] is int)
+        ? message['chat_id'] as int
+        : int.tryParse('${message['chat_id'] ?? ''}') ?? 0;
+    final messageId = (message['id'] is int)
+        ? message['id'] as int
+        : int.tryParse('${message['id'] ?? ''}') ?? 0;
+
     final attachments = await _tryDecryptAttachments(
+      chatId: chatId,
+      messageId: messageId,
       metadata: message['metadata'],
       msgKeyB64: decrypted.key,
     );
 
     return (text: decrypted.text, attachments: attachments);
+  }
+
+  Future<int> getCacheLimitBytes() async {
+    return _localCache.readCacheLimitBytes();
+  }
+
+  Future<void> setCacheLimitBytes(int bytes) async {
+    await _localCache.writeCacheLimitBytes(bytes);
+  }
+
+  Future<int> getCacheSizeBytes() async {
+    return _localCache.cacheSizeBytes();
+  }
+
+  Future<CacheUsageStats> getCacheUsageStats() async {
+    return _localCache.usageStats();
+  }
+
+  Future<void> saveChatsSnapshot(List<ChatPreview> chats) async {
+    await _localCache.writeChats(chats);
+  }
+
+  Future<void> saveMessagesSnapshot(
+    int chatId,
+    List<ChatMessage> messages,
+  ) async {
+    await _localCache.writeMessages(chatId, messages);
+  }
+
+  Future<void> clearAppCache({
+    bool includeMedia = true,
+    bool includeChats = true,
+    bool includeMessages = true,
+  }) async {
+    await _localCache.clearCache(
+      includeMedia: includeMedia,
+      includeChats: includeChats,
+      includeMessages: includeMessages,
+    );
+    if (includeChats) {
+      chatsSyncing.value = false;
+    }
+    if (includeMessages) {
+      for (final notifier in _messagesSyncingByChat.values) {
+        notifier.value = false;
+      }
+    }
+    if (includeMedia) {
+      _ciphertextMemoryCache.clear();
+      _ciphertextInFlight.clear();
+      final dir = _ciphertextCacheDirCache;
+      if (dir != null) {
+        try {
+          if (await dir.exists()) {
+            await dir.delete(recursive: true);
+          }
+        } catch (_) {}
+      }
+      _ciphertextCacheDirCache = null;
+      _ciphertextCacheDirInFlight = null;
+    }
   }
 
   String _avatarUrl(String avatarPath) {

@@ -21,8 +21,7 @@ class SplashPage extends StatefulWidget {
   State<SplashPage> createState() => _SplashPageState();
 }
 
-class _SplashPageState extends State<SplashPage>
-    with TickerProviderStateMixin {
+class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
   late AnimationController _backgroundController;
   late AnimationController _solarSystemController;
   late AnimationController _fadeController;
@@ -78,7 +77,7 @@ class _SplashPageState extends State<SplashPage>
 
   void _initSDK() async {
     try {
-      final minSplashDelay = Future.delayed(const Duration(seconds: 3));
+      final minSplashDelay = Future.delayed(const Duration(seconds: 1));
       await minSplashDelay;
 
       // small delay to let animation finish nicely
@@ -100,19 +99,32 @@ class _SplashPageState extends State<SplashPage>
     // Сохраняем контекст до начала асинхронных операций
     final currentContext = context;
     SplashRepository? repo;
-    
+
+    Future<void> goAuth() async {
+      if (!mounted) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        Navigator.of(
+          context,
+        ).pushReplacement(adaptivePageRoute((_) => const AuthPage()));
+      });
+    }
+
+    Future<void> goChats() async {
+      if (!mounted) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        Navigator.of(
+          context,
+        ).pushReplacement(adaptivePageRoute((_) => const ChatsPage()));
+      });
+    }
+
     try {
       final token = await SecureStorage.readKey(Keys.token);
 
       if (token == null || token.isEmpty) {
-        await SecureStorage.deleteAllKeys();
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) {
-            Navigator.of(currentContext).pushReplacement(
-              adaptivePageRoute((_) => const AuthPage()),
-            );
-          }
-        });
+        await goAuth();
         return;
       }
 
@@ -120,53 +132,31 @@ class _SplashPageState extends State<SplashPage>
       try {
         repo = currentContext.read<SplashRepository>();
       } catch (e) {
-        // Если не удалось получить репозиторий (контекст недействителен)
-        if (!mounted) return;
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) {
-            Navigator.of(context).pushReplacement(
-              adaptivePageRoute((_) => const AuthPage()),
-            );
-          }
-        });
+        // Если провайдер недоступен, но токен есть, даём оффлайн-вход в приложение.
+        await goChats();
         return;
       }
 
       final userJson = await repo.checkAuth(token);
       final hasUser = userJson['id'] != null;
 
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        
-        if (hasUser) {
-          Navigator.of(context).pushReplacement(
-            adaptivePageRoute((_) => const ChatsPage()),
-          );
-        } else {
-          Navigator.of(context).pushReplacement(
-            adaptivePageRoute((_) => const AuthPage()),
-          );
-        }
-      });
+      if (hasUser) {
+        await goChats();
+      } else {
+        await goAuth();
+      }
     } on ApiException catch (e) {
       if (e.statusCode == 401) {
+        // Только невалидная сессия должна принудительно разлогинивать.
         await SecureStorage.deleteAllKeys();
+        await goAuth();
+        return;
       }
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          Navigator.of(context).pushReplacement(
-            adaptivePageRoute((_) => const AuthPage()),
-          );
-        }
-      });
+      // Сеть/сервер недоступны: при существующем токене пускаем в приложение оффлайн.
+      await goChats();
     } catch (e) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          Navigator.of(context).pushReplacement(
-            adaptivePageRoute((_) => const AuthPage()),
-          );
-        }
-      });
+      // Любая не-401 ошибка и наличие токена -> главный экран.
+      await goChats();
     }
   }
 
