@@ -36,10 +36,12 @@ PODS:
   - DKPhotoGallery/Resource (0.0.19):
     - SDWebImage
     - SwiftyGif
+  - ffmpeg-kit-ios-min-gpl-new (6.2)
   - ffmpeg_kit_min_gpl (6.0.3-LTS):
-    - ffmpeg_kit_min_gpl/min-gpl-lts (= 6.0.3-LTS)
+    - ffmpeg_kit_min_gpl/min-gpl (= 6.0.3-LTS)
     - Flutter
-  - ffmpeg_kit_min_gpl/min-gpl-lts (6.0.3-LTS):
+  - ffmpeg_kit_min_gpl/min-gpl (6.0.3-LTS):
+    - ffmpeg-kit-ios-min-gpl-new (= 6.2)
     - Flutter
   - file_picker (0.0.1):
     - DKImagePickerController/PhotoGallery
@@ -99,6 +101,7 @@ SPEC REPOS:
   trunk:
     - DKImagePickerController
     - DKPhotoGallery
+    - ffmpeg-kit-ios-min-gpl-new
     - SDWebImage
     - SwiftyGif
 
@@ -144,7 +147,8 @@ SPEC CHECKSUMS:
   device_info_plus: 21fcca2080fbcd348be798aa36c3e5ed849eefbe
   DKImagePickerController: 946cec48c7873164274ecc4624d19e3da4c1ef3c
   DKPhotoGallery: b3834fecb755ee09a593d7c9e389d8b5d6deed60
-  ffmpeg_kit_min_gpl: beac0e239178b83d2702a2abfe5d486c2e23f3c6
+  ffmpeg-kit-ios-min-gpl-new: 1b6b2f2de5ec7a8f555d324724496ae7bfa54d48
+  ffmpeg_kit_min_gpl: 9db9c233b253925df3d53a5ed771abad92cc042a
   file_picker: a0560bc09d61de87f12d246fc47d2119e6ef37be
   Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
   flutter_local_notifications: ad39620c743ea4c15127860f4b5641649a988100
@@ -161,6 +165,6 @@ SPEC CHECKSUMS:
   vibration: ca8104a8875b9c493e15b21b04e456befd0ff6eb
   video_player_avfoundation: dd410b52df6d2466a42d28550e33e4146928280a
 
-PODFILE CHECKSUM: ab16fa4a396731c9dbe8695c77c60bb6021320f3
+PODFILE CHECKSUM: d3e5839bf0ecb578cccc809b466286b626012ee6
 
 COCOAPODS: 1.16.2

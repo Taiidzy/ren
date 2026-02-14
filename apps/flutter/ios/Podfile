@@ -50,14 +50,28 @@ post_install do |installer|
         flags = config.build_settings['OTHER_LDFLAGS']
         flags = [flags] if flags.is_a?(String)
         flags = Array(flags)
+        flags.reject! { |f| f.to_s.include?('RenSDK.xcframework') }
         flags << '$(inherited)' unless flags.include?('$(inherited)')
 
         # RenSDK.xcframework contains a static library (libren_sdk.a). Without force loading,
         # the linker may dead-strip the object files, and Dart FFI won't be able to dlsym ren_* symbols.
-        flags << '-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a'
-        flags << '-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a'
-
         config.build_settings['OTHER_LDFLAGS'] = flags
+
+        device_flags = config.build_settings['OTHER_LDFLAGS[sdk=iphoneos*]']
+        device_flags = [device_flags] if device_flags.is_a?(String)
+        device_flags = Array(device_flags)
+        device_flags.reject! { |f| f.to_s.include?('RenSDK.xcframework') }
+        device_flags << '$(inherited)' unless device_flags.include?('$(inherited)')
+        device_flags << '-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a'
+        config.build_settings['OTHER_LDFLAGS[sdk=iphoneos*]'] = device_flags
+
+        sim_flags = config.build_settings['OTHER_LDFLAGS[sdk=iphonesimulator*]']
+        sim_flags = [sim_flags] if sim_flags.is_a?(String)
+        sim_flags = Array(sim_flags)
+        sim_flags.reject! { |f| f.to_s.include?('RenSDK.xcframework') }
+        sim_flags << '$(inherited)' unless sim_flags.include?('$(inherited)')
+        sim_flags << '-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64_x86_64-simulator/libren_sdk.a'
+        config.build_settings['OTHER_LDFLAGS[sdk=iphonesimulator*]'] = sim_flags
       end
     end
   end

@@ -107,3 +107,4 @@ postgres_data/
 
 apps/flutter/ios/Runner.xcodeproj/project.pbxproj
 apps/flutter/coverage/lcov.info
+third_party/
