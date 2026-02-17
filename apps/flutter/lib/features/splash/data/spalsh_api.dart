@@ -15,6 +15,18 @@ class SplashApi {
 
   SplashApi(this.dio);
 
+  String? _extractServerMessage(dynamic data) {
+    if (data is Map<String, dynamic>) {
+      final value = data['message'] ?? data['error'] ?? data['detail'];
+      if (value is String && value.trim().isNotEmpty) {
+        return value.trim();
+      }
+    } else if (data is String && data.trim().isNotEmpty) {
+      return data.trim();
+    }
+    return null;
+  }
+
   Future<Map<String, dynamic>> verefyToken(String token) async {
     try {
       final response = await dio.get(
@@ -25,6 +37,11 @@ class SplashApi {
       return response.data;
     } on DioException catch (e) {
       final status = e.response?.statusCode;
+      if (e.response == null) {
+        throw ApiException(
+          'Сетевая ошибка (${e.type.name}). Проверьте интернет/VPN и доступ к API.',
+        );
+      }
 
       switch (status) {
         case 401:
@@ -35,13 +52,10 @@ class SplashApi {
             statusCode: 500,
           );
         default:
-          // Сообщение из тела ответа, если есть
-          final serverMessage = (e.response?.data is Map<String, dynamic>)
-              ? (e.response?.data['message'] as String?)
-              : null;
+          final serverMessage = _extractServerMessage(e.response?.data);
           throw ApiException(
             serverMessage ??
-                'Неизвестная ошибка${status != null ? ' ($status)' : ''}.',
+                'Ошибка валидации токена${status != null ? ' ($status)' : ''}.',
             statusCode: status,
           );
       }

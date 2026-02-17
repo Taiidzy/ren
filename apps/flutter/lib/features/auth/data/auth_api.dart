@@ -15,6 +15,18 @@ class AuthApi {
 
   AuthApi(this.dio);
 
+  String? _extractServerMessage(dynamic data) {
+    if (data is Map<String, dynamic>) {
+      final value = data['message'] ?? data['error'] ?? data['detail'];
+      if (value is String && value.trim().isNotEmpty) {
+        return value.trim();
+      }
+    } else if (data is String && data.trim().isNotEmpty) {
+      return data.trim();
+    }
+    return null;
+  }
+
   Future<Map<String, dynamic>> login(
     String login,
     String password,
@@ -29,22 +41,30 @@ class AuthApi {
       return response.data;
     } on DioException catch (e) {
       final status = e.response?.statusCode;
+      if (e.response == null) {
+        throw ApiException(
+          'Сетевая ошибка (${e.type.name}). Проверьте интернет/VPN и доступ к API.',
+        );
+      }
       switch (status) {
         case 401:
           throw ApiException('Неверный логин или пароль.');
         case 500:
           throw ApiException('Ошибка сервера. Попробуйте позже.');
+        case 502:
+        case 503:
+        case 504:
+          throw ApiException('Сервер временно недоступен. Попробуйте позже.');
         default:
-          // Сообщение из тела ответа, если есть
-          final serverMessage = (e.response?.data is Map<String, dynamic>)
-              ? (e.response?.data['message'] as String?)
-              : null;
+          final serverMessage = _extractServerMessage(e.response?.data);
           if (kDebugMode) {
-            debugPrint('AuthApi.login failed (status=$status)');
+            debugPrint(
+              'AuthApi.login failed (status=$status, type=${e.type}, message=${e.message}, data=${e.response?.data})',
+            );
           }
           throw ApiException(
             serverMessage ??
-                'Неизвестная ошибка${status != null ? ' ($status)' : ''}.',
+                'Ошибка авторизации${status != null ? ' ($status)' : ''}.',
           );
       }
     } catch (_) {
@@ -79,10 +99,20 @@ class AuthApi {
       return response.data;
     } on DioException catch (e) {
       final status = e.response?.statusCode;
+      if (e.response == null) {
+        throw ApiException(
+          'Сетевая ошибка (${e.type.name}). Проверьте интернет/VPN и доступ к API.',
+        );
+      }
       switch (status) {
         case 400:
           throw ApiException(
             'Некорректные данные. Проверьте обязательные поля и требования к паролю.',
+          );
+        case 422:
+          throw ApiException(
+            _extractServerMessage(e.response?.data) ??
+                'Данные не прошли валидацию (422).',
           );
         case 409:
           throw ApiException(
@@ -90,14 +120,15 @@ class AuthApi {
           );
         case 500:
           throw ApiException('Ошибка сервера. Попробуйте позже.');
+        case 502:
+        case 503:
+        case 504:
+          throw ApiException('Сервер временно недоступен. Попробуйте позже.');
         default:
-          // Сообщение из тела ответа, если есть
-          final serverMessage = (e.response?.data is Map<String, dynamic>)
-              ? (e.response?.data['message'] as String?)
-              : null;
+          final serverMessage = _extractServerMessage(e.response?.data);
           throw ApiException(
             serverMessage ??
-                'Неизвестная ошибка${status != null ? ' ($status)' : ''}.',
+                'Ошибка регистрации${status != null ? ' ($status)' : ''}.',
           );
       }
     } catch (_) {

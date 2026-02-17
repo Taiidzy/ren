@@ -5,7 +5,7 @@ import 'dart:io' show Platform, File, Directory;
 import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
 
-import 'package:logger/logger.dart';  
+import 'package:logger/logger.dart';
 
 const String _ffiTag = 'RenFFI';
 
@@ -157,12 +157,13 @@ typedef ren_encrypt_message_native =
 typedef ren_decrypt_message_native =
     Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
 
-typedef ren_decrypt_message_with_key_bytes_native = Pointer<Utf8> Function(
-  Pointer<Utf8>,
-  Pointer<Utf8>,
-  Pointer<Uint8>,
-  IntPtr,
-);
+typedef ren_decrypt_message_with_key_bytes_native =
+    Pointer<Utf8> Function(
+      Pointer<Utf8>,
+      Pointer<Utf8>,
+      Pointer<Uint8>,
+      IntPtr,
+    );
 
 // file encrypt/decrypt
 typedef ren_encrypt_file_native =
@@ -173,29 +174,32 @@ typedef ren_encrypt_file_native =
       Pointer<Utf8>,
       Pointer<Utf8>,
     );
-typedef ren_decrypt_file_native = Pointer<Uint8> Function(
-  Pointer<Utf8>,
-  Pointer<Utf8>,
-  Pointer<Utf8>,
-  Pointer<IntPtr>,
-);
+typedef ren_decrypt_file_native =
+    Pointer<Uint8> Function(
+      Pointer<Utf8>,
+      Pointer<Utf8>,
+      Pointer<Utf8>,
+      Pointer<IntPtr>,
+    );
 
-typedef ren_decrypt_file_raw_native = Pointer<Uint8> Function(
-  Pointer<Uint8>,
-  IntPtr,
-  Pointer<Utf8>,
-  Pointer<Utf8>,
-  Pointer<IntPtr>,
-);
+typedef ren_decrypt_file_raw_native =
+    Pointer<Uint8> Function(
+      Pointer<Uint8>,
+      IntPtr,
+      Pointer<Utf8>,
+      Pointer<Utf8>,
+      Pointer<IntPtr>,
+    );
 
-typedef ren_decrypt_file_raw_with_key_bytes_native = Pointer<Uint8> Function(
-  Pointer<Uint8>,
-  IntPtr,
-  Pointer<Utf8>,
-  Pointer<Uint8>,
-  IntPtr,
-  Pointer<IntPtr>,
-);
+typedef ren_decrypt_file_raw_with_key_bytes_native =
+    Pointer<Uint8> Function(
+      Pointer<Uint8>,
+      IntPtr,
+      Pointer<Utf8>,
+      Pointer<Uint8>,
+      IntPtr,
+      Pointer<IntPtr>,
+    );
 
 // wrap / unwrap
 typedef ren_wrap_symmetric_key_native =
@@ -208,13 +212,14 @@ typedef ren_unwrap_symmetric_key_native =
       Pointer<Utf8>,
     );
 
-typedef ren_unwrap_symmetric_key_bytes_native = Pointer<Uint8> Function(
-  Pointer<Utf8>,
-  Pointer<Utf8>,
-  Pointer<Utf8>,
-  Pointer<Utf8>,
-  Pointer<IntPtr>,
-);
+typedef ren_unwrap_symmetric_key_bytes_native =
+    Pointer<Uint8> Function(
+      Pointer<Utf8>,
+      Pointer<Utf8>,
+      Pointer<Utf8>,
+      Pointer<Utf8>,
+      Pointer<IntPtr>,
+    );
 
 // --- Dart-side typedefs (для lookupFunction second generic) ---
 typedef ren_free_string_dart = void Function(Pointer<Utf8>);
@@ -242,12 +247,8 @@ typedef ren_encrypt_message_dart =
 typedef ren_decrypt_message_dart =
     Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
 
-typedef ren_decrypt_message_with_key_bytes_dart = Pointer<Utf8> Function(
-  Pointer<Utf8>,
-  Pointer<Utf8>,
-  Pointer<Uint8>,
-  int,
-);
+typedef ren_decrypt_message_with_key_bytes_dart =
+    Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Uint8>, int);
 typedef ren_encrypt_file_dart =
     RenEncryptedFile Function(
       Pointer<Uint8>,
@@ -256,29 +257,32 @@ typedef ren_encrypt_file_dart =
       Pointer<Utf8>,
       Pointer<Utf8>,
     );
-typedef ren_decrypt_file_dart = Pointer<Uint8> Function(
-  Pointer<Utf8>,
-  Pointer<Utf8>,
-  Pointer<Utf8>,
-  Pointer<IntPtr>,
-);
+typedef ren_decrypt_file_dart =
+    Pointer<Uint8> Function(
+      Pointer<Utf8>,
+      Pointer<Utf8>,
+      Pointer<Utf8>,
+      Pointer<IntPtr>,
+    );
 
-typedef ren_decrypt_file_raw_dart = Pointer<Uint8> Function(
-  Pointer<Uint8>,
-  int,
-  Pointer<Utf8>,
-  Pointer<Utf8>,
-  Pointer<IntPtr>,
-);
+typedef ren_decrypt_file_raw_dart =
+    Pointer<Uint8> Function(
+      Pointer<Uint8>,
+      int,
+      Pointer<Utf8>,
+      Pointer<Utf8>,
+      Pointer<IntPtr>,
+    );
 
-typedef ren_decrypt_file_raw_with_key_bytes_dart = Pointer<Uint8> Function(
-  Pointer<Uint8>,
-  int,
-  Pointer<Utf8>,
-  Pointer<Uint8>,
-  int,
-  Pointer<IntPtr>,
-);
+typedef ren_decrypt_file_raw_with_key_bytes_dart =
+    Pointer<Uint8> Function(
+      Pointer<Uint8>,
+      int,
+      Pointer<Utf8>,
+      Pointer<Uint8>,
+      int,
+      Pointer<IntPtr>,
+    );
 typedef ren_wrap_symmetric_key_dart =
     RenWrappedKey Function(Pointer<Utf8>, Pointer<Utf8>);
 typedef ren_unwrap_symmetric_key_dart =
@@ -289,13 +293,14 @@ typedef ren_unwrap_symmetric_key_dart =
       Pointer<Utf8>,
     );
 
-typedef ren_unwrap_symmetric_key_bytes_dart = Pointer<Uint8> Function(
-  Pointer<Utf8>,
-  Pointer<Utf8>,
-  Pointer<Utf8>,
-  Pointer<Utf8>,
-  Pointer<IntPtr>,
-);
+typedef ren_unwrap_symmetric_key_bytes_dart =
+    Pointer<Uint8> Function(
+      Pointer<Utf8>,
+      Pointer<Utf8>,
+      Pointer<Utf8>,
+      Pointer<Utf8>,
+      Pointer<IntPtr>,
+    );
 
 // ==============================
 // Lookup native functions
@@ -381,11 +386,11 @@ final _ren_decrypt_message = _dylib
       'ren_decrypt_message',
     );
 
-final _ren_decrypt_message_with_key_bytes = _dylib.lookupFunction<
-    ren_decrypt_message_with_key_bytes_native,
-    ren_decrypt_message_with_key_bytes_dart>(
-  'ren_decrypt_message_with_key_bytes',
-);
+final _ren_decrypt_message_with_key_bytes = _dylib
+    .lookupFunction<
+      ren_decrypt_message_with_key_bytes_native,
+      ren_decrypt_message_with_key_bytes_dart
+    >('ren_decrypt_message_with_key_bytes');
 
 final _ren_encrypt_file = _dylib
     .lookupFunction<ren_encrypt_file_native, ren_encrypt_file_dart>(
@@ -398,14 +403,14 @@ final _ren_decrypt_file = _dylib
 
 final _ren_decrypt_file_raw = _dylib
     .lookupFunction<ren_decrypt_file_raw_native, ren_decrypt_file_raw_dart>(
-  'ren_decrypt_file_raw',
-);
+      'ren_decrypt_file_raw',
+    );
 
-final _ren_decrypt_file_raw_with_key_bytes = _dylib.lookupFunction<
-    ren_decrypt_file_raw_with_key_bytes_native,
-    ren_decrypt_file_raw_with_key_bytes_dart>(
-  'ren_decrypt_file_raw_with_key_bytes',
-);
+final _ren_decrypt_file_raw_with_key_bytes = _dylib
+    .lookupFunction<
+      ren_decrypt_file_raw_with_key_bytes_native,
+      ren_decrypt_file_raw_with_key_bytes_dart
+    >('ren_decrypt_file_raw_with_key_bytes');
 
 final _ren_wrap_symmetric_key = _dylib
     .lookupFunction<ren_wrap_symmetric_key_native, ren_wrap_symmetric_key_dart>(
@@ -417,11 +422,11 @@ final _ren_unwrap_symmetric_key = _dylib
       ren_unwrap_symmetric_key_dart
     >('ren_unwrap_symmetric_key');
 
-final _ren_unwrap_symmetric_key_bytes = _dylib.lookupFunction<
-    ren_unwrap_symmetric_key_bytes_native,
-    ren_unwrap_symmetric_key_bytes_dart>(
-  'ren_unwrap_symmetric_key_bytes',
-);
+final _ren_unwrap_symmetric_key_bytes = _dylib
+    .lookupFunction<
+      ren_unwrap_symmetric_key_bytes_native,
+      ren_unwrap_symmetric_key_bytes_dart
+    >('ren_unwrap_symmetric_key_bytes');
 
 // ==============================
 // High-level Dart wrapper
@@ -444,9 +449,15 @@ class RenSdk {
       return;
     }
     try {
+      // Smoke-check native bindings early, so runtime failures are explicit.
+      final nonce = generateNonce();
+      if (nonce.isEmpty) {
+        throw StateError('Ren SDK smoke-check failed: empty nonce');
+      }
       _initialized = true;
-    } catch (e) {
-      rethrow;
+    } catch (e, st) {
+      _logger.e('Ren SDK initialize failed', error: e, stackTrace: st);
+      throw StateError('Ren SDK initialize failed: $e');
     }
   }
 
@@ -803,7 +814,11 @@ class RenSdk {
         final wrapped = _readAndFreeString(res.wrapped_key);
         final eph = _readAndFreeString(res.ephemeral_public_key);
         final nonce = _readAndFreeString(res.nonce);
-        return {'wrapped': wrapped, 'ephemeral_public_key': eph, 'nonce': nonce};
+        return {
+          'wrapped': wrapped,
+          'ephemeral_public_key': eph,
+          'nonce': nonce,
+        };
       });
     } catch (e) {
       rethrow;
