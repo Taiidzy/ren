@@ -11,6 +11,7 @@ use sqlx::Row;
 use crate::AppState;
 use crate::middleware::CurrentUser; // экстрактор текущего пользователя
 use crate::models::auth::UserResponse; // используем общую модель пользователя
+use crate::route::ws::publish_profile_updated_for_user;
 use axum::extract::Multipart as MultipartExtractor;
 use std::path::Component;
 use std::path::Path;
@@ -193,6 +194,8 @@ async fn update_username(
         avatar: row.try_get("avatar").ok(),
     };
 
+    let _ = publish_profile_updated_for_user(&state, id).await;
+
     Ok(Json(user))
 }
 
@@ -361,6 +364,8 @@ async fn update_avatar(
         username: row.try_get("username").unwrap_or_default(),
         avatar: row.try_get("avatar").ok(),
     };
+
+    let _ = publish_profile_updated_for_user(&state, id).await;
 
     Ok(Json(user))
 }

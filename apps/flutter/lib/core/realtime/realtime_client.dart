@@ -47,6 +47,7 @@ class RealtimeClient {
 
   bool _isConnecting = false;
   bool _manualDisconnect = false;
+  bool _hasConnectedBefore = false;
   Duration _currentReconnectDelay = _reconnectMinDelay;
 
   bool get isConnected => _channel != null;
@@ -111,6 +112,14 @@ class RealtimeClient {
       );
 
       _flushState();
+      _events.add(
+        RealtimeEvent('connection', {
+          'type': 'connection',
+          'state': 'connected',
+          'reconnected': _hasConnectedBefore,
+        }),
+      );
+      _hasConnectedBefore = true;
     } catch (e) {
       _channel = null;
       _sub?.cancel();

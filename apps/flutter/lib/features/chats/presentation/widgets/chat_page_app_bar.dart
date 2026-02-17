@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:hugeicons/hugeicons.dart';
 
-import 'package:ren/features/chats/domain/chat_models.dart';
 import 'package:ren/shared/widgets/avatar.dart';
 import 'package:ren/shared/widgets/glass_surface.dart';
 
 class ChatPageAppBar extends StatelessWidget implements PreferredSizeWidget {
-  final ChatPreview chat;
+  final String peerName;
+  final String peerAvatarUrl;
   final bool selectionMode;
   final int selectedCount;
   final bool peerOnline;
@@ -20,7 +20,8 @@ class ChatPageAppBar extends StatelessWidget implements PreferredSizeWidget {
 
   const ChatPageAppBar({
     super.key,
-    required this.chat,
+    required this.peerName,
+    required this.peerAvatarUrl,
     required this.selectionMode,
     required this.selectedCount,
     required this.peerOnline,
@@ -79,8 +80,8 @@ class ChatPageAppBar extends StatelessWidget implements PreferredSizeWidget {
                       )
                     else ...[
                       RenAvatar(
-                        url: chat.user.avatarUrl,
-                        name: chat.user.name,
+                        url: peerAvatarUrl,
+                        name: peerName,
                         isOnline: peerOnline,
                         size: 36,
                       ),
@@ -92,7 +93,7 @@ class ChatPageAppBar extends StatelessWidget implements PreferredSizeWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              chat.user.name,
+                              peerName,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(

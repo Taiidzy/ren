@@ -13,6 +13,7 @@ import 'package:mime/mime.dart';
 import 'package:flutter/services.dart';
 import 'package:camera/camera.dart';
 
+import 'package:ren/core/constants/api_url.dart';
 import 'package:ren/core/constants/keys.dart';
 import 'package:ren/core/secure/secure_storage.dart';
 import 'package:ren/features/chats/data/chats_repository.dart';
@@ -78,6 +79,8 @@ class _ChatPageState extends State<ChatPage>
 
   bool _peerOnline = false;
   bool _peerTyping = false;
+  String _peerName = '';
+  String _peerAvatarUrl = '';
   Timer? _typingDebounce;
 
   bool _isAtBottom = true;
@@ -197,6 +200,14 @@ class _ChatPageState extends State<ChatPage>
       mimetype: attachment.mimetype,
       size: attachment.bytes.length,
     );
+  }
+
+  String _avatarUrl(String avatarPath) {
+    final p = avatarPath.trim();
+    if (p.isEmpty) return '';
+    if (p.startsWith('http://') || p.startsWith('https://')) return p;
+    final normalized = p.startsWith('/') ? p.substring(1) : p;
+    return '${Apiurl.api}/avatars/$normalized';
   }
 
   void _reindexMessages() {
@@ -343,6 +354,8 @@ class _ChatPageState extends State<ChatPage>
       duration: const Duration(milliseconds: 920),
     )..repeat();
     _peerOnline = widget.chat.user.isOnline;
+    _peerName = widget.chat.user.name;
+    _peerAvatarUrl = widget.chat.user.avatarUrl;
     _controller.addListener(_onTextChanged);
     _focusNode.addListener(_onFocusChanged);
     _scrollController.addListener(_onScroll);
@@ -578,6 +591,25 @@ class _ChatPageState extends State<ChatPage>
     await _ensureRealtime();
   }
 
+  Future<void> _resyncAfterReconnect() async {
+    final chatId = int.tryParse(widget.chat.id) ?? 0;
+    if (chatId <= 0) return;
+
+    try {
+      final list = await _repo.syncMessages(chatId, limit: 200);
+      if (!mounted) return;
+      setState(() {
+        _messages
+          ..clear()
+          ..addAll(list);
+        _reindexMessages();
+      });
+      _scheduleScrollToBottom(animated: false);
+    } catch (_) {
+      // ignore transient reconnect sync errors
+    }
+  }
+
   Future<void> _ensureRealtime() async {
     final chatId = int.tryParse(widget.chat.id) ?? 0;
     final repo = context.read<ChatsRepository>();
@@ -621,6 +653,41 @@ class _ChatPageState extends State<ChatPage>
             });
           }
         }
+        return;
+      }
+
+      if (evt.type == 'connection') {
+        final reconnected = evt.data['reconnected'] == true;
+        if (reconnected) {
+          unawaited(_resyncAfterReconnect());
+        }
+        return;
+      }
+
+      if (evt.type == 'profile_updated') {
+        final userDyn = evt.data['user'];
+        if (userDyn is! Map) return;
+        final u = (userDyn is Map<String, dynamic>)
+            ? userDyn
+            : Map<String, dynamic>.fromEntries(
+                userDyn.entries.map((e) => MapEntry(e.key.toString(), e.value)),
+              );
+        final userId = (u['id'] is int)
+            ? u['id'] as int
+            : int.tryParse('${u['id'] ?? ''}') ?? 0;
+        final peerId = widget.chat.peerId ?? 0;
+        if (userId <= 0 || userId != peerId) return;
+
+        final username = ((u['username'] as String?) ?? '').trim();
+        final avatarRaw = ((u['avatar'] as String?) ?? '').trim();
+        final avatar = avatarRaw.isEmpty ? '' : _avatarUrl(avatarRaw);
+        if (!mounted) return;
+        setState(() {
+          if (username.isNotEmpty) {
+            _peerName = username;
+          }
+          _peerAvatarUrl = avatar;
+        });
         return;
       }
 
@@ -1571,7 +1638,8 @@ class _ChatPageState extends State<ChatPage>
                 resizeToAvoidBottomInset: false,
                 extendBodyBehindAppBar: true,
                 appBar: ChatPageAppBar(
-                  chat: widget.chat,
+                  peerName: _peerName,
+                  peerAvatarUrl: _peerAvatarUrl,
                   selectionMode: selectionMode,
                   selectedCount: selectedIds.length,
                   peerOnline: _peerOnline,

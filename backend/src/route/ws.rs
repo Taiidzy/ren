@@ -17,6 +17,7 @@ use tokio::{
 
 use crate::AppState;
 use crate::middleware::{CurrentUser, ensure_member};
+use crate::models::auth::UserResponse;
 use crate::models::chats::{FileMetadata, Message};
 
 pub fn router() -> Router<AppState> {
@@ -124,9 +125,8 @@ enum ServerEvent<'a> {
         user_id: i32,
         status: &'a str,
     }, // online/offline (глобальная)
-    NotificationNew {
-        chat_id: i32,
-        message: OutMessage,
+    ProfileUpdated {
+        user: UserResponse,
     },
 }
 
@@ -139,6 +139,88 @@ struct Subscriptions {
     // Глобальная подписка на личный канал пользователя
     user_forwarder: Option<JoinHandle<()>>,
     contacts: HashSet<i32>,
+}
+
+pub async fn publish_profile_updated_for_user(
+    state: &AppState,
+    user_id: i32,
+) -> Result<(), (axum::http::StatusCode, String)> {
+    let row = sqlx::query(
+        r#"
+        SELECT id, login, username, avatar
+        FROM users
+        WHERE id = $1
+        "#,
+    )
+    .bind(user_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| {
+        (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Ошибка БД: {}", e),
+        )
+    })?;
+
+    let Some(row) = row else {
+        return Err((
+            axum::http::StatusCode::NOT_FOUND,
+            "Пользователь не найден".into(),
+        ));
+    };
+
+    let user = UserResponse {
+        id: row.try_get("id").unwrap_or_default(),
+        login: row.try_get("login").unwrap_or_default(),
+        username: row.try_get("username").unwrap_or_default(),
+        avatar: row.try_get("avatar").ok(),
+    };
+
+    let payload = serde_json::to_string(&ServerEvent::ProfileUpdated { user }).map_err(|_| {
+        (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            "Ошибка сериализации".to_string(),
+        )
+    })?;
+
+    let mut recipients = HashSet::<i32>::new();
+    recipients.insert(user_id);
+    let rows = sqlx::query(
+        r#"
+        SELECT DISTINCT cp2.user_id
+        FROM chat_participants cp1
+        JOIN chat_participants cp2 ON cp2.chat_id = cp1.chat_id
+        WHERE cp1.user_id = $1
+        "#,
+    )
+    .bind(user_id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| {
+        (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Ошибка БД: {}", e),
+        )
+    })?;
+
+    for r in rows {
+        let uid: i32 = r.try_get("user_id").unwrap_or_default();
+        if uid > 0 {
+            recipients.insert(uid);
+        }
+    }
+
+    for uid in recipients {
+        if state.user_hub.get(&uid).is_none() {
+            let (txc, _rx) = broadcast::channel::<String>(200);
+            state.user_hub.insert(uid, txc);
+        }
+        if let Some(entry) = state.user_hub.get(&uid) {
+            let _ = entry.send(payload.clone());
+        }
+    }
+
+    Ok(())
 }
 
 async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
@@ -483,18 +565,11 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                         };
                         // Полная синхронизация идёт через личные user-каналы:
                         // все онлайн-устройства всех участников получают message_new.
-                        // Для не-отправителей дополнительно шлём notification_new.
                         let evt_message_new = serde_json::to_string(&ServerEvent::MessageNew {
                             chat_id,
                             message: msg.clone(),
                         })
                         .ok();
-                        let evt_notification_new =
-                            serde_json::to_string(&ServerEvent::NotificationNew {
-                                chat_id,
-                                message: msg.clone(),
-                            })
-                            .ok();
 
                         let rows = sqlx::query(
                             r#"SELECT user_id FROM chat_participants WHERE chat_id = $1"#,
@@ -518,12 +593,6 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
 
                                 if let Some(evt) = &evt_message_new {
                                     publish_user(&state, uid, evt.clone());
-                                }
-
-                                if uid != user_id {
-                                    if let Some(evt) = &evt_notification_new {
-                                        publish_user(&state, uid, evt.clone());
-                                    }
                                 }
                             }
                         }
