@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:hugeicons/hugeicons.dart';
 import 'package:provider/provider.dart';
+import 'package:ren/core/realtime/realtime_client.dart';
 import 'package:ren/core/secure/secure_storage.dart';
 import 'package:ren/features/auth/presentation/auth_page.dart';
+import 'package:ren/features/chats/data/chats_repository.dart';
 import 'package:ren/features/profile/presentation/widgets/personalization_sheet.dart';
 import 'package:ren/features/profile/presentation/widgets/profile_edit_sheet.dart';
 import 'package:ren/features/profile/presentation/widgets/storage_sheet.dart';
@@ -130,6 +132,10 @@ class ProfileMenuPage extends StatelessWidget {
       await context.read<ProfileRepository>().logout();
     } catch (_) {}
 
+    try {
+      await context.read<RealtimeClient>().disconnect();
+    } catch (_) {}
+    context.read<ChatsRepository>().resetSessionState();
     await SecureStorage.deleteAllKeys();
     if (!context.mounted) return;
 

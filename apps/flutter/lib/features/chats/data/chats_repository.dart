@@ -42,9 +42,6 @@ class ChatsRepository {
   Directory? _ciphertextCacheDirCache;
   Future<Directory>? _ciphertextCacheDirInFlight;
 
-  int? _myUserIdCache;
-  String? _myPrivateKeyB64Cache;
-  String? _myPublicKeyB64Cache;
   final Map<int, String> _peerPublicKeyB64Cache = <int, String>{};
 
   ChatsRepository(this.api, this.renSdk);
@@ -96,34 +93,18 @@ class ChatsRepository {
   }
 
   Future<int> _getMyUserId() async {
-    final cached = _myUserIdCache;
-    if (cached != null && cached > 0) return cached;
     final myUserIdStr = await SecureStorage.readKey(Keys.userId);
-    final myUserId = int.tryParse(myUserIdStr ?? '') ?? 0;
-    _myUserIdCache = myUserId;
-    return myUserId;
+    return int.tryParse(myUserIdStr ?? '') ?? 0;
   }
 
   Future<String?> _getMyPrivateKeyB64() async {
-    final cached = _myPrivateKeyB64Cache;
-    if (cached != null && cached.trim().isNotEmpty) return cached;
     final v = await SecureStorage.readKey(Keys.privateKey);
-    final trimmed = v?.trim();
-    if (trimmed != null && trimmed.isNotEmpty) {
-      _myPrivateKeyB64Cache = trimmed;
-    }
-    return trimmed;
+    return v?.trim();
   }
 
   Future<String?> _getMyPublicKeyB64() async {
-    final cached = _myPublicKeyB64Cache;
-    if (cached != null && cached.trim().isNotEmpty) return cached;
     final v = await SecureStorage.readKey(Keys.publicKey);
-    final trimmed = v?.trim();
-    if (trimmed != null && trimmed.isNotEmpty) {
-      _myPublicKeyB64Cache = trimmed;
-    }
-    return trimmed;
+    return v?.trim();
   }
 
   Future<String> _getPeerPublicKeyB64(int peerId) async {
@@ -629,7 +610,11 @@ class ChatsRepository {
     );
   }
 
-  Future<ChatPreview> createPrivateChat(int peerId) async {
+  Future<ChatPreview> createPrivateChat(
+    int peerId, {
+    String? fallbackPeerName,
+    String? fallbackPeerAvatarUrl,
+  }) async {
     final myUserId = await _getMyUserId();
 
     final json = await api.createChat(
@@ -644,14 +629,26 @@ class ChatsRepository {
     final isFavorite =
         (json['is_favorite'] == true) || (json['isFavorite'] == true);
 
+    final peerUsername = ((json['peer_username'] as String?) ?? '').trim();
+    final fallbackName = (fallbackPeerName ?? '').trim();
+    final resolvedName = peerUsername.isNotEmpty
+        ? peerUsername
+        : (fallbackName.isNotEmpty ? fallbackName : 'User');
+
+    final peerAvatar = ((json['peer_avatar'] as String?) ?? '').trim();
+    final fallbackAvatar = (fallbackPeerAvatarUrl ?? '').trim();
+    final resolvedAvatar = peerAvatar.isNotEmpty
+        ? _avatarUrl(peerAvatar)
+        : fallbackAvatar;
+
     return ChatPreview(
       id: id.toString(),
       peerId: peerId,
       kind: (json['kind'] as String?) ?? 'private',
       user: ChatUser(
         id: peerId.toString(),
-        name: (json['peer_username'] as String?) ?? 'User',
-        avatarUrl: _avatarUrl((json['peer_avatar'] as String?) ?? ''),
+        name: resolvedName,
+        avatarUrl: resolvedAvatar,
         isOnline: false,
       ),
       isFavorite: isFavorite,
@@ -1075,5 +1072,17 @@ class ChatsRepository {
     if (p.startsWith('http://') || p.startsWith('https://')) return p;
     final normalized = p.startsWith('/') ? p.substring(1) : p;
     return '${Apiurl.api}/avatars/$normalized';
+  }
+
+  void resetSessionState() {
+    _peerPublicKeyB64Cache.clear();
+    _chatIndexClearNotifiers();
+  }
+
+  void _chatIndexClearNotifiers() {
+    chatsSyncing.value = false;
+    for (final notifier in _messagesSyncingByChat.values) {
+      notifier.value = false;
+    }
   }
 }

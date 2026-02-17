@@ -10,7 +10,9 @@ import 'package:ren/core/cryptography/recovery_key_generator.dart';
 import 'package:ren/features/auth/data/auth_repository.dart';
 
 class SignUpForm extends StatefulWidget {
-  const SignUpForm({Key? key}) : super(key: key);
+  final VoidCallback? onRegistrationSuccess;
+
+  const SignUpForm({Key? key, this.onRegistrationSuccess}) : super(key: key);
 
   @override
   State<SignUpForm> createState() => _SignUpFormState();
@@ -370,7 +372,10 @@ class _SignUpFormState extends State<SignUpForm> {
       final repo = context.read<AuthRepository>();
       final result = await repo.register(login, password, rk);
       if (result.id.isNotEmpty) {
-        registrationSuccessful = 'Регистрация успешно завершена';
+        setState(() {
+          registrationSuccessful = 'Регистрация успешно завершена';
+        });
+        widget.onRegistrationSuccess?.call();
       }
     } catch (e) {
       setState(() {

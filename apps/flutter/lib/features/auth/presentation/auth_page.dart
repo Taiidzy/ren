@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:ren/shared/widgets/ren_logo.dart';
 import 'package:ren/shared/widgets/animated_gradient.dart';
 import 'package:ren/shared/widgets/glass_surface.dart';
+import 'package:ren/shared/widgets/glass_snackbar.dart';
 
 import 'package:ren/features/auth/presentation/components/signin.dart';
 import 'package:ren/features/auth/presentation/components/signup.dart';
@@ -72,6 +73,18 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
         _formController.forward();
       });
     }
+  }
+
+  void _handleRegistrationSuccess() {
+    _changeTab(0);
+    Future<void>.delayed(const Duration(milliseconds: 450), () {
+      if (!mounted) return;
+      showGlassSnack(
+        context,
+        'Регистрация успешна. Теперь войдите в аккаунт.',
+        kind: GlassSnackKind.success,
+      );
+    });
   }
 
   @override
@@ -280,7 +293,7 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
       case 0:
         return const SignInForm();
       case 1:
-        return const SignUpForm();
+        return SignUpForm(onRegistrationSuccess: _handleRegistrationSuccess);
       case 2:
         return const ForgotPasswordForm();
       default:

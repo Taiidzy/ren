@@ -228,6 +228,8 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
     _searchCtrl.dispose();
     _rtSub?.cancel();
     _rtSub = null;
+    unawaited(_rt?.disconnect());
+    _rt = null;
     super.dispose();
   }
 
@@ -1026,7 +1028,12 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                                             final repo = context
                                                 .read<ChatsRepository>();
                                             final chat = await repo
-                                                .createPrivateChat(peerId);
+                                                .createPrivateChat(
+                                                  peerId,
+                                                  fallbackPeerName: user.name,
+                                                  fallbackPeerAvatarUrl:
+                                                      user.avatarUrl,
+                                                );
                                             if (!context.mounted) return;
                                             await _reloadChats();
                                             if (!context.mounted) return;
