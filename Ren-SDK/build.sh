@@ -67,10 +67,10 @@ build_android() {
     rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
     
     # Сборка для всех архитектур Android
-    cargo ndk --target aarch64-linux-android --android-platform 21 -- build --release --features ffi,crypto
-    cargo ndk --target armv7-linux-androideabi --android-platform 21 -- build --release --features ffi,crypto
-    cargo ndk --target i686-linux-android --android-platform 21 -- build --release --features ffi,crypto
-    cargo ndk --target x86_64-linux-android --android-platform 21 -- build --release --features ffi,crypto
+    cargo ndk --target aarch64-linux-android --platform 21 -- build --release --features ffi,crypto
+    cargo ndk --target armv7-linux-androideabi --platform 21 -- build --release --features ffi,crypto
+    cargo ndk --target i686-linux-android --platform 21 -- build --release --features ffi,crypto
+    cargo ndk --target x86_64-linux-android --platform 21 -- build --release --features ffi,crypto
     
     # Копируем библиотеки в правильную структуру для Android
     mkdir -p target/android/jniLibs/{arm64-v8a,armeabi-v7a,x86,x86_64}
