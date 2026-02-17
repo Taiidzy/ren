@@ -228,7 +228,6 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
     _searchCtrl.dispose();
     _rtSub?.cancel();
     _rtSub = null;
-    unawaited(_rt?.disconnect());
     _rt = null;
     super.dispose();
   }
@@ -557,7 +556,7 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
       final pid = c.peerId;
       if (pid != null && pid > 0) contacts.add(pid);
     }
-    rt.init(contacts: contacts);
+    rt.setContacts(contacts);
 
     _rtSub ??= rt.events.listen((evt) async {
       if (evt.type == 'presence') {
@@ -570,6 +569,12 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
             _online[idStr] = isOnline;
           });
         }
+      }
+
+      if (evt.type == 'message_new' ||
+          evt.type == 'message_updated' ||
+          evt.type == 'message_deleted') {
+        unawaited(_syncChats());
       }
 
       if (evt.type == 'notification_new') {

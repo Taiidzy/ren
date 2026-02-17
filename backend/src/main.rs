@@ -2,7 +2,7 @@
 // Импорты
 // ---------------------------
 use axum::{Router, middleware::from_fn, routing::get};
-use dashmap::{DashMap, DashSet};
+use dashmap::DashMap;
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -29,10 +29,8 @@ pub struct AppState {
     pub ws_hub: Arc<DashMap<i32, broadcast::Sender<String>>>,
     // Хаб пользовательских каналов по user_id: входящие уведомления (presence и т.п.)
     pub user_hub: Arc<DashMap<i32, broadcast::Sender<String>>>,
-    // Онлайн пользователи (наличие активного ws-соединения)
-    pub online_users: Arc<DashSet<i32>>,
-    // Пользователи, находящиеся внутри конкретного чата (join_chat)
-    pub in_chat: Arc<DashSet<(i32, i32)>>,
+    // Количество активных ws-соединений по user_id (для мульти-девайсной сессии)
+    pub online_connections: Arc<DashMap<i32, usize>>,
 }
 
 // Основная асинхронная функция запуска приложения
@@ -78,15 +76,13 @@ async fn async_main() {
     // Инициализируем состояние для передачи в маршруты.
     let ws_hub = Arc::new(DashMap::new());
     let user_hub = Arc::new(DashMap::new());
-    let online_users = Arc::new(DashSet::new());
-    let in_chat = Arc::new(DashSet::new());
+    let online_connections = Arc::new(DashMap::new());
     let state = AppState {
         pool,
         jwt_secret,
         ws_hub,
         user_hub,
-        online_users,
-        in_chat,
+        online_connections,
     };
 
     // Сборка роутера приложения.

@@ -593,7 +593,7 @@ class _ChatPageState extends State<ChatPage>
     }
 
     if (peerId > 0) {
-      rt.init(contacts: [peerId]);
+      rt.addContacts([peerId]);
     }
 
     rt.joinChat(chatId);
@@ -935,7 +935,7 @@ class _ChatPageState extends State<ChatPage>
         (p) => p.mimetype.toLowerCase().startsWith('video/'),
       );
       if (hasAudio && !hasVideo) {
-        wsType = 'voce_message';
+        wsType = 'voice_message';
       } else if (hasVideo && !hasAudio) {
         wsType = 'video_message';
       }
@@ -1015,7 +1015,7 @@ class _ChatPageState extends State<ChatPage>
     rt.sendMessage(
       chatId: chatId,
       message: payload['message'] as String,
-      wsType: 'voce_message',
+      wsType: 'voice_message',
       messageType: payload['message_type'] as String?,
       envelopes: payload['envelopes'] as Map<String, dynamic>?,
       metadata: payload['metadata'] as List<dynamic>?,

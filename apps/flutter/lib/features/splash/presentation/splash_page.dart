@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:ren/features/auth/presentation/auth_page.dart';
 import 'package:ren/features/chats/presentation/chats_page.dart';
+import 'package:ren/core/realtime/realtime_client.dart';
 
 import 'package:ren/shared/widgets/animated_gradient.dart';
 import 'package:ren/shared/widgets/ren_logo.dart';
@@ -141,6 +142,7 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
       final hasUser = userJson['id'] != null;
 
       if (hasUser) {
+        unawaited(currentContext.read<RealtimeClient>().connect());
         await goChats();
       } else {
         await goAuth();
@@ -153,9 +155,11 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
         return;
       }
       // Сеть/сервер недоступны: при существующем токене пускаем в приложение оффлайн.
+      unawaited(currentContext.read<RealtimeClient>().connect());
       await goChats();
     } catch (e) {
       // Любая не-401 ошибка и наличие токена -> главный экран.
+      unawaited(currentContext.read<RealtimeClient>().connect());
       await goChats();
     }
   }
