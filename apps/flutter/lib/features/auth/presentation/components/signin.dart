@@ -8,6 +8,7 @@ import 'package:ren/shared/widgets/matte_toggle.dart';
 import 'package:ren/shared/widgets/adaptive_page_route.dart';
 
 import 'package:ren/features/splash/presentation/splash_page.dart';
+import 'package:ren/core/realtime/realtime_client.dart';
 
 import 'package:ren/features/auth/data/auth_repository.dart';
 
@@ -64,6 +65,9 @@ class _SignInFormState extends State<SignInForm> with TickerProviderStateMixin {
       final result = await repo.login(login, password, _rememberMe);
       if (!mounted) return;
       if (result.id >= 0) {
+        try {
+          await context.read<RealtimeClient>().connect();
+        } catch (_) {}
         Navigator.of(
           context,
         ).pushReplacement(adaptivePageRoute((_) => const SplashPage()));

@@ -32,102 +32,237 @@ class RealtimeEvent {
 }
 
 class RealtimeClient {
+  static const Duration _reconnectMinDelay = Duration(seconds: 1);
+  static const Duration _reconnectMaxDelay = Duration(seconds: 20);
+
   WebSocketChannel? _channel;
   StreamSubscription? _sub;
+  Timer? _reconnectTimer;
 
   final _events = StreamController<RealtimeEvent>.broadcast();
+
+  final Set<int> _contacts = <int>{};
+  final Set<int> _joinedChats = <int>{};
+  final List<Map<String, dynamic>> _pendingMessages = <Map<String, dynamic>>[];
+
+  bool _isConnecting = false;
+  bool _manualDisconnect = false;
+  bool _hasConnectedBefore = false;
+  Duration _currentReconnectDelay = _reconnectMinDelay;
 
   bool get isConnected => _channel != null;
 
   Stream<RealtimeEvent> get events => _events.stream;
 
   Future<void> connect() async {
-    if (_channel != null) return;
+    if (_channel != null || _isConnecting) return;
 
     final token = await SecureStorage.readKey(Keys.token);
     if (token == null || token.isEmpty) {
       throw Exception('Нет токена авторизации');
     }
 
-    final base = Uri.parse(Apiurl.ws);
-    if (!(base.scheme == 'ws' || base.scheme == 'wss')) {
-      throw Exception('Apiurl.ws должен начинаться с ws:// или wss://');
+    _manualDisconnect = false;
+    _isConnecting = true;
+    _cancelReconnectTimer();
+
+    try {
+      final base = Uri.parse(Apiurl.ws);
+      if (!(base.scheme == 'ws' || base.scheme == 'wss')) {
+        throw Exception('Apiurl.ws должен начинаться с ws:// или wss://');
+      }
+
+      final uri = base.replace(path: '/ws', queryParameters: {'token': token});
+
+      final ch = IOWebSocketChannel.connect(
+        uri,
+        headers: {'Authorization': 'Bearer $token'},
+      );
+
+      _channel = ch;
+
+      await ch.ready;
+
+      if (!identical(_channel, ch)) {
+        return;
+      }
+
+      _currentReconnectDelay = _reconnectMinDelay;
+      _sub = ch.stream.listen(
+        (event) async {
+          if (event is! String) return;
+
+          Map<String, dynamic>? json;
+          if (!kIsWeb && event.length > 4096) {
+            json = await compute(_decodeWsEventJson, event);
+          } else {
+            json = await _decodeWsEventJson(event);
+          }
+
+          if (json != null) {
+            _events.add(RealtimeEvent.fromJson(json));
+          }
+        },
+        onError: (e) {
+          debugPrint('WS error: $e');
+          _handleSocketClosed();
+        },
+        onDone: _handleSocketClosed,
+        cancelOnError: true,
+      );
+
+      _flushState();
+      _events.add(
+        RealtimeEvent('connection', {
+          'type': 'connection',
+          'state': 'connected',
+          'reconnected': _hasConnectedBefore,
+        }),
+      );
+      _hasConnectedBefore = true;
+    } catch (e) {
+      _channel = null;
+      _sub?.cancel();
+      _sub = null;
+      if (!_manualDisconnect) {
+        _scheduleReconnect();
+      }
+      rethrow;
+    } finally {
+      _isConnecting = false;
     }
-
-    final uri = base.replace(
-      path: '/ws',
-      queryParameters: {
-        'token': token,
-      },
-    );
-
-    final ch = IOWebSocketChannel.connect(
-      uri,
-      headers: {
-        'Authorization': 'Bearer $token',
-      },
-    );
-
-    _channel = ch;
-
-    _sub = ch.stream.listen(
-      (event) async {
-        if (event is! String) return;
-
-        Map<String, dynamic>? json;
-        if (!kIsWeb && event.length > 4096) {
-          json = await compute(_decodeWsEventJson, event);
-        } else {
-          json = await _decodeWsEventJson(event);
-        }
-
-        if (json != null) {
-          _events.add(RealtimeEvent.fromJson(json));
-        }
-      },
-      onError: (e) {
-        debugPrint('WS error: $e');
-      },
-      onDone: () {
-        _channel = null;
-        _sub?.cancel();
-        _sub = null;
-      },
-    );
   }
 
   Future<void> disconnect() async {
-    _sub?.cancel();
+    _manualDisconnect = true;
+    _cancelReconnectTimer();
+    _pendingMessages.clear();
+
+    final localSub = _sub;
     _sub = null;
-    await _channel?.sink.close();
+    await localSub?.cancel();
+
+    final ch = _channel;
     _channel = null;
+    await ch?.sink.close();
   }
 
   void dispose() {
+    _manualDisconnect = true;
+    _cancelReconnectTimer();
     disconnect();
     _events.close();
   }
 
-  void _send(Map<String, dynamic> payload) {
+  void _handleSocketClosed() {
+    _sub?.cancel();
+    _sub = null;
+    _channel = null;
+    if (!_manualDisconnect) {
+      _scheduleReconnect();
+    }
+  }
+
+  void _scheduleReconnect() {
+    if (_manualDisconnect || _reconnectTimer != null) return;
+    _reconnectTimer = Timer(_currentReconnectDelay, () async {
+      _reconnectTimer = null;
+      final nextMs = (_currentReconnectDelay.inMilliseconds * 2).clamp(
+        _reconnectMinDelay.inMilliseconds,
+        _reconnectMaxDelay.inMilliseconds,
+      );
+      _currentReconnectDelay = Duration(milliseconds: nextMs);
+      try {
+        await connect();
+      } catch (_) {
+        _scheduleReconnect();
+      }
+    });
+  }
+
+  void _cancelReconnectTimer() {
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+  }
+
+  void _send(Map<String, dynamic> payload, {bool queueIfDisconnected = true}) {
     final ch = _channel;
-    if (ch == null) return;
-    ch.sink.add(jsonEncode(payload));
+    if (ch != null) {
+      ch.sink.add(jsonEncode(payload));
+      return;
+    }
+
+    if (queueIfDisconnected) {
+      _pendingMessages.add(payload);
+      unawaited(connect());
+    }
+  }
+
+  void _flushState() {
+    _send({
+      'type': 'init',
+      'contacts': _contacts.toList(growable: false),
+    }, queueIfDisconnected: false);
+
+    for (final chatId in _joinedChats) {
+      _send({
+        'type': 'join_chat',
+        'chat_id': chatId,
+      }, queueIfDisconnected: false);
+    }
+
+    if (_pendingMessages.isNotEmpty) {
+      final pending = List<Map<String, dynamic>>.from(_pendingMessages);
+      _pendingMessages.clear();
+      for (final payload in pending) {
+        _send(payload, queueIfDisconnected: false);
+      }
+    }
+  }
+
+  void setContacts(Iterable<int> contacts) {
+    _contacts
+      ..clear()
+      ..addAll(contacts.where((id) => id > 0));
+
+    _send({'type': 'init', 'contacts': _contacts.toList(growable: false)});
+  }
+
+  void addContacts(Iterable<int> contacts) {
+    var changed = false;
+    for (final id in contacts) {
+      if (id <= 0) continue;
+      changed = _contacts.add(id) || changed;
+    }
+
+    if (changed) {
+      _send({'type': 'init', 'contacts': _contacts.toList(growable: false)});
+    }
   }
 
   void init({required List<int> contacts}) {
-    _send({'type': 'init', 'contacts': contacts});
+    addContacts(contacts);
   }
 
   void joinChat(int chatId) {
-    _send({'type': 'join_chat', 'chat_id': chatId});
+    if (chatId <= 0) return;
+    if (_joinedChats.add(chatId)) {
+      _send({'type': 'join_chat', 'chat_id': chatId});
+    }
   }
 
   void leaveChat(int chatId) {
-    _send({'type': 'leave_chat', 'chat_id': chatId});
+    if (_joinedChats.remove(chatId)) {
+      _send({'type': 'leave_chat', 'chat_id': chatId});
+    }
   }
 
   void typing(int chatId, bool isTyping) {
-    _send({'type': 'typing', 'chat_id': chatId, 'is_typing': isTyping});
+    _send({
+      'type': 'typing',
+      'chat_id': chatId,
+      'is_typing': isTyping,
+    }, queueIfDisconnected: false);
   }
 
   void sendMessage({
@@ -150,10 +285,7 @@ class RealtimeClient {
     });
   }
 
-  void deleteMessage({
-    required int chatId,
-    required int messageId,
-  }) {
+  void deleteMessage({required int chatId, required int messageId}) {
     _send({
       'type': 'delete_message',
       'chat_id': chatId,

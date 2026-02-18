@@ -10,7 +10,10 @@ import 'package:ren/features/chats/domain/chat_models.dart';
 import 'package:ren/features/chats/presentation/chat_page.dart';
 import 'package:ren/features/profile/presentation/profile_menu_page.dart';
 
+import 'package:ren/core/constants/api_url.dart';
+import 'package:ren/core/constants/keys.dart';
 import 'package:ren/core/realtime/realtime_client.dart';
+import 'package:ren/core/secure/secure_storage.dart';
 import 'package:ren/core/notifications/local_notifications.dart';
 
 import 'package:ren/shared/widgets/background.dart';
@@ -119,6 +122,7 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
   bool _isSearchingUsers = false;
   String? _userSearchError;
   int _userSearchSeq = 0;
+  int _myUserId = 0;
 
   bool _isForeground = true;
 
@@ -127,6 +131,19 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
 
   Future<void> _reloadChats() async {
     await _syncChats();
+  }
+
+  Future<void> _loadMyUserId() async {
+    final v = await SecureStorage.readKey(Keys.userId);
+    _myUserId = int.tryParse(v ?? '') ?? 0;
+  }
+
+  String _avatarUrl(String avatarPath) {
+    final p = avatarPath.trim();
+    if (p.isEmpty) return '';
+    if (p.startsWith('http://') || p.startsWith('https://')) return p;
+    final normalized = p.startsWith('/') ? p.substring(1) : p;
+    return '${Apiurl.api}/avatars/$normalized';
   }
 
   bool _isChatsDifferent(List<ChatPreview> a, List<ChatPreview> b) {
@@ -202,6 +219,7 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    unawaited(_loadMyUserId());
     unawaited(_loadChatsOfflineFirst());
     _searchCtrl.addListener(() {
       _searchDebounce?.cancel();
@@ -228,7 +246,6 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
     _searchCtrl.dispose();
     _rtSub?.cancel();
     _rtSub = null;
-    unawaited(_rt?.disconnect());
     _rt = null;
     super.dispose();
   }
@@ -557,9 +574,17 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
       final pid = c.peerId;
       if (pid != null && pid > 0) contacts.add(pid);
     }
-    rt.init(contacts: contacts);
+    rt.setContacts(contacts);
 
     _rtSub ??= rt.events.listen((evt) async {
+      if (evt.type == 'connection') {
+        final reconnected = evt.data['reconnected'] == true;
+        if (reconnected) {
+          unawaited(_syncChats());
+        }
+        return;
+      }
+
       if (evt.type == 'presence') {
         final userId = evt.data['user_id'];
         final status = (evt.data['status'] as String?) ?? '';
@@ -572,7 +597,62 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
         }
       }
 
-      if (evt.type == 'notification_new') {
+      if (evt.type == 'message_new' ||
+          evt.type == 'message_updated' ||
+          evt.type == 'message_deleted') {
+        unawaited(_syncChats());
+      }
+
+      if (evt.type == 'profile_updated') {
+        final userDyn = evt.data['user'];
+        if (userDyn is! Map) return;
+        final u = (userDyn is Map<String, dynamic>)
+            ? userDyn
+            : Map<String, dynamic>.fromEntries(
+                userDyn.entries.map((e) => MapEntry(e.key.toString(), e.value)),
+              );
+        final uid = (u['id'] is int)
+            ? u['id'] as int
+            : int.tryParse('${u['id'] ?? ''}') ?? 0;
+        if (uid <= 0) return;
+        final username = ((u['username'] as String?) ?? '').trim();
+        final avatarRaw = ((u['avatar'] as String?) ?? '').trim();
+        final avatarUrl = avatarRaw.isEmpty ? '' : _avatarUrl(avatarRaw);
+        if (!mounted) return;
+        setState(() {
+          _chats = _chats
+              .map((c) {
+                if ((c.peerId ?? 0) != uid) return c;
+                return ChatPreview(
+                  id: c.id,
+                  peerId: c.peerId,
+                  kind: c.kind,
+                  user: ChatUser(
+                    id: c.user.id,
+                    name: username.isNotEmpty ? username : c.user.name,
+                    avatarUrl: avatarUrl.isNotEmpty
+                        ? avatarUrl
+                        : c.user.avatarUrl,
+                    isOnline: c.user.isOnline,
+                  ),
+                  isFavorite: c.isFavorite,
+                  lastMessage: c.lastMessage,
+                  lastMessageAt: c.lastMessageAt,
+                );
+              })
+              .toList(growable: false);
+          _chatIndex
+            ..clear()
+            ..addEntries(
+              _chats
+                  .map((c) => MapEntry(int.tryParse(c.id) ?? 0, c))
+                  .where((e) => e.key > 0),
+            );
+        });
+        return;
+      }
+
+      if (evt.type == 'message_new') {
         final repo = context.read<ChatsRepository>();
         final chatIdDyn = evt.data['chat_id'] ?? evt.data['chatId'];
         final chatId = (chatIdDyn is int)
@@ -588,6 +668,12 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
             : Map<String, dynamic>.fromEntries(
                 msg.entries.map((e) => MapEntry(e.key.toString(), e.value)),
               );
+        final senderId = (m['sender_id'] is int)
+            ? m['sender_id'] as int
+            : int.tryParse('${m['sender_id'] ?? ''}') ?? 0;
+        if (_myUserId > 0 && senderId == _myUserId) {
+          return;
+        }
 
         final decoded = await repo.decryptIncomingWsMessageFull(message: m);
         final hasAttachments = decoded.attachments.isNotEmpty;
