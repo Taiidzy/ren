@@ -1,14 +1,20 @@
 // ---------------------------
 // Импорты
 // ---------------------------
-use axum::{Router, middleware::from_fn, routing::get};
+use axum::{
+    Router,
+    http::{HeaderName, HeaderValue, Method, header},
+    middleware::from_fn,
+    routing::get,
+};
 use dashmap::DashMap;
 use sqlx::{PgPool, postgres::PgPoolOptions};
+use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 
 // Подключаем модуль с маршрутами
 mod route;
@@ -31,6 +37,8 @@ pub struct AppState {
     pub user_hub: Arc<DashMap<i32, broadcast::Sender<String>>>,
     // Количество активных ws-соединений по user_id (для мульти-девайсной сессии)
     pub online_connections: Arc<DashMap<i32, usize>>,
+    // Разрешённые fingerprint SDK (для attestation). Пустой набор => проверка отключена.
+    pub sdk_fingerprint_allowlist: Arc<HashSet<String>>,
 }
 
 // Основная асинхронная функция запуска приложения
@@ -53,6 +61,21 @@ async fn async_main() {
     // Секрет для подписи JWT, обязателен
     let jwt_secret =
         std::env::var("JWT_SECRET").expect("Переменная окружения JWT_SECRET не установлена");
+    let sdk_fingerprint_allowlist = std::env::var("SDK_FINGERPRINT_ALLOWLIST")
+        .unwrap_or_default()
+        .split(',')
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect::<HashSet<String>>();
+    let cors_allow_origins = std::env::var("CORS_ALLOW_ORIGINS")
+        .unwrap_or_else(|_| {
+            "https://messanger-ren.ru,https://www.messanger-ren.ru,http://localhost:3000,http://127.0.0.1:3000".to_string()
+        })
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| HeaderValue::from_str(s).expect("invalid CORS_ALLOW_ORIGINS value"))
+        .collect::<Vec<HeaderValue>>();
 
     // Порт для прослушивания
     let port = 8081;
@@ -83,6 +106,7 @@ async fn async_main() {
         ws_hub,
         user_hub,
         online_connections,
+        sdk_fingerprint_allowlist: Arc::new(sdk_fingerprint_allowlist),
     };
 
     // Сборка роутера приложения.
@@ -90,7 +114,18 @@ async fn async_main() {
     let app = Router::new()
         .route("/health", get(|| async { "OK" }))
         .merge(route::router())
-        .layer(CorsLayer::permissive())
+        .layer(
+            CorsLayer::new()
+                .allow_origin(AllowOrigin::list(cors_allow_origins))
+                .allow_methods([Method::GET, Method::POST, Method::PUT, Method::PATCH, Method::DELETE, Method::OPTIONS])
+                .allow_headers([
+                    header::AUTHORIZATION,
+                    header::CONTENT_TYPE,
+                    HeaderName::from_static("x-device-name"),
+                    HeaderName::from_static("x-app-version"),
+                    HeaderName::from_static("x-sdk-fingerprint"),
+                ]),
+        )
         .layer(from_fn(middleware::logging))
         .with_state(state);
 

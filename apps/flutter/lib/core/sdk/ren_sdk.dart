@@ -4,6 +4,7 @@ import 'dart:ffi';
 import 'dart:io' show Platform, File, Directory;
 import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
+import 'package:crypto/crypto.dart';
 
 import 'package:logger/logger.dart';
 
@@ -15,10 +16,81 @@ const String _ffiTag = 'RenFFI';
 final DynamicLibrary _dylib = _openLibrary();
 final Logger _logger = Logger();
 
+const Map<Abi, String> _androidPinnedSdkSha256 = <Abi, String>{
+  Abi.androidArm64:
+      'eef357fcb0268e97f822441ad03fa3a170af7cc4bf3dc8cd55911f2695e8469c',
+  Abi.androidArm:
+      '7f7041341a01628d41e45f016409c9552aa22a39276b4993ec9613e2a38962f2',
+  Abi.androidX64:
+      '51a091dd2cf187f8bc3b324afd37285f3fae585742881e86b447bc972c704b5e',
+  Abi.androidIA32:
+      'a10a3de6ae84dc7af0c30f810b8c31c6384cacaeb60f1d4e161cfcd845911a6f',
+};
+const String _iosArm64PinnedSdkSha256 =
+    'f6045a96db9dc40924794ea6eb5dfecdc3d44806c82e6b7a38908a37be8638c3';
+
+String _sha256OfFileSync(File file) {
+  final bytes = file.readAsBytesSync();
+  return sha256.convert(bytes).toString();
+}
+
+String? _resolveLoadedLibraryPathPosix(String libName) {
+  try {
+    final maps = File('/proc/self/maps');
+    if (!maps.existsSync()) return null;
+    for (final line in maps.readAsLinesSync()) {
+      if (!line.contains(libName)) continue;
+      final parts = line.trim().split(RegExp(r'\s+'));
+      if (parts.isEmpty) continue;
+      final candidate = parts.last.trim();
+      if (candidate.isEmpty || !candidate.contains(libName)) continue;
+      if (!candidate.startsWith('/')) continue;
+      if (candidate.contains('!')) {
+        return null;
+      }
+      return candidate;
+    }
+  } catch (_) {}
+  return null;
+}
+
+void _verifyAndroidSdkIntegrityOrThrow() {
+  final expected = _androidPinnedSdkSha256[Abi.current()];
+  if (expected == null) {
+    throw StateError('Unsupported Android ABI for SDK integrity check');
+  }
+
+  final path = _resolveLoadedLibraryPathPosix('libren_sdk.so');
+  if (path == null || path.isEmpty) {
+    throw StateError('Failed to resolve loaded libren_sdk.so path');
+  }
+
+  final file = File(path);
+  if (!file.existsSync()) {
+    throw StateError('Loaded SDK file not found at $path');
+  }
+
+  final actual = _sha256OfFileSync(file);
+  if (actual.toLowerCase() != expected.toLowerCase()) {
+    throw StateError('Ren SDK integrity check failed (hash mismatch)');
+  }
+}
+
+String currentSdkFingerprint() {
+  if (Platform.isAndroid) {
+    return _androidPinnedSdkSha256[Abi.current()] ?? '';
+  }
+  if (Platform.isIOS) {
+    return _iosArm64PinnedSdkSha256;
+  }
+  return '';
+}
+
 DynamicLibrary _openLibrary() {
   try {
     if (Platform.isAndroid) {
       final lib = DynamicLibrary.open('libren_sdk.so');
+      _verifyAndroidSdkIntegrityOrThrow();
       _logger.i("Android SDK Loaded");
       return lib;
     } else if (Platform.isIOS) {
@@ -683,12 +755,12 @@ class RenSdk {
   /// Шифрует файл (массив байт) и возвращает карту с метаданными:
   /// `ciphertext` (base64), `nonce` (base64), `filename`, `mimetype`.
   /// Используйте для отправки зашифрованных вложений.
-  Future<Map<String, String>?> encryptFile(
+  Map<String, String>? encryptFileSync(
     Uint8List bytes,
     String filename,
     String mimetype,
     String keyB64,
-  ) async {
+  ) {
     try {
       return using((arena) {
         final dataPtr = arena.allocate<Uint8>(bytes.length);
@@ -724,6 +796,15 @@ class RenSdk {
     } catch (e) {
       rethrow;
     }
+  }
+
+  Future<Map<String, String>?> encryptFile(
+    Uint8List bytes,
+    String filename,
+    String mimetype,
+    String keyB64,
+  ) async {
+    return encryptFileSync(bytes, filename, mimetype, keyB64);
   }
 
   /// Расшифровывает файл: принимает зашифрованные байты и метаданные.

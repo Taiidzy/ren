@@ -64,6 +64,24 @@
 
 ---
 
+## 📌 Актуальный статус (2026-02)
+
+- Mobile-first фокус: активная разработка в `apps/flutter`; `apps/iOS` и `frontend` не являются основным production-контуром.
+- Transport hardening:
+  - WebSocket auth без query token (только header-based flow).
+  - На backend включена санитизация чувствительных query-параметров в логах.
+- SDK attestation:
+  - клиент отправляет `X-SDK-Fingerprint` в HTTP/WS;
+  - backend поддерживает allowlist через `SDK_FINGERPRINT_ALLOWLIST` и привязку fingerprint к `auth_sessions`.
+- Privacy controls:
+  - Android anti-screenshot (`FLAG_SECURE`) и iOS privacy overlay / anti-capture управляются runtime-флагами (`--dart-define`), default OFF.
+- Performance hardening для слабых устройств:
+  - serial media pipeline, retry upload, isolate encryption, path-first media flow, state machine pending attachments.
+- Supply-chain / verification:
+  - для Ren-SDK добавлены новые macOS/Windows build-скрипты, формирующие verification bundle (`SHA256SUMS.txt`, `SDK_FINGERPRINT_ALLOWLIST.env`) и синхронизацию в backend.
+
+---
+
 ## 🏗️ Архитектура
 
 ```
@@ -141,107 +159,121 @@ Ren/
 
 - **Rust** 1.75+ ([установка](https://rustup.rs/))
 - **Flutter** 3.8+ ([установка](https://flutter.dev/docs/get-started/install))
-- **Node.js** 18+ ([установка](https://nodejs.org/))
 - **PostgreSQL** 14+ ([установка](https://www.postgresql.org/download/))
-- **Cargo** (входит в Rust)
+- **Node.js** 18+ (если нужен `frontend/`)
+- **Xcode CLT** (для iOS/macOS сборки на macOS)
+- **Android SDK + NDK** (для Android)
+- **cargo-ndk** (`cargo install cargo-ndk`)
+- **cbindgen** (`cargo install cbindgen`)
 
-### 🛠️ Установка
+### 🛠️ Рекомендуемая последовательность сборки
 
-#### 1. Клонирование репозитория
+#### 1. Клонирование
 
 ```bash
 git clone https://github.com/taiidzy/ren.git
 cd ren
 ```
 
-#### 2. Настройка базы данных
-
-Создайте базу данных PostgreSQL:
+#### 2. PostgreSQL
 
 ```bash
-# Подключитесь к PostgreSQL
 psql -U postgres
-
-# Создайте базу данных
 CREATE DATABASE ren_messenger;
-
-# Выйдите из psql
 \q
 ```
 
-#### 3. Настройка бэкенда
+#### 3. Backend
+
+Создайте `backend/.env`:
+
+```env
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=postgres
+POSTGRES_HOST=127.0.0.1
+POSTGRES_PORT=5432
+POSTGRES_DB=ren_messenger
+JWT_SECRET=change-me-use-32-bytes-min
+
+# Опционально: SDK attestation
+SDK_FINGERPRINT_ALLOWLIST=
+
+# Опционально: CORS allowlist
+CORS_ALLOW_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,https://messanger-ren.ru,https://www.messanger-ren.ru
+```
+
+Запуск backend:
 
 ```bash
 cd backend
-
-# Создайте файл .env
-cat > .env << EOF
-DATABASE_URL=postgres://postgres:password@localhost:5432/ren_messenger
-JWT_SECRET=your-super-secret-jwt-key-change-this-in-production
-EOF
-
-# Установите зависимости и запустите сервер
 cargo run
 ```
 
-Сервер запустится на `http://localhost:8081`
+При старте автоматически выполняются миграции из `backend/migrations`.
+Сервер по умолчанию слушает `http://0.0.0.0:8081`.
 
-**Переменные окружения:**
-- `DATABASE_URL` - строка подключения к PostgreSQL (обязательно)
-  - Формат: `postgres://USER:PASSWORD@HOST:PORT/DB_NAME`
-  - Пример: `postgres://postgres:password@localhost:5432/ren_messenger`
-- `JWT_SECRET` - секретный ключ для подписи JWT токенов (обязательно)
-  - Рекомендуется: минимум 32 байта случайных данных
-  - Генерация: `openssl rand -base64 32`
+#### 4. Ren-SDK (рекомендуемый способ)
 
-#### 4. Сборка SDK (опционально)
+Новые скрипты сборки и доставки артефактов:
 
-SDK уже собран для основных платформ, но если нужно пересобрать:
+- macOS: `Ren-SDK/build.sdk.sh`
+- Windows: `Ren-SDK/build.sdk.ps1`
+
+Они выполняют единый pipeline:
+- build SDK под релевантные платформы;
+- copy в `apps/flutter` (Android `jniLibs`, iOS `RenSDK.xcframework` на macOS);
+- формирование verification bundle с `SHA256SUMS.txt` и `SDK_FINGERPRINT_ALLOWLIST.env`;
+- copy в `backend/sdk-verification/current`;
+- опционально upload через `scp`.
+
+macOS:
 
 ```bash
 cd Ren-SDK
-
-# Для всех платформ
-chmod +x build.sh
-./build.sh all
-
-# Или для конкретной платформы
-./build.sh ios      # iOS (XCFramework для iOS/macOS)
-./build.sh android  # Android (JNI библиотеки для всех архитектур)
-./build.sh wasm     # WebAssembly (для браузера)
-./build.sh linux    # Linux (.so библиотека)
-./build.sh windows  # Windows (.dll библиотека)
-./build.sh macos    # macOS (.dylib библиотека)
+chmod +x build.sdk.sh
+./build.sdk.sh
 ```
 
-**Требования для сборки:**
-- **iOS**: Xcode Command Line Tools, `lipo` для объединения библиотек
-- **Android**: Android NDK, `cargo-ndk` (`cargo install cargo-ndk`)
-- **WASM**: `wasm-pack` (`cargo install wasm-pack`)
-- **Linux/Windows/macOS**: стандартные инструменты Rust
+Windows (PowerShell):
 
-**Результаты сборки:**
-- iOS: `target/RenSDK.xcframework` (для интеграции в Xcode)
-- Android: `target/android/jniLibs/` (arm64-v8a, armeabi-v7a, x86, x86_64)
-- WASM: `target/pkg/` (web, bundler, node варианты)
-- Linux: `target/linux/libren_sdk.so`
-- Windows: `target/windows/ren_sdk.dll`
-- macOS: `target/macos/libren_sdk.dylib`
+```powershell
+cd Ren-SDK
+.\build.sdk.ps1
+```
 
-#### 5. Запуск Flutter приложения
+Флаги (одинаковое поведение):
+- `--android-only`
+- `--no-upload`
+- `--no-sync-flutter`
+
+Env переменные:
+- `SDK_VERIFY_LOCAL_DIR` - локальный путь для verification bundle.
+- `SDK_VERIFY_SCP_TARGET` - remote target для `scp` upload (`user@host:/path`).
+
+Legacy-скрипт `Ren-SDK/build.sh` оставлен для обратной совместимости.
+
+#### 5. Flutter app
 
 ```bash
 cd apps/flutter
-
-# Установите зависимости
 flutter pub get
-
-# Запустите на эмуляторе/устройстве
 flutter run
+```
 
-# Или соберите релизную версию
-flutter build apk        # Android
-flutter build ios        # iOS
+Privacy toggles (по умолчанию всё выключено):
+
+```bash
+flutter run \
+  --dart-define=REN_ANDROID_FLAG_SECURE=false \
+  --dart-define=REN_IOS_PRIVACY_OVERLAY=false \
+  --dart-define=REN_IOS_ANTI_CAPTURE=false
+```
+
+Пример включения privacy-фич в release:
+
+```bash
+flutter build apk --release \
+  --dart-define=REN_ANDROID_FLAG_SECURE=true
 ```
 
 ### 🧰 Скрипты запуска и сборки (рекомендуется)
@@ -1023,11 +1055,16 @@ Headers: Authorization: Bearer <jwt_token>
 - ✅ **HKDF для деривации** - использование HKDF-SHA256 для безопасной деривации ключей из shared secret
 - ✅ **Zero-Knowledge** - сервер не имеет доступа к расшифрованным сообщениям, только к зашифрованным данным
 - ✅ **Отдельные конверты** - каждый участник получает свой зашифрованный ключ, даже в групповых чатах
-- ✅ **JWT аутентификация** - безопасная аутентификация без хранения сессий на сервере
+- ✅ **JWT аутентификация + auth_sessions** - токены проверяются в связке с серверной сессией
 - ✅ **CORS защита** - настраиваемая политика CORS через `CorsLayer`
 - ✅ **Валидация входных данных** - проверка всех входных данных на сервере перед обработкой
 - ✅ **Проверка прав доступа** - middleware для проверки членства в чатах перед операциями
-- ✅ **Логирование без секретов** - middleware автоматически скрывает пароли и токены в логах
+- ✅ **Логирование без секретов** - middleware скрывает токены/секреты в query и payload
+- ✅ **Header-only auth transport** - токены не принимаются из query string в защищённом API/WS flow
+- ✅ **SDK attestation** - `X-SDK-Fingerprint` может быть обязательным и валидируется по allowlist + auth session
+- ✅ **Client SDK integrity checks** - Android hash pinning и проверка фактически загруженного `libren_sdk.so`
+- ✅ **FFI panic safety** - FFI entrypoints обёрнуты в panic-safe слой
+- ✅ **Zeroization** - чувствительные ключевые буферы очищаются из памяти после использования
 
 ### ⚠️ Важные замечания
 
@@ -1041,7 +1078,9 @@ Headers: Authorization: Bearer <jwt_token>
 - Компрометация сервера не раскрывает содержимое сообщений без знания пароля или ключа восстановления
 - **Важно**: В продакшене используйте:
   - Сильный `JWT_SECRET` (минимум 32 случайных байта)
+  - Непустой `SDK_FINGERPRINT_ALLOWLIST` в backend
   - HTTPS для всех соединений
+  - WSS для WebSocket
   - Безопасное хранение ключа восстановления (не на сервере!)
   - Регулярное резервное копирование базы данных
 
@@ -1085,8 +1124,8 @@ cargo test --features ffi
 cd backend
 cargo test
 
-# С подключением к БД (требует DATABASE_URL)
-DATABASE_URL=postgres://... cargo test
+# С подключением к БД (задайте POSTGRES_* переменные, как для `cargo run`)
+POSTGRES_USER=postgres POSTGRES_PASSWORD=postgres POSTGRES_HOST=127.0.0.1 POSTGRES_PORT=5432 POSTGRES_DB=ren_messenger cargo test
 ```
 
 ### 📱 Flutter тесты
@@ -1192,7 +1231,11 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     environment:
-      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:-password}@postgres:5432/ren_messenger
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ren_messenger
       JWT_SECRET: ${JWT_SECRET:-change-this-in-production}
     ports:
       - "8081:8081"
@@ -1235,7 +1278,11 @@ docker-compose down -v
 
 1. **Настройте переменные окружения**:
    ```bash
-   export DATABASE_URL=postgres://...
+   export POSTGRES_USER=postgres
+   export POSTGRES_PASSWORD=...
+   export POSTGRES_HOST=127.0.0.1
+   export POSTGRES_PORT=5432
+   export POSTGRES_DB=ren_messenger
    export JWT_SECRET=strong-random-secret
    ```
 

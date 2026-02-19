@@ -7,6 +7,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'package:ren/core/constants/api_url.dart';
 import 'package:ren/core/constants/keys.dart';
+import 'package:ren/core/sdk/ren_sdk.dart';
 import 'package:ren/core/secure/secure_storage.dart';
 
 Future<Map<String, dynamic>?> _decodeWsEventJson(String raw) async {
@@ -72,11 +73,16 @@ class RealtimeClient {
         throw Exception('Apiurl.ws должен начинаться с ws:// или wss://');
       }
 
-      final uri = base.replace(path: '/ws', queryParameters: {'token': token});
+      // Do not place bearer tokens in URL query to avoid leaks in logs/proxies.
+      final uri = base.replace(path: '/ws');
 
+      final sdkFingerprint = currentSdkFingerprint();
       final ch = IOWebSocketChannel.connect(
         uri,
-        headers: {'Authorization': 'Bearer $token'},
+        headers: {
+          'Authorization': 'Bearer $token',
+          if (sdkFingerprint.isNotEmpty) 'X-SDK-Fingerprint': sdkFingerprint,
+        },
       );
 
       _channel = ch;

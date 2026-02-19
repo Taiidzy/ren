@@ -1,15 +1,15 @@
-use wasm_bindgen::prelude::*;
+use base64::{engine::general_purpose, Engine as _};
 use serde::{Deserialize, Serialize};
 use serde_wasm_bindgen::to_value;
+use wasm_bindgen::prelude::*;
 
+use crate::crypto::types::AeadKey;
 use crate::crypto::{
     decrypt_data, decrypt_file, decrypt_file_with_message, decrypt_message,
     derive_key_from_password, derive_key_from_string, encrypt_data, encrypt_file,
-    encrypt_file_with_message, encrypt_message, generate_key_pair,
-    generate_message_encryption_key, generate_nonce, generate_salt, unwrap_symmetric_key,
-    wrap_symmetric_key,
+    encrypt_file_with_message, encrypt_message, generate_key_pair, generate_message_encryption_key,
+    generate_nonce, generate_salt, unwrap_symmetric_key, wrap_symmetric_key,
 };
-use crate::crypto::types::AeadKey;
 
 // ============================================================================
 // Инициализация WASM
@@ -106,11 +106,7 @@ pub struct WasmWrappedKey {
 #[wasm_bindgen]
 impl WasmWrappedKey {
     #[wasm_bindgen(constructor)]
-    pub fn new(
-        wrapped_key: String,
-        ephemeral_public_key: String,
-        nonce: String,
-    ) -> WasmWrappedKey {
+    pub fn new(wrapped_key: String, ephemeral_public_key: String, nonce: String) -> WasmWrappedKey {
         WasmWrappedKey {
             wrapped_key,
             ephemeral_public_key,
@@ -167,7 +163,7 @@ pub fn wasm_generate_key_pair() -> WasmKeyPair {
 pub fn wasm_generate_message_key() -> String {
     let key = generate_message_encryption_key();
     let bytes = key.to_bytes();
-    base64::encode(&bytes)
+    general_purpose::STANDARD.encode(&bytes)
 }
 
 // ============================================================================
@@ -179,7 +175,7 @@ pub fn wasm_derive_key_from_password(password: &str, salt_b64: &str) -> Result<S
     derive_key_from_password(password, salt_b64)
         .map(|key| {
             let bytes = key.to_bytes();
-            base64::encode(&bytes)
+            general_purpose::STANDARD.encode(&bytes)
         })
         .map_err(|e| JsValue::from_str(&format!("{}", e)))
 }
@@ -189,7 +185,7 @@ pub fn wasm_derive_key_from_string(secret: &str) -> Result<String, JsValue> {
     derive_key_from_string(secret)
         .map(|key| {
             let bytes = key.to_bytes();
-            base64::encode(&bytes)
+            general_purpose::STANDARD.encode(&bytes)
         })
         .map_err(|e| JsValue::from_str(&format!("{}", e)))
 }
@@ -200,14 +196,18 @@ pub fn wasm_derive_key_from_string(secret: &str) -> Result<String, JsValue> {
 
 #[wasm_bindgen(js_name = encryptData)]
 pub fn wasm_encrypt_data(data: &str, key_b64: &str) -> Result<String, JsValue> {
-    let key_bytes = base64::decode(key_b64).map_err(|e| JsValue::from_str(&format!("{}", e)))?;
+    let key_bytes = general_purpose::STANDARD
+        .decode(key_b64)
+        .map_err(|e| JsValue::from_str(&format!("{}", e)))?;
     let key = AeadKey::from_bytes(&key_bytes).map_err(|e| JsValue::from_str(&format!("{}", e)))?;
     encrypt_data(data, &key).map_err(|e| JsValue::from_str(&format!("{}", e)))
 }
 
 #[wasm_bindgen(js_name = decryptData)]
 pub fn wasm_decrypt_data(encrypted_b64: &str, key_b64: &str) -> Result<String, JsValue> {
-    let key_bytes = base64::decode(key_b64).map_err(|e| JsValue::from_str(&format!("{}", e)))?;
+    let key_bytes = general_purpose::STANDARD
+        .decode(key_b64)
+        .map_err(|e| JsValue::from_str(&format!("{}", e)))?;
     let key = AeadKey::from_bytes(&key_bytes).map_err(|e| JsValue::from_str(&format!("{}", e)))?;
     decrypt_data(encrypted_b64, &key).map_err(|e| JsValue::from_str(&format!("{}", e)))
 }
@@ -218,9 +218,11 @@ pub fn wasm_decrypt_data(encrypted_b64: &str, key_b64: &str) -> Result<String, J
 
 #[wasm_bindgen(js_name = encryptMessage)]
 pub fn wasm_encrypt_message(message: &str, key_b64: &str) -> Result<WasmEncryptedMessage, JsValue> {
-    let key_bytes = base64::decode(key_b64).map_err(|e| JsValue::from_str(&format!("{}", e)))?;
+    let key_bytes = general_purpose::STANDARD
+        .decode(key_b64)
+        .map_err(|e| JsValue::from_str(&format!("{}", e)))?;
     let key = AeadKey::from_bytes(&key_bytes).map_err(|e| JsValue::from_str(&format!("{}", e)))?;
-    
+
     encrypt_message(message, &key)
         .map(|enc| WasmEncryptedMessage {
             ciphertext: enc.ciphertext,
@@ -235,9 +237,11 @@ pub fn wasm_decrypt_message(
     nonce_b64: &str,
     key_b64: &str,
 ) -> Result<String, JsValue> {
-    let key_bytes = base64::decode(key_b64).map_err(|e| JsValue::from_str(&format!("{}", e)))?;
+    let key_bytes = general_purpose::STANDARD
+        .decode(key_b64)
+        .map_err(|e| JsValue::from_str(&format!("{}", e)))?;
     let key = AeadKey::from_bytes(&key_bytes).map_err(|e| JsValue::from_str(&format!("{}", e)))?;
-    
+
     decrypt_message(ciphertext_b64, nonce_b64, &key)
         .map_err(|e| JsValue::from_str(&format!("{}", e)))
 }
@@ -253,9 +257,11 @@ pub fn wasm_encrypt_file(
     mimetype: &str,
     key_b64: &str,
 ) -> Result<WasmEncryptedFile, JsValue> {
-    let key_bytes = base64::decode(key_b64).map_err(|e| JsValue::from_str(&format!("{}", e)))?;
+    let key_bytes = general_purpose::STANDARD
+        .decode(key_b64)
+        .map_err(|e| JsValue::from_str(&format!("{}", e)))?;
     let key = AeadKey::from_bytes(&key_bytes).map_err(|e| JsValue::from_str(&format!("{}", e)))?;
-    
+
     encrypt_file(bytes, filename, mimetype, &key)
         .map(|enc| WasmEncryptedFile {
             ciphertext: enc.ciphertext,
@@ -272,11 +278,12 @@ pub fn wasm_decrypt_file(
     nonce_b64: &str,
     key_b64: &str,
 ) -> Result<Vec<u8>, JsValue> {
-    let key_bytes = base64::decode(key_b64).map_err(|e| JsValue::from_str(&format!("{}", e)))?;
+    let key_bytes = general_purpose::STANDARD
+        .decode(key_b64)
+        .map_err(|e| JsValue::from_str(&format!("{}", e)))?;
     let key = AeadKey::from_bytes(&key_bytes).map_err(|e| JsValue::from_str(&format!("{}", e)))?;
-    
-    decrypt_file(ciphertext_b64, nonce_b64, &key)
-        .map_err(|e| JsValue::from_str(&format!("{}", e)))
+
+    decrypt_file(ciphertext_b64, nonce_b64, &key).map_err(|e| JsValue::from_str(&format!("{}", e)))
 }
 
 #[wasm_bindgen(js_name = encryptFileWithMessage)]
@@ -287,13 +294,13 @@ pub fn wasm_encrypt_file_with_message(
     mimetype: &str,
     key_b64: &str,
 ) -> Result<JsValue, JsValue> {
-    let key_bytes = base64::decode(key_b64).map_err(|e| JsValue::from_str(&format!("{}", e)))?;
+    let key_bytes = general_purpose::STANDARD
+        .decode(key_b64)
+        .map_err(|e| JsValue::from_str(&format!("{}", e)))?;
     let key = AeadKey::from_bytes(&key_bytes).map_err(|e| JsValue::from_str(&format!("{}", e)))?;
-    
+
     encrypt_file_with_message(bytes, message, &key, filename, mimetype)
-        .map(|enc| {
-            to_value(&enc).unwrap_or(JsValue::NULL)
-        })
+        .map(|enc| to_value(&enc).unwrap_or(JsValue::NULL))
         .map_err(|e| JsValue::from_str(&format!("{}", e)))
 }
 
@@ -306,17 +313,26 @@ pub fn wasm_decrypt_file_with_message(
     mimetype: &str,
     key_b64: &str,
 ) -> Result<WasmDecryptedFile, JsValue> {
-    let key_bytes = base64::decode(key_b64).map_err(|e| JsValue::from_str(&format!("{}", e)))?;
+    let key_bytes = general_purpose::STANDARD
+        .decode(key_b64)
+        .map_err(|e| JsValue::from_str(&format!("{}", e)))?;
     let key = AeadKey::from_bytes(&key_bytes).map_err(|e| JsValue::from_str(&format!("{}", e)))?;
-    
-    decrypt_file_with_message(enc_file_b64, ciphertext_b64, nonce_b64, &key, filename, mimetype)
-        .map(|dec| WasmDecryptedFile {
-            data: dec.file,
-            filename: dec.filename,
-            mimetype: dec.mimetype,
-            message: dec.message,
-        })
-        .map_err(|e| JsValue::from_str(&format!("{}", e)))
+
+    decrypt_file_with_message(
+        enc_file_b64,
+        ciphertext_b64,
+        nonce_b64,
+        &key,
+        filename,
+        mimetype,
+    )
+    .map(|dec| WasmDecryptedFile {
+        data: dec.file,
+        filename: dec.filename,
+        mimetype: dec.mimetype,
+        message: dec.message,
+    })
+    .map_err(|e| JsValue::from_str(&format!("{}", e)))
 }
 
 // ============================================================================
@@ -328,9 +344,11 @@ pub fn wasm_wrap_symmetric_key(
     key_b64: &str,
     receiver_public_key_b64: &str,
 ) -> Result<WasmWrappedKey, JsValue> {
-    let key_bytes = base64::decode(key_b64).map_err(|e| JsValue::from_str(&format!("{}", e)))?;
+    let key_bytes = general_purpose::STANDARD
+        .decode(key_b64)
+        .map_err(|e| JsValue::from_str(&format!("{}", e)))?;
     let key = AeadKey::from_bytes(&key_bytes).map_err(|e| JsValue::from_str(&format!("{}", e)))?;
-    
+
     wrap_symmetric_key(&key, receiver_public_key_b64)
         .map(|(wrapped, eph_pk, nonce)| WasmWrappedKey {
             wrapped_key: wrapped,
@@ -355,7 +373,7 @@ pub fn wasm_unwrap_symmetric_key(
     )
     .map(|key| {
         let bytes = key.to_bytes();
-        base64::encode(&bytes)
+        general_purpose::STANDARD.encode(&bytes)
     })
     .map_err(|e| JsValue::from_str(&format!("{}", e)))
 }

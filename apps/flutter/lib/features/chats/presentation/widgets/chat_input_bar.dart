@@ -32,6 +32,7 @@ class ChatInputBar extends StatefulWidget {
   final VoidCallback onCancelReply;
   final List<PendingChatAttachment> pending;
   final void Function(int index) onRemovePending;
+  final void Function(int index)? onRetryPending;
   final Future<void> Function() onPickPhotos;
   final Future<void> Function() onPickFiles;
   final Future<void> Function() onTakePhoto;
@@ -63,6 +64,7 @@ class ChatInputBar extends StatefulWidget {
     required this.onCancelReply,
     required this.pending,
     required this.onRemovePending,
+    this.onRetryPending,
     required this.onPickPhotos,
     required this.onPickFiles,
     required this.onTakePhoto,
@@ -209,8 +211,9 @@ class _ChatInputBarState extends State<ChatInputBar> {
   }
 
   // Слушатель для кнопки Send/Mic
+  bool get _hasQueuedPending => widget.pending.any((p) => p.canSend);
   bool get _showSendButton =>
-      widget.controller.text.trim().isNotEmpty || widget.pending.isNotEmpty;
+      widget.controller.text.trim().isNotEmpty || _hasQueuedPending;
 
   @override
   void initState() {
@@ -245,12 +248,10 @@ class _ChatInputBarState extends State<ChatInputBar> {
       widget.controller.addListener(_controllerListener!);
     }
 
-    if (oldWidget.pending.length != widget.pending.length) {
-      final next = _showSendButton;
-      if (next != _lastShowSendButton && mounted) {
-        _lastShowSendButton = next;
-        setState(() {});
-      }
+    final next = _showSendButton;
+    if (next != _lastShowSendButton && mounted) {
+      _lastShowSendButton = next;
+      setState(() {});
     }
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -590,7 +591,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
     }
 
     final file = File(path);
-    final bytes = await file.readAsBytes();
+    final size = await file.length();
 
     String filename;
     String mimetype;
@@ -604,9 +605,10 @@ class _ChatInputBarState extends State<ChatInputBar> {
     }
 
     final attachment = PendingChatAttachment(
-      bytes: bytes,
+      clientId: 'pending_${DateTime.now().microsecondsSinceEpoch}',
       filename: filename,
       mimetype: mimetype,
+      sizeBytes: size,
       localPath: path,
     );
 
@@ -736,6 +738,8 @@ class _ChatInputBarState extends State<ChatInputBar> {
                     itemBuilder: (context, index) {
                       final p = widget.pending[index];
                       final isImg = p.mimetype.startsWith('image/');
+                      final canRetry =
+                          p.canRetry && widget.onRetryPending != null;
                       return Stack(
                         clipBehavior: Clip.none,
                         children: [
@@ -746,12 +750,27 @@ class _ChatInputBarState extends State<ChatInputBar> {
                               height: 64,
                               color: theme.colorScheme.surface,
                               child: isImg
-                                  ? Image.memory(
-                                      p.bytes,
-                                      fit: BoxFit.cover,
-                                      errorBuilder: (c, e, s) =>
-                                          const SizedBox(),
-                                    )
+                                  ? (() {
+                                      final lp = p.localPath;
+                                      if (lp != null && lp.isNotEmpty) {
+                                        return Image.file(
+                                          File(lp),
+                                          fit: BoxFit.cover,
+                                          errorBuilder: (c, e, s) =>
+                                              const SizedBox(),
+                                        );
+                                      }
+                                      final b = p.bytes;
+                                      if (b == null || b.isEmpty) {
+                                        return const SizedBox();
+                                      }
+                                      return Image.memory(
+                                        b,
+                                        fit: BoxFit.cover,
+                                        errorBuilder: (c, e, s) =>
+                                            const SizedBox(),
+                                      );
+                                    })()
                                   : Center(
                                       child: Icon(
                                         Icons.insert_drive_file,
@@ -764,28 +783,105 @@ class _ChatInputBarState extends State<ChatInputBar> {
                           Positioned(
                             right: -6,
                             top: -6,
-                            child: GestureDetector(
-                              onTap: () => widget.onRemovePending(index),
-                              child: Container(
-                                width: 20,
-                                height: 20,
-                                decoration: BoxDecoration(
-                                  color: theme.colorScheme.surface,
-                                  shape: BoxShape.circle,
-                                  border: Border.all(
-                                    color: theme.colorScheme.onSurface
-                                        .withOpacity(0.25),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (canRetry)
+                                  Padding(
+                                    padding: const EdgeInsets.only(right: 4),
+                                    child: GestureDetector(
+                                      onTap: () =>
+                                          widget.onRetryPending?.call(index),
+                                      child: Container(
+                                        width: 20,
+                                        height: 20,
+                                        decoration: BoxDecoration(
+                                          color: theme.colorScheme.surface,
+                                          shape: BoxShape.circle,
+                                          border: Border.all(
+                                            color: theme.colorScheme.onSurface
+                                                .withOpacity(0.25),
+                                          ),
+                                        ),
+                                        child: Icon(
+                                          Icons.refresh,
+                                          size: 13,
+                                          color: theme.colorScheme.onSurface
+                                              .withOpacity(0.85),
+                                        ),
+                                      ),
+                                    ),
                                   ),
+                                if (p.canRemove)
+                                  GestureDetector(
+                                    onTap: () => widget.onRemovePending(index),
+                                    child: Container(
+                                      width: 20,
+                                      height: 20,
+                                      decoration: BoxDecoration(
+                                        color: theme.colorScheme.surface,
+                                        shape: BoxShape.circle,
+                                        border: Border.all(
+                                          color: theme.colorScheme.onSurface
+                                              .withOpacity(0.25),
+                                        ),
+                                      ),
+                                      child: Icon(
+                                        Icons.close,
+                                        size: 14,
+                                        color: theme.colorScheme.onSurface
+                                            .withOpacity(0.8),
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                          if (p.isSending)
+                            Positioned.fill(
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withOpacity(0.25),
+                                  borderRadius: BorderRadius.circular(12),
                                 ),
-                                child: Icon(
-                                  Icons.close,
-                                  size: 14,
-                                  color: theme.colorScheme.onSurface
-                                      .withOpacity(0.8),
+                                child: const Center(
+                                  child: SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),
-                          ),
+                          if (p.isFailed)
+                            Positioned(
+                              left: 6,
+                              right: 6,
+                              bottom: 6,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 2,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: theme.colorScheme.error.withOpacity(
+                                    0.88,
+                                  ),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Text(
+                                  'Ошибка',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    color: theme.colorScheme.onError,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            ),
                         ],
                       );
                     },

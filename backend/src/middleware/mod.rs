@@ -72,9 +72,8 @@ where
                 )
             })?;
 
-        // Достаём токен из заголовка Authorization: Bearer <JWT>.
-        // Для WebSocket upgrade некоторые клиенты/прокси могут не прокидывать Authorization,
-        // поэтому поддерживаем fallback через query параметр ?token=<JWT>.
+        // Достаём токен только из заголовка Authorization: Bearer <JWT>.
+        // Не принимаем query-token, чтобы исключить утечки секретов в URL/логах.
         let token: String = if let Some(auth_header) = parts
             .headers
             .get("authorization")
@@ -89,23 +88,10 @@ where
                 ))?
                 .to_string()
         } else {
-            let query = parts.uri.query().unwrap_or("");
-            let mut token_q: Option<&str> = None;
-            for pair in query.split('&') {
-                let mut it = pair.splitn(2, '=');
-                let k = it.next().unwrap_or("");
-                let v = it.next().unwrap_or("");
-                if k == "token" && !v.is_empty() {
-                    token_q = Some(v);
-                    break;
-                }
-            }
-            token_q
-                .ok_or((
-                    StatusCode::UNAUTHORIZED,
-                    "Отсутствует заголовок Authorization или query token".to_string(),
-                ))?
-                .to_string()
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                "Отсутствует заголовок Authorization".to_string(),
+            ));
         };
 
         // Валидируем токен
@@ -132,27 +118,82 @@ where
             )
         })?;
 
-        let active: Option<i32> = sqlx::query_scalar(
-            r#"
-            SELECT 1
-            FROM auth_sessions
-            WHERE id = $1
-              AND user_id = $2
-              AND revoked_at IS NULL
-              AND expires_at > now()
-            LIMIT 1
-            "#,
-        )
-        .bind(session_id)
-        .bind(data.claims.sub)
-        .fetch_optional(&app_state.pool)
-        .await
-        .map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Ошибка проверки сессии".to_string(),
+        let sdk_fingerprint = if app_state.sdk_fingerprint_allowlist.is_empty() {
+            None
+        } else {
+            let v = parts
+                .headers
+                .get("x-sdk-fingerprint")
+                .and_then(|x| x.to_str().ok())
+                .map(|x| x.trim().to_string())
+                .filter(|x| !x.is_empty())
+                .ok_or((
+                    StatusCode::UNAUTHORIZED,
+                    "sdk fingerprint required".to_string(),
+                ))?;
+            let normalized = v.trim().to_lowercase();
+            if normalized.is_empty() {
+                return Err((
+                    StatusCode::UNAUTHORIZED,
+                    "sdk fingerprint required".to_string(),
+                ));
+            }
+            if !app_state.sdk_fingerprint_allowlist.contains(&normalized) {
+                return Err((
+                    StatusCode::UNAUTHORIZED,
+                    "sdk fingerprint is not allowed".to_string(),
+                ));
+            }
+            Some(normalized)
+        };
+
+        let active: Option<i32> = if let Some(fp) = sdk_fingerprint.as_ref() {
+            sqlx::query_scalar(
+                r#"
+                SELECT 1
+                FROM auth_sessions
+                WHERE id = $1
+                  AND user_id = $2
+                  AND revoked_at IS NULL
+                  AND expires_at > now()
+                  AND lower(coalesce(sdk_fingerprint, '')) = $3
+                LIMIT 1
+                "#,
             )
-        })?;
+            .bind(session_id)
+            .bind(data.claims.sub)
+            .bind(fp)
+            .fetch_optional(&app_state.pool)
+            .await
+            .map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Ошибка проверки сессии".to_string(),
+                )
+            })?
+        } else {
+            sqlx::query_scalar(
+                r#"
+                SELECT 1
+                FROM auth_sessions
+                WHERE id = $1
+                  AND user_id = $2
+                  AND revoked_at IS NULL
+                  AND expires_at > now()
+                LIMIT 1
+                "#,
+            )
+            .bind(session_id)
+            .bind(data.claims.sub)
+            .fetch_optional(&app_state.pool)
+            .await
+            .map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Ошибка проверки сессии".to_string(),
+                )
+            })?
+        };
 
         if active.is_none() {
             return Err((
@@ -184,7 +225,7 @@ pub async fn logging(req: Request, next: Next) -> Response {
     let now = Local::now().format("%Y-%m-%d %H:%M:%S%.3f").to_string();
     let method = req.method().clone();
     let uri = req.uri().clone();
-    let query = uri.query().unwrap_or("").to_string();
+    let query = sanitize_query(uri.query().unwrap_or(""));
     let path = req
         .extensions()
         .get::<MatchedPath>()
@@ -292,6 +333,29 @@ pub async fn logging(req: Request, next: Next) -> Response {
         println!("Ошибка: статус {}", status.as_u16());
     }
     res
+}
+
+fn sanitize_query(raw: &str) -> String {
+    if raw.is_empty() {
+        return String::new();
+    }
+
+    raw.split('&')
+        .map(|pair| {
+            let mut it = pair.splitn(2, '=');
+            let key = it.next().unwrap_or("");
+            let value = it.next().unwrap_or("");
+            if key.eq_ignore_ascii_case("token")
+                || key.eq_ignore_ascii_case("access_token")
+                || key.eq_ignore_ascii_case("refresh_token")
+            {
+                format!("{key}=<redacted>")
+            } else {
+                format!("{key}={value}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("&")
 }
 
 // Утилита: убедиться, что пользователь — admin в указанном чате

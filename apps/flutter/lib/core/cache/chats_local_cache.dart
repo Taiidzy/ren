@@ -6,8 +6,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:ren/features/chats/domain/chat_models.dart';
 
 class ChatsLocalCache {
-  static const int defaultCacheLimitBytes = 1024 * 1024 * 1024;
-  static const int minCacheLimitBytes = 1024 * 1024 * 1024;
+  static const int defaultCacheLimitBytes = 256 * 1024 * 1024;
+  static const int minCacheLimitBytes = 64 * 1024 * 1024;
   static const int maxCacheLimitBytes = 50 * 1024 * 1024 * 1024;
 
   Directory? _rootDirCache;
