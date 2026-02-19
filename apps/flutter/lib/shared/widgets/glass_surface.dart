@@ -1,6 +1,7 @@
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import 'package:ren/core/performance/performance_tuning.dart';
 import 'package:ren/theme/themes.dart';
 
 class GlassSurface extends StatelessWidget {
@@ -49,6 +50,10 @@ class GlassSurface extends StatelessWidget {
 
     final effectiveBorderRadius =
         borderRadiusGeometry ?? BorderRadius.circular(borderRadius);
+    final effectiveBlurSigma = PerformanceTuning.effectiveBlurSigma(
+      context,
+      blurSigma,
+    );
 
     final effectiveGradient =
         gradient ?? (isDark ? AppGradients.glassDark : AppGradients.glassLight);
@@ -73,10 +78,9 @@ class GlassSurface extends StatelessWidget {
     );
 
     if (onTap != null) {
-      final BorderRadius inkBorderRadius =
-          effectiveBorderRadius is BorderRadius
-              ? effectiveBorderRadius
-              : BorderRadius.circular(borderRadius);
+      final BorderRadius inkBorderRadius = effectiveBorderRadius is BorderRadius
+          ? effectiveBorderRadius
+          : BorderRadius.circular(borderRadius);
       body = Material(
         type: MaterialType.transparency,
         child: InkWell(
@@ -89,10 +93,18 @@ class GlassSurface extends StatelessWidget {
       );
     }
 
+    final clipped = ClipRRect(borderRadius: effectiveBorderRadius, child: body);
+    if (effectiveBlurSigma < 0.5) {
+      return clipped;
+    }
+
     return ClipRRect(
       borderRadius: effectiveBorderRadius,
       child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: blurSigma, sigmaY: blurSigma),
+        filter: ImageFilter.blur(
+          sigmaX: effectiveBlurSigma,
+          sigmaY: effectiveBlurSigma,
+        ),
         child: body,
       ),
     );
@@ -117,10 +129,24 @@ class GlassBlur extends StatelessWidget {
   Widget build(BuildContext context) {
     final effectiveBorderRadius =
         borderRadiusGeometry ?? BorderRadius.circular(borderRadius);
+    final effectiveBlurSigma = PerformanceTuning.effectiveBlurSigma(
+      context,
+      blurSigma,
+    );
+    final clipped = ClipRRect(
+      borderRadius: effectiveBorderRadius,
+      child: child,
+    );
+    if (effectiveBlurSigma < 0.5) {
+      return clipped;
+    }
     return ClipRRect(
       borderRadius: effectiveBorderRadius,
       child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: blurSigma, sigmaY: blurSigma),
+        filter: ImageFilter.blur(
+          sigmaX: effectiveBlurSigma,
+          sigmaY: effectiveBlurSigma,
+        ),
         child: child,
       ),
     );
@@ -143,11 +169,9 @@ class GlassAppBarBackground extends StatelessWidget {
     final isDark = theme.brightness == Brightness.dark;
     final baseInk = isDark ? Colors.white : Colors.black;
 
-    final effectiveBottomBorder = bottomBorder ??
-        BorderSide(
-          color: baseInk.withOpacity(isDark ? 0.18 : 0.10),
-          width: 1,
-        );
+    final effectiveBottomBorder =
+        bottomBorder ??
+        BorderSide(color: baseInk.withOpacity(isDark ? 0.18 : 0.10), width: 1);
 
     final gradient = isDark ? AppGradients.glassDark : AppGradients.glassLight;
 

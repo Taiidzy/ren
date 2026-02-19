@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:ren/shared/widgets/animated_gradient.dart';
 import 'package:ren/core/providers/background_settings.dart';
+import 'package:ren/core/performance/performance_tuning.dart';
 
 class AppBackground extends StatefulWidget {
   final Widget child;
@@ -48,7 +49,9 @@ class _AppBackgroundState extends State<AppBackground>
               _controller.forward();
             }
           });
-    if (widget.animate) {
+    final shouldAnimate =
+        widget.animate && !PerformanceTuning.preferReducedEffectsForPlatform();
+    if (shouldAnimate) {
       _controller.forward();
     } else {
       _controller.value = 0.5;
@@ -63,14 +66,18 @@ class _AppBackgroundState extends State<AppBackground>
       if (oldWidget.animationDuration != widget.animationDuration) {
         _controller.duration = widget.animationDuration;
       }
-      if (widget.animate && !_controller.isAnimating) {
+      final shouldAnimate =
+          widget.animate &&
+          !PerformanceTuning.preferReducedEffectsForPlatform();
+      if (shouldAnimate && !_controller.isAnimating) {
         if (_controller.status == AnimationStatus.dismissed) {
           _controller.forward();
         } else {
           _controller.repeat(reverse: true);
         }
-      } else if (!widget.animate && _controller.isAnimating) {
+      } else if (!shouldAnimate && _controller.isAnimating) {
         _controller.stop();
+        _controller.value = 0.5;
       }
     }
   }
@@ -84,6 +91,10 @@ class _AppBackgroundState extends State<AppBackground>
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final shouldAnimate = PerformanceTuning.shouldAnimateBackground(
+      context,
+      widget.animate,
+    );
 
     BackgroundSettings? settings;
     try {
@@ -92,15 +103,18 @@ class _AppBackgroundState extends State<AppBackground>
       settings = null;
     }
 
-    final effectiveBackgroundImage = settings?.backgroundImage ?? widget.backgroundImage;
+    final effectiveBackgroundImage =
+        settings?.backgroundImage ?? widget.backgroundImage;
     final effectiveImageOpacity = settings?.imageOpacity ?? widget.imageOpacity;
-    final effectiveImageBlurSigma =
-        settings?.imageBlurSigma ?? widget.imageBlurSigma;
+    final effectiveImageBlurSigma = PerformanceTuning.effectiveBlurSigma(
+      context,
+      settings?.imageBlurSigma ?? widget.imageBlurSigma,
+    );
     final effectiveShowGradient = effectiveBackgroundImage == null;
     final effectiveGradientOpacity = 1.0;
 
     Widget gradientLayer(double t) {
-      final gradient = widget.animate
+      final gradient = shouldAnimate
           ? AnimatedGradientUtils.buildAnimatedGradient(t, isDark)
           : AnimatedGradientUtils.buildStaticGradient(isDark);
       return IgnorePointer(
@@ -137,7 +151,7 @@ class _AppBackgroundState extends State<AppBackground>
       children: [
         if (effectiveBackgroundImage != null)
           Positioned.fill(child: imageLayer()!),
-        if (widget.animate)
+        if (shouldAnimate)
           Positioned.fill(
             child: AnimatedBuilder(
               animation: _controller,
