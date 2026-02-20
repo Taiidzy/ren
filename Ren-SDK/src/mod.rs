@@ -1,6 +1,7 @@
+use chacha20poly1305::Key;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use chacha20poly1305::Key;
+use zeroize::Zeroize;
 
 #[derive(Debug, Error)]
 pub enum CryptoError {
@@ -13,20 +14,32 @@ pub enum CryptoError {
 }
 
 impl From<chacha20poly1305::aead::Error> for CryptoError {
-    fn from(_: chacha20poly1305::aead::Error) -> Self { CryptoError::Aead }
+    fn from(_: chacha20poly1305::aead::Error) -> Self {
+        CryptoError::Aead
+    }
 }
 
 #[derive(Clone)]
 pub struct AeadKey(pub Key);
 
+impl Drop for AeadKey {
+    fn drop(&mut self) {
+        self.0.as_mut_slice().zeroize();
+    }
+}
+
 impl AeadKey {
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, CryptoError> {
-        if bytes.len() != 32 { return Err(CryptoError::InvalidKeyLen(format!("{}", bytes.len()))); }
+        if bytes.len() != 32 {
+            return Err(CryptoError::InvalidKeyLen(format!("{}", bytes.len())));
+        }
         let mut arr = [0u8; 32];
         arr.copy_from_slice(bytes);
         Ok(AeadKey(Key::from(arr)))
     }
-    pub fn to_bytes(&self) -> [u8;32] { self.0.clone().into() }
+    pub fn to_bytes(&self) -> [u8; 32] {
+        self.0.clone().into()
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]

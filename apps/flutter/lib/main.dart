@@ -32,6 +32,7 @@ import 'package:ren/features/profile/presentation/profile_store.dart';
 import 'package:ren/core/realtime/realtime_client.dart';
 import 'package:ren/core/notifications/local_notifications.dart';
 import 'package:ren/core/network/auth_session_interceptor.dart';
+import 'package:ren/core/security/privacy_protection.dart';
 import 'package:ren/shared/widgets/adaptive_page_route.dart';
 
 final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
@@ -44,6 +45,7 @@ Future<void> main() async {
       await RenSdk.instance.initialize();
 
       await LocalNotifications.instance.initialize();
+      await PrivacyProtection.configure();
 
       FlutterError.onError = (FlutterErrorDetails details) {
         FlutterError.dumpErrorToConsole(details);
@@ -81,8 +83,41 @@ Future<void> main() async {
   );
 }
 
-class MyApp extends StatelessWidget {
+class MyApp extends StatefulWidget {
   const MyApp({super.key});
+
+  @override
+  State<MyApp> createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> {
+  @override
+  void initState() {
+    super.initState();
+    LocalNotifications.instance.setOnOpenChat((chatId) async {
+      // Ensure tree is ready
+      for (var i = 0; i < 20; i++) {
+        final ctx = rootNavigatorKey.currentContext;
+        if (ctx == null) {
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+          continue;
+        }
+
+        final repo = Provider.of<ChatsRepository>(ctx, listen: false);
+        final chats = await repo.fetchChats();
+        final chat = chats.firstWhere(
+          (c) => (int.tryParse(c.id) ?? 0) == chatId,
+          orElse: () => throw Exception('chat not found'),
+        );
+
+        rootNavigatorKey.currentState?.push(
+          MaterialPageRoute(builder: (_) => ChatPage(chat: chat)),
+        );
+        return;
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return MultiProvider(
@@ -142,29 +177,6 @@ class MyApp extends StatelessWidget {
       ],
       child: Consumer<ThemeSettings>(
         builder: (context, settings, _) {
-          LocalNotifications.instance.setOnOpenChat((chatId) async {
-            // Ensure tree is ready
-            for (var i = 0; i < 20; i++) {
-              final ctx = rootNavigatorKey.currentContext;
-              if (ctx == null) {
-                await Future<void>.delayed(const Duration(milliseconds: 50));
-                continue;
-              }
-
-              final repo = Provider.of<ChatsRepository>(ctx, listen: false);
-              final chats = await repo.fetchChats();
-              final chat = chats.firstWhere(
-                (c) => (int.tryParse(c.id) ?? 0) == chatId,
-                orElse: () => throw Exception('chat not found'),
-              );
-
-              rootNavigatorKey.currentState?.push(
-                MaterialPageRoute(builder: (_) => ChatPage(chat: chat)),
-              );
-              return;
-            }
-          });
-
           return MaterialApp(
             debugShowCheckedModeBanner: false,
             navigatorKey: rootNavigatorKey,

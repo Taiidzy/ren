@@ -33,8 +33,8 @@ class ChatMessageBubble extends StatelessWidget {
     final dpr = MediaQuery.of(context).devicePixelRatio;
     final isMeColor = isMe
         ? (isDark
-            ? theme.colorScheme.primary.withOpacity(0.35)
-            : theme.colorScheme.primary.withOpacity(0.22))
+              ? theme.colorScheme.primary.withOpacity(0.35)
+              : theme.colorScheme.primary.withOpacity(0.22))
         : null;
 
     void onTapAttachment(ChatAttachment a) {
@@ -66,7 +66,10 @@ class ChatMessageBubble extends StatelessWidget {
               if (replyPreview != null && replyPreview!.trim().isNotEmpty) ...[
                 Container(
                   width: double.infinity,
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 8,
+                  ),
                   decoration: BoxDecoration(
                     color: theme.colorScheme.onSurface.withOpacity(0.06),
                     borderRadius: BorderRadius.circular(12),
@@ -109,7 +112,9 @@ class ChatMessageBubble extends StatelessWidget {
                           color: theme.colorScheme.surface,
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(
-                            color: theme.colorScheme.onSurface.withOpacity(0.12),
+                            color: theme.colorScheme.onSurface.withOpacity(
+                              0.12,
+                            ),
                           ),
                         ),
                         child: Center(
@@ -119,7 +124,9 @@ class ChatMessageBubble extends StatelessWidget {
                               Icon(
                                 Icons.play_circle_fill,
                                 size: 48,
-                                color: theme.colorScheme.onSurface.withOpacity(0.7),
+                                color: theme.colorScheme.onSurface.withOpacity(
+                                  0.7,
+                                ),
                               ),
                               const SizedBox(height: 6),
                               Text(
@@ -127,7 +134,8 @@ class ChatMessageBubble extends StatelessWidget {
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
-                                  color: theme.colorScheme.onSurface.withOpacity(0.85),
+                                  color: theme.colorScheme.onSurface
+                                      .withOpacity(0.85),
                                   fontSize: 12,
                                 ),
                               ),
@@ -144,14 +152,19 @@ class ChatMessageBubble extends StatelessWidget {
                       onTap: () => onTapAttachment(a),
                       borderRadius: BorderRadius.circular(10),
                       child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
+                        padding: const EdgeInsets.symmetric(
+                          vertical: 6,
+                          horizontal: 8,
+                        ),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Icon(
                               Icons.insert_drive_file,
                               size: 16,
-                              color: theme.colorScheme.onSurface.withOpacity(0.75),
+                              color: theme.colorScheme.onSurface.withOpacity(
+                                0.75,
+                              ),
                             ),
                             const SizedBox(width: 8),
                             Flexible(
@@ -160,7 +173,8 @@ class ChatMessageBubble extends StatelessWidget {
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
-                                  color: theme.colorScheme.onSurface.withOpacity(0.85),
+                                  color: theme.colorScheme.onSurface
+                                      .withOpacity(0.85),
                                   fontSize: 12,
                                   height: 1.25,
                                 ),
@@ -211,23 +225,14 @@ class _ChatImageGroup extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (images.length <= 4) {
-      return _ChatImageCollage(
-        images: images,
-        dpr: dpr,
-        onTap: onTap,
-      );
+      return _ChatImageCollage(images: images, dpr: dpr, onTap: onTap);
     }
 
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         for (final a in images) ...[
-          _ChatImageThumb(
-            attachment: a,
-            dpr: dpr,
-            single: false,
-            onTap: onTap,
-          ),
+          _ChatImageThumb(attachment: a, dpr: dpr, single: false, onTap: onTap),
           const SizedBox(height: 6),
         ],
       ],
@@ -235,7 +240,7 @@ class _ChatImageGroup extends StatelessWidget {
   }
 }
 
-class _ChatImageCollage extends StatelessWidget {
+class _ChatImageCollage extends StatefulWidget {
   final List<ChatAttachment> images;
   final double dpr;
   final void Function(ChatAttachment a) onTap;
@@ -247,19 +252,42 @@ class _ChatImageCollage extends StatelessWidget {
   });
 
   @override
+  State<_ChatImageCollage> createState() => _ChatImageCollageState();
+}
+
+class _ChatImageCollageState extends State<_ChatImageCollage> {
+  late Future<List<double?>> _arsFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _arsFuture = _readAll(widget.images);
+  }
+
+  @override
+  void didUpdateWidget(covariant _ChatImageCollage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final oldKey = oldWidget.images.map((a) => a.localPath).join('|');
+    final newKey = widget.images.map((a) => a.localPath).join('|');
+    if (oldKey != newKey) {
+      _arsFuture = _readAll(widget.images);
+    }
+  }
+
+  Future<List<double?>> _readAll(List<ChatAttachment> images) async {
+    final out = <double?>[];
+    for (final a in images) {
+      out.add(await _ChatImageAspectCache.instance.read(a.localPath));
+    }
+    return out;
+  }
+
+  @override
   Widget build(BuildContext context) {
     const gap = 2.0;
 
-    Future<List<double?>> readAll() async {
-      final out = <double?>[];
-      for (final a in images) {
-        out.add(await _ChatImageAspectCache.instance.read(a.localPath));
-      }
-      return out;
-    }
-
     return FutureBuilder<List<double?>>(
-      future: readAll(),
+      future: _arsFuture,
       builder: (context, snap) {
         final ars = snap.data;
 
@@ -269,16 +297,16 @@ class _ChatImageCollage extends StatelessWidget {
           return ar > 1.20;
         }
 
-        if (images.length == 1) {
+        if (widget.images.length == 1) {
           return _ChatImageThumb(
-            attachment: images[0],
-            dpr: dpr,
+            attachment: widget.images[0],
+            dpr: widget.dpr,
             single: true,
-            onTap: onTap,
+            onTap: widget.onTap,
           );
         }
 
-        if (images.length == 2) {
+        if (widget.images.length == 2) {
           final aLand = isLandscape(0);
           final bLand = isLandscape(1);
           final stack = aLand && bLand;
@@ -288,17 +316,17 @@ class _ChatImageCollage extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 _ChatImageThumb(
-                  attachment: images[0],
-                  dpr: dpr,
+                  attachment: widget.images[0],
+                  dpr: widget.dpr,
                   single: false,
-                  onTap: onTap,
+                  onTap: widget.onTap,
                 ),
                 const SizedBox(height: 6),
                 _ChatImageThumb(
-                  attachment: images[1],
-                  dpr: dpr,
+                  attachment: widget.images[1],
+                  dpr: widget.dpr,
                   single: false,
-                  onTap: onTap,
+                  onTap: widget.onTap,
                 ),
               ],
             );
@@ -310,21 +338,21 @@ class _ChatImageCollage extends StatelessWidget {
               children: [
                 Expanded(
                   child: _ChatImageThumb(
-                    attachment: images[0],
-                    dpr: dpr,
+                    attachment: widget.images[0],
+                    dpr: widget.dpr,
                     single: false,
                     tight: true,
-                    onTap: onTap,
+                    onTap: widget.onTap,
                   ),
                 ),
                 const SizedBox(width: gap),
                 Expanded(
                   child: _ChatImageThumb(
-                    attachment: images[1],
-                    dpr: dpr,
+                    attachment: widget.images[1],
+                    dpr: widget.dpr,
                     single: false,
                     tight: true,
-                    onTap: onTap,
+                    onTap: widget.onTap,
                   ),
                 ),
               ],
@@ -332,7 +360,7 @@ class _ChatImageCollage extends StatelessWidget {
           );
         }
 
-        if (images.length == 3) {
+        if (widget.images.length == 3) {
           final land0 = isLandscape(0);
           final land1 = isLandscape(1);
           final land2 = isLandscape(2);
@@ -344,19 +372,19 @@ class _ChatImageCollage extends StatelessWidget {
             if (land2 && !(land0 || land1)) topIndex = 2;
 
             final other = <ChatAttachment>[];
-            for (int i = 0; i < images.length; i++) {
+            for (int i = 0; i < widget.images.length; i++) {
               if (i == topIndex) continue;
-              other.add(images[i]);
+              other.add(widget.images[i]);
             }
 
             return Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 _ChatImageThumb(
-                  attachment: images[topIndex],
-                  dpr: dpr,
+                  attachment: widget.images[topIndex],
+                  dpr: widget.dpr,
                   single: false,
-                  onTap: onTap,
+                  onTap: widget.onTap,
                 ),
                 const SizedBox(height: 6),
                 Row(
@@ -365,20 +393,20 @@ class _ChatImageCollage extends StatelessWidget {
                     Expanded(
                       child: _ChatImageThumb(
                         attachment: other[0],
-                        dpr: dpr,
+                        dpr: widget.dpr,
                         single: false,
                         tight: true,
-                        onTap: onTap,
+                        onTap: widget.onTap,
                       ),
                     ),
                     const SizedBox(width: 6),
                     Expanded(
                       child: _ChatImageThumb(
                         attachment: other[1],
-                        dpr: dpr,
+                        dpr: widget.dpr,
                         single: false,
                         tight: true,
-                        onTap: onTap,
+                        onTap: widget.onTap,
                       ),
                     ),
                   ],
@@ -394,11 +422,11 @@ class _ChatImageCollage extends StatelessWidget {
                 Expanded(
                   flex: 2,
                   child: _ChatImageThumb(
-                    attachment: images[0],
-                    dpr: dpr,
+                    attachment: widget.images[0],
+                    dpr: widget.dpr,
                     single: false,
                     tight: true,
-                    onTap: onTap,
+                    onTap: widget.onTap,
                   ),
                 ),
                 const SizedBox(width: gap),
@@ -408,21 +436,21 @@ class _ChatImageCollage extends StatelessWidget {
                     children: [
                       Expanded(
                         child: _ChatImageThumb(
-                          attachment: images[1],
-                          dpr: dpr,
+                          attachment: widget.images[1],
+                          dpr: widget.dpr,
                           single: false,
                           tight: true,
-                          onTap: onTap,
+                          onTap: widget.onTap,
                         ),
                       ),
                       const SizedBox(height: gap),
                       Expanded(
                         child: _ChatImageThumb(
-                          attachment: images[2],
-                          dpr: dpr,
+                          attachment: widget.images[2],
+                          dpr: widget.dpr,
                           single: false,
                           tight: true,
-                          onTap: onTap,
+                          onTap: widget.onTap,
                         ),
                       ),
                     ],
@@ -443,21 +471,21 @@ class _ChatImageCollage extends StatelessWidget {
                   children: [
                     Expanded(
                       child: _ChatImageThumb(
-                        attachment: images[0],
-                        dpr: dpr,
+                        attachment: widget.images[0],
+                        dpr: widget.dpr,
                         single: false,
                         tight: true,
-                        onTap: onTap,
+                        onTap: widget.onTap,
                       ),
                     ),
                     const SizedBox(width: gap),
                     Expanded(
                       child: _ChatImageThumb(
-                        attachment: images[1],
-                        dpr: dpr,
+                        attachment: widget.images[1],
+                        dpr: widget.dpr,
                         single: false,
                         tight: true,
-                        onTap: onTap,
+                        onTap: widget.onTap,
                       ),
                     ),
                   ],
@@ -469,21 +497,21 @@ class _ChatImageCollage extends StatelessWidget {
                   children: [
                     Expanded(
                       child: _ChatImageThumb(
-                        attachment: images[2],
-                        dpr: dpr,
+                        attachment: widget.images[2],
+                        dpr: widget.dpr,
                         single: false,
                         tight: true,
-                        onTap: onTap,
+                        onTap: widget.onTap,
                       ),
                     ),
                     const SizedBox(width: gap),
                     Expanded(
                       child: _ChatImageThumb(
-                        attachment: images[3],
-                        dpr: dpr,
+                        attachment: widget.images[3],
+                        dpr: widget.dpr,
                         single: false,
                         tight: true,
-                        onTap: onTap,
+                        onTap: widget.onTap,
                       ),
                     ),
                   ],
@@ -533,10 +561,7 @@ class _ChatImageThumb extends StatelessWidget {
             child: ClipRRect(
               borderRadius: BorderRadius.circular(12),
               child: ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxWidth: maxW,
-                  maxHeight: maxH,
-                ),
+                constraints: BoxConstraints(maxWidth: maxW, maxHeight: maxH),
                 child: RepaintBoundary(
                   child: Image.file(
                     File(attachment.localPath),

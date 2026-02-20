@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:ren/core/performance/performance_tuning.dart';
 
 class RenSkeletonBox extends StatefulWidget {
   final double width;
@@ -18,16 +19,29 @@ class RenSkeletonBox extends StatefulWidget {
   State<RenSkeletonBox> createState() => _RenSkeletonBoxState();
 }
 
-class _RenSkeletonBoxState extends State<RenSkeletonBox> with SingleTickerProviderStateMixin {
+class _RenSkeletonBoxState extends State<RenSkeletonBox>
+    with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
+  bool _isAnimating = false;
 
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: widget.duration,
-    )..repeat();
+    _controller = AnimationController(vsync: this, duration: widget.duration);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final shouldAnimate = !PerformanceTuning.preferReducedEffects(context);
+    if (shouldAnimate == _isAnimating) return;
+    _isAnimating = shouldAnimate;
+    if (_isAnimating) {
+      _controller.repeat();
+    } else {
+      _controller.stop();
+      _controller.value = 0.5;
+    }
   }
 
   @override
@@ -44,6 +58,13 @@ class _RenSkeletonBoxState extends State<RenSkeletonBox> with SingleTickerProvid
 
     final c1 = base.withOpacity(isDark ? 0.10 : 0.06);
     final c2 = base.withOpacity(isDark ? 0.18 : 0.10);
+
+    if (!_isAnimating) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(widget.radius),
+        child: Container(width: widget.width, height: widget.height, color: c1),
+      );
+    }
 
     return AnimatedBuilder(
       animation: _controller,

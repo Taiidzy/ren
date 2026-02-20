@@ -999,151 +999,181 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                                 return const _SkeletonChatTile();
                               },
                             )
-                          : ListView(
-                              padding: const EdgeInsets.only(bottom: 16),
-                              children: [
-                                if (_query.trim().isNotEmpty) ...[
-                                  Text(
-                                    'Чаты',
-                                    style: theme.textTheme.titleSmall?.copyWith(
-                                      fontWeight: FontWeight.w700,
-                                      color: theme.colorScheme.onSurface,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 10),
-                                ],
-                                for (final chat in visibleChats) ...[
-                                  _ChatTile(
-                                    chat: chat,
-                                    onLongPressAt: (pos) =>
-                                        _showChatActionsAt(chat, pos),
-                                    onTap: () {
-                                      Navigator.of(context).push(
-                                        adaptivePageRoute(
-                                          (_) => ChatPage(chat: chat),
-                                        ),
+                          : (_query.trim().isEmpty
+                                ? ListView.separated(
+                                    padding: const EdgeInsets.only(bottom: 16),
+                                    itemCount: visibleChats.length,
+                                    separatorBuilder: (_, __) =>
+                                        const SizedBox(height: 10),
+                                    itemBuilder: (context, index) {
+                                      final chat = visibleChats[index];
+                                      return _ChatTile(
+                                        chat: chat,
+                                        onLongPressAt: (pos) =>
+                                            _showChatActionsAt(chat, pos),
+                                        onTap: () {
+                                          Navigator.of(context).push(
+                                            adaptivePageRoute(
+                                              (_) => ChatPage(chat: chat),
+                                            ),
+                                          );
+                                        },
                                       );
                                     },
-                                  ),
-                                  const SizedBox(height: 10),
-                                ],
-                                if (_query.trim().isNotEmpty) ...[
-                                  Divider(
-                                    height: 28,
-                                    color: theme.colorScheme.onSurface
-                                        .withOpacity(0.18),
-                                  ),
-                                  Text(
-                                    'Пользователи',
-                                    style: theme.textTheme.titleSmall?.copyWith(
-                                      fontWeight: FontWeight.w700,
-                                      color: theme.colorScheme.onSurface,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 10),
-                                  if (_isSearchingUsers) ...[
-                                    Padding(
-                                      padding: const EdgeInsets.symmetric(
-                                        vertical: 10,
-                                      ),
-                                      child: Center(
-                                        child: SizedBox(
-                                          width: 20,
-                                          height: 20,
-                                          child: CircularProgressIndicator(
-                                            strokeWidth: 2,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ] else if (_userSearchError != null) ...[
-                                    Padding(
-                                      padding: const EdgeInsets.symmetric(
-                                        vertical: 10,
-                                      ),
-                                      child: Text(
-                                        _userSearchError ?? '',
-                                        style: theme.textTheme.bodySmall
+                                  )
+                                : ListView(
+                                    padding: const EdgeInsets.only(bottom: 16),
+                                    children: [
+                                      Text(
+                                        'Чаты',
+                                        style: theme.textTheme.titleSmall
                                             ?.copyWith(
-                                              color: theme.colorScheme.error,
+                                              fontWeight: FontWeight.w700,
+                                              color:
+                                                  theme.colorScheme.onSurface,
                                             ),
                                       ),
-                                    ),
-                                  ] else if (visibleUsers.isEmpty) ...[
-                                    Padding(
-                                      padding: const EdgeInsets.symmetric(
-                                        vertical: 10,
-                                      ),
-                                      child: Text(
-                                        'Ничего не найдено',
-                                        style: theme.textTheme.bodySmall
-                                            ?.copyWith(
-                                              color: theme.colorScheme.onSurface
-                                                  .withOpacity(0.6),
-                                            ),
-                                      ),
-                                    ),
-                                  ] else ...[
-                                    for (final user in visibleUsers) ...[
-                                      _UserSearchTile(
-                                        user: user,
-                                        onTap: () async {
-                                          final peerId =
-                                              int.tryParse(user.id) ?? 0;
-                                          if (peerId <= 0) return;
-
-                                          final existing = decoratedChats
-                                              .where((c) => c.peerId == peerId)
-                                              .cast<ChatPreview?>()
-                                              .firstWhere(
-                                                (c) => c != null,
-                                                orElse: () => null,
-                                              );
-
-                                          if (existing != null) {
-                                            if (!context.mounted) return;
-                                            Navigator.of(context).push(
-                                              adaptivePageRoute(
-                                                (_) => ChatPage(chat: existing),
-                                              ),
-                                            );
-                                            return;
-                                          }
-
-                                          try {
-                                            final repo = context
-                                                .read<ChatsRepository>();
-                                            final chat = await repo
-                                                .createPrivateChat(
-                                                  peerId,
-                                                  fallbackPeerName: user.name,
-                                                  fallbackPeerAvatarUrl:
-                                                      user.avatarUrl,
-                                                );
-                                            if (!context.mounted) return;
-                                            await _reloadChats();
-                                            if (!context.mounted) return;
+                                      const SizedBox(height: 10),
+                                      for (final chat in visibleChats) ...[
+                                        _ChatTile(
+                                          chat: chat,
+                                          onLongPressAt: (pos) =>
+                                              _showChatActionsAt(chat, pos),
+                                          onTap: () {
                                             Navigator.of(context).push(
                                               adaptivePageRoute(
                                                 (_) => ChatPage(chat: chat),
                                               ),
                                             );
-                                          } catch (e) {
-                                            if (!context.mounted) return;
-                                            showGlassSnack(
-                                              context,
-                                              e.toString(),
-                                              kind: GlassSnackKind.error,
-                                            );
-                                          }
-                                        },
+                                          },
+                                        ),
+                                        const SizedBox(height: 10),
+                                      ],
+                                      Divider(
+                                        height: 28,
+                                        color: theme.colorScheme.onSurface
+                                            .withOpacity(0.18),
+                                      ),
+                                      Text(
+                                        'Пользователи',
+                                        style: theme.textTheme.titleSmall
+                                            ?.copyWith(
+                                              fontWeight: FontWeight.w700,
+                                              color:
+                                                  theme.colorScheme.onSurface,
+                                            ),
                                       ),
                                       const SizedBox(height: 10),
+                                      if (_isSearchingUsers) ...[
+                                        const Padding(
+                                          padding: EdgeInsets.symmetric(
+                                            vertical: 10,
+                                          ),
+                                          child: Center(
+                                            child: SizedBox(
+                                              width: 20,
+                                              height: 20,
+                                              child: CircularProgressIndicator(
+                                                strokeWidth: 2,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ] else if (_userSearchError != null) ...[
+                                        Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                            vertical: 10,
+                                          ),
+                                          child: Text(
+                                            _userSearchError ?? '',
+                                            style: theme.textTheme.bodySmall
+                                                ?.copyWith(
+                                                  color:
+                                                      theme.colorScheme.error,
+                                                ),
+                                          ),
+                                        ),
+                                      ] else if (visibleUsers.isEmpty) ...[
+                                        Padding(
+                                          padding: const EdgeInsets.symmetric(
+                                            vertical: 10,
+                                          ),
+                                          child: Text(
+                                            'Ничего не найдено',
+                                            style: theme.textTheme.bodySmall
+                                                ?.copyWith(
+                                                  color: theme
+                                                      .colorScheme
+                                                      .onSurface
+                                                      .withOpacity(0.6),
+                                                ),
+                                          ),
+                                        ),
+                                      ] else ...[
+                                        for (final user in visibleUsers) ...[
+                                          _UserSearchTile(
+                                            user: user,
+                                            onTap: () async {
+                                              final peerId =
+                                                  int.tryParse(user.id) ?? 0;
+                                              if (peerId <= 0) return;
+
+                                              final existing = decoratedChats
+                                                  .where(
+                                                    (c) => c.peerId == peerId,
+                                                  )
+                                                  .cast<ChatPreview?>()
+                                                  .firstWhere(
+                                                    (c) => c != null,
+                                                    orElse: () => null,
+                                                  );
+
+                                              if (existing != null) {
+                                                if (!context.mounted) return;
+                                                Navigator.of(context).push(
+                                                  adaptivePageRoute(
+                                                    (_) => ChatPage(
+                                                      chat: existing,
+                                                    ),
+                                                  ),
+                                                );
+                                                return;
+                                              }
+
+                                              try {
+                                                final repo = context
+                                                    .read<ChatsRepository>();
+                                                final chat = await repo
+                                                    .createPrivateChat(
+                                                      peerId,
+                                                      fallbackPeerName:
+                                                          user.name,
+                                                      fallbackPeerAvatarUrl:
+                                                          user.avatarUrl,
+                                                    );
+                                                if (!context.mounted) return;
+                                                await _reloadChats();
+                                                if (!context.mounted) return;
+                                                Navigator.of(context).push(
+                                                  adaptivePageRoute(
+                                                    (_) => ChatPage(chat: chat),
+                                                  ),
+                                                );
+                                              } catch (e) {
+                                                if (!context.mounted) return;
+                                                showGlassSnack(
+                                                  context,
+                                                  e.toString(),
+                                                  kind: GlassSnackKind.error,
+                                                );
+                                              }
+                                            },
+                                          ),
+                                          const SizedBox(height: 10),
+                                        ],
+                                      ],
                                     ],
-                                  ],
-                                ],
-                              ],
-                            ),
+                                  )),
                     ),
                   ],
                 ),

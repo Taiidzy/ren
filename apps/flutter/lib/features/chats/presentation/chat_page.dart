@@ -47,6 +47,9 @@ class ChatPage extends StatefulWidget {
 
 class _ChatPageState extends State<ChatPage>
     with TickerProviderStateMixin, WidgetsBindingObserver {
+  static const int _maxSingleAttachmentBytes = 25 * 1024 * 1024;
+  static const int _maxPendingAttachmentsBytes = 80 * 1024 * 1024;
+
   final _controller = TextEditingController();
   final _focusNode = FocusNode();
   final _scrollController = ScrollController();
@@ -74,6 +77,8 @@ class _ChatPageState extends State<ChatPage>
   final _picker = ImagePicker();
 
   final List<PendingChatAttachment> _pending = [];
+  int _pendingIdCounter = 0;
+  bool _isSendingMessage = false;
 
   int? _myUserId;
 
@@ -170,6 +175,81 @@ class _ChatPageState extends State<ChatPage>
     });
   }
 
+  String _formatBytes(int bytes) {
+    if (bytes <= 0) return '0 B';
+    const kb = 1024;
+    const mb = 1024 * 1024;
+    if (bytes >= mb) {
+      return '${(bytes / mb).toStringAsFixed(1)} MB';
+    }
+    if (bytes >= kb) {
+      return '${(bytes / kb).toStringAsFixed(1)} KB';
+    }
+    return '$bytes B';
+  }
+
+  String _newPendingId() {
+    _pendingIdCounter += 1;
+    return 'pending_${DateTime.now().microsecondsSinceEpoch}_$_pendingIdCounter';
+  }
+
+  List<PendingChatAttachment> _queuedPendingAttachments() {
+    return _pending.where((p) => p.canSend).toList(growable: false);
+  }
+
+  void _setPendingStateByIds(
+    Set<String> ids,
+    PendingAttachmentState state, {
+    String? error,
+  }) {
+    if (ids.isEmpty) return;
+    for (var i = 0; i < _pending.length; i++) {
+      final current = _pending[i];
+      if (!ids.contains(current.clientId)) continue;
+      switch (state) {
+        case PendingAttachmentState.queued:
+          _pending[i] = current.markQueued();
+          break;
+        case PendingAttachmentState.sending:
+          _pending[i] = current.markSending();
+          break;
+        case PendingAttachmentState.failed:
+          _pending[i] = current.markFailed(error);
+          break;
+      }
+    }
+  }
+
+  int get _pendingTotalBytes {
+    var total = 0;
+    for (final p in _pending) {
+      total += p.sizeBytes;
+    }
+    return total;
+  }
+
+  bool _canAttachFileSize(int sizeBytes) {
+    if (sizeBytes <= 0) return true;
+    if (sizeBytes > _maxSingleAttachmentBytes) {
+      showGlassSnack(
+        context,
+        'Файл слишком большой (${_formatBytes(sizeBytes)}). Лимит: ${_formatBytes(_maxSingleAttachmentBytes)}.',
+        kind: GlassSnackKind.error,
+      );
+      return false;
+    }
+    final nextTotal = _pendingTotalBytes + sizeBytes;
+    if (nextTotal > _maxPendingAttachmentsBytes) {
+      showGlassSnack(
+        context,
+        'Слишком много вложений. Лимит очереди: ${_formatBytes(_maxPendingAttachmentsBytes)}.',
+        kind: GlassSnackKind.error,
+      );
+      return false;
+    }
+    return true;
+  }
+
   Future<ChatAttachment> _resolveOptimisticAttachment(
     PendingChatAttachment attachment,
   ) async {
@@ -181,25 +261,48 @@ class _ChatPageState extends State<ChatPage>
     if (existingPath != null && existingPath.isNotEmpty) {
       final existing = File(existingPath);
       if (await existing.exists()) {
+        final size = attachment.sizeBytes > 0
+            ? attachment.sizeBytes
+            : await existing.length();
         return ChatAttachment(
           localPath: existingPath,
           filename: safeName,
           mimetype: attachment.mimetype,
-          size: attachment.bytes.length,
+          size: size,
         );
       }
+    }
+
+    final bytes = attachment.bytes;
+    if (bytes == null || bytes.isEmpty) {
+      throw StateError('Attachment bytes are missing');
     }
 
     final dir = await getTemporaryDirectory();
     final path = '${dir.path}/$safeName';
     final file = File(path);
-    await file.writeAsBytes(attachment.bytes, flush: true);
+    await file.writeAsBytes(bytes, flush: true);
     return ChatAttachment(
       localPath: path,
       filename: safeName,
       mimetype: attachment.mimetype,
-      size: attachment.bytes.length,
+      size: attachment.sizeBytes > 0 ? attachment.sizeBytes : bytes.length,
     );
+  }
+
+  Future<Uint8List> _readPendingAttachmentBytes(
+    PendingChatAttachment attachment,
+  ) async {
+    final inMemory = attachment.bytes;
+    if (inMemory != null && inMemory.isNotEmpty) {
+      return inMemory;
+    }
+
+    final path = attachment.localPath;
+    if (path == null || path.isEmpty) {
+      throw StateError('Attachment path is missing');
+    }
+    return await File(path).readAsBytes();
   }
 
   String _avatarUrl(String avatarPath) {
@@ -867,167 +970,214 @@ class _ChatPageState extends State<ChatPage>
   }
 
   Future<void> _send() async {
+    if (_isSendingMessage) return;
     final chatId = int.tryParse(widget.chat.id) ?? 0;
     final peerId = widget.chat.peerId ?? 0;
     final text = _controller.text.trim();
-    final hasAttachments = _pending.isNotEmpty;
+    final pendingToSend = _queuedPendingAttachments();
+    final pendingIds = pendingToSend.map((p) => p.clientId).toSet();
+    final hasAttachments = pendingToSend.isNotEmpty;
     if (text.isEmpty && !hasAttachments) return;
     if (peerId <= 0) return;
 
     final repo = context.read<ChatsRepository>();
     _rt ??= context.read<RealtimeClient>();
     final rt = _rt!;
+    final draftText = text;
 
     _typingDebounce?.cancel();
     _sendTyping(false);
 
-    final pendingCopy = List<PendingChatAttachment>.from(_pending);
-
     final replyTo = _replyTo;
     final editing = _editing;
+    String? optimisticId;
     setState(() {
-      _pending.clear();
+      _isSendingMessage = true;
+      _setPendingStateByIds(pendingIds, PendingAttachmentState.sending);
       _replyTo = null;
       _editing = null;
     });
     _controller.clear();
 
-    if (editing != null) {
-      // редактирование: поддерживаем только текст без файлов
-      if (hasAttachments ||
-          pendingCopy.isNotEmpty ||
-          editing.attachments.isNotEmpty) {
+    try {
+      if (editing != null) {
+        // редактирование: поддерживаем только текст без файлов
+        if (hasAttachments || editing.attachments.isNotEmpty) {
+          return;
+        }
+
+        // optimistic replace
+        setState(() {
+          final idx = _messages.indexWhere((m) => m.id == editing.id);
+          if (idx >= 0) {
+            final old = _messages[idx];
+            _messages[idx] = ChatMessage(
+              id: old.id,
+              chatId: old.chatId,
+              isMe: old.isMe,
+              text: text,
+              attachments: old.attachments,
+              sentAt: old.sentAt,
+              replyToMessageId: old.replyToMessageId,
+            );
+
+            _reindexMessages();
+          }
+        });
+
+        final payload = await repo.buildEncryptedWsMessage(
+          chatId: chatId,
+          peerId: peerId,
+          plaintext: text,
+        );
+
+        if (!rt.isConnected) {
+          await rt.connect();
+        }
+        rt.joinChat(chatId);
+
+        final mid = int.tryParse(editing.id) ?? 0;
+        if (mid > 0) {
+          rt.editMessage(
+            chatId: chatId,
+            messageId: mid,
+            message: payload['message'] as String,
+            messageType: payload['message_type'] as String?,
+            envelopes: payload['envelopes'] as Map<String, dynamic>?,
+            metadata: payload['metadata'] as List<dynamic>?,
+          );
+        }
         return;
       }
 
-      // optimistic replace
-      setState(() {
-        final idx = _messages.indexWhere((m) => m.id == editing.id);
-        if (idx >= 0) {
-          final old = _messages[idx];
-          _messages[idx] = ChatMessage(
-            id: old.id,
-            chatId: old.chatId,
-            isMe: old.isMe,
-            text: text,
-            attachments: old.attachments,
-            sentAt: old.sentAt,
-            replyToMessageId: old.replyToMessageId,
-          );
-
-          _reindexMessages();
+      List<ChatAttachment> optimisticAtt = const [];
+      if (pendingToSend.isNotEmpty) {
+        final out = <ChatAttachment>[];
+        for (final p in pendingToSend) {
+          out.add(await _resolveOptimisticAttachment(p));
         }
+        optimisticAtt = out;
+      }
+
+      // optimistic
+      setState(() {
+        optimisticId = 'local_${DateTime.now().millisecondsSinceEpoch}';
+        _messages.add(
+          ChatMessage(
+            id: optimisticId!,
+            chatId: chatId.toString(),
+            isMe: true,
+            text: text,
+            attachments: optimisticAtt,
+            sentAt: DateTime.now(),
+            replyToMessageId: replyTo?.id,
+          ),
+        );
+
+        _reindexMessages();
       });
 
-      final payload = await repo.buildEncryptedWsMessage(
-        chatId: chatId,
-        peerId: peerId,
-        plaintext: text,
-      );
+      _scheduleScrollToBottom(animated: true);
+
+      final outgoingAttachments = <OutgoingAttachment>[];
+      if (hasAttachments) {
+        for (final p in pendingToSend) {
+          final bytes = await _readPendingAttachmentBytes(p);
+          outgoingAttachments.add(
+            OutgoingAttachment(
+              bytes: bytes,
+              filename: p.filename,
+              mimetype: p.mimetype,
+            ),
+          );
+        }
+      }
+
+      final payload = hasAttachments
+          ? await repo.buildEncryptedWsMediaMessage(
+              chatId: chatId,
+              peerId: peerId,
+              caption: text,
+              attachments: outgoingAttachments,
+            )
+          : await repo.buildEncryptedWsMessage(
+              chatId: chatId,
+              peerId: peerId,
+              plaintext: text,
+            );
+
+      String wsType = 'send_message';
+      if (hasAttachments) {
+        final hasAudio = pendingToSend.any(
+          (p) => p.mimetype.toLowerCase().startsWith('audio/'),
+        );
+        final hasVideo = pendingToSend.any(
+          (p) => p.mimetype.toLowerCase().startsWith('video/'),
+        );
+        if (hasAudio && !hasVideo) {
+          wsType = 'voice_message';
+        } else if (hasVideo && !hasAudio) {
+          wsType = 'video_message';
+        }
+      }
 
       if (!rt.isConnected) {
         await rt.connect();
       }
       rt.joinChat(chatId);
 
-      final mid = int.tryParse(editing.id) ?? 0;
-      if (mid > 0) {
-        rt.editMessage(
-          chatId: chatId,
-          messageId: mid,
-          message: payload['message'] as String,
-          messageType: payload['message_type'] as String?,
-          envelopes: payload['envelopes'] as Map<String, dynamic>?,
-          metadata: payload['metadata'] as List<dynamic>?,
+      rt.sendMessage(
+        chatId: chatId,
+        message: payload['message'] as String,
+        wsType: wsType,
+        messageType: payload['message_type'] as String?,
+        envelopes: payload['envelopes'] as Map<String, dynamic>?,
+        metadata: payload['metadata'] as List<dynamic>?,
+        replyToMessageId: replyTo == null ? null : int.tryParse(replyTo.id),
+      );
+      if (!mounted) return;
+      setState(() {
+        _pending.removeWhere((p) => pendingIds.contains(p.clientId));
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        if (optimisticId != null) {
+          _messages.removeWhere((m) => m.id == optimisticId);
+          _messageById.remove(optimisticId);
+        }
+        _setPendingStateByIds(
+          pendingIds,
+          PendingAttachmentState.failed,
+          error: '$e',
         );
-      }
-      return;
-    }
-
-    List<ChatAttachment> optimisticAtt = const [];
-    if (pendingCopy.isNotEmpty) {
-      final out = <ChatAttachment>[];
-      for (final p in pendingCopy) {
-        out.add(await _resolveOptimisticAttachment(p));
-      }
-      optimisticAtt = out;
-    }
-
-    // optimistic
-    setState(() {
-      _messages.add(
-        ChatMessage(
-          id: 'local_${DateTime.now().millisecondsSinceEpoch}',
-          chatId: chatId.toString(),
-          isMe: true,
-          text: text,
-          attachments: optimisticAtt,
-          sentAt: DateTime.now(),
-          replyToMessageId: replyTo?.id,
-        ),
+        _replyTo = replyTo;
+        _editing = editing;
+      });
+      _controller.text = draftText;
+      _controller.selection = TextSelection.fromPosition(
+        TextPosition(offset: _controller.text.length),
       );
-
-      _reindexMessages();
-    });
-
-    _scheduleScrollToBottom(animated: true);
-
-    final payload = hasAttachments
-        ? await repo.buildEncryptedWsMediaMessage(
-            chatId: chatId,
-            peerId: peerId,
-            caption: text,
-            attachments: pendingCopy
-                .map(
-                  (p) => OutgoingAttachment(
-                    bytes: p.bytes,
-                    filename: p.filename,
-                    mimetype: p.mimetype,
-                  ),
-                )
-                .toList(),
-          )
-        : await repo.buildEncryptedWsMessage(
-            chatId: chatId,
-            peerId: peerId,
-            plaintext: text,
-          );
-
-    String wsType = 'send_message';
-    if (hasAttachments) {
-      final hasAudio = pendingCopy.any(
-        (p) => p.mimetype.toLowerCase().startsWith('audio/'),
+      showGlassSnack(
+        context,
+        'Не удалось отправить сообщение. Черновик восстановлен.',
+        kind: GlassSnackKind.error,
       );
-      final hasVideo = pendingCopy.any(
-        (p) => p.mimetype.toLowerCase().startsWith('video/'),
-      );
-      if (hasAudio && !hasVideo) {
-        wsType = 'voice_message';
-      } else if (hasVideo && !hasAudio) {
-        wsType = 'video_message';
+      _scheduleScrollToBottom(animated: false);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSendingMessage = false;
+        });
       }
     }
-
-    if (!rt.isConnected) {
-      await rt.connect();
-    }
-    rt.joinChat(chatId);
-
-    rt.sendMessage(
-      chatId: chatId,
-      message: payload['message'] as String,
-      wsType: wsType,
-      messageType: payload['message_type'] as String?,
-      envelopes: payload['envelopes'] as Map<String, dynamic>?,
-      metadata: payload['metadata'] as List<dynamic>?,
-      replyToMessageId: replyTo == null ? null : int.tryParse(replyTo.id),
-    );
   }
 
   Future<void> _sendRecordedVoice(PendingChatAttachment attachment) async {
     final chatId = int.tryParse(widget.chat.id) ?? 0;
     final peerId = widget.chat.peerId ?? 0;
     if (chatId <= 0 || peerId <= 0) return;
+    if (!_canAttachFileSize(attachment.sizeBytes)) return;
 
     final repo = context.read<ChatsRepository>();
 
@@ -1038,12 +1188,13 @@ class _ChatPageState extends State<ChatPage>
     final path = preview.localPath;
 
     final replyTo = _replyTo;
+    final optimisticId = 'local_${DateTime.now().millisecondsSinceEpoch}';
     if (mounted) {
       setState(() {
         _replyTo = null;
         _messages.add(
           ChatMessage(
-            id: 'local_${DateTime.now().millisecondsSinceEpoch}',
+            id: optimisticId,
             chatId: chatId.toString(),
             isMe: true,
             text: '',
@@ -1052,7 +1203,7 @@ class _ChatPageState extends State<ChatPage>
                 localPath: path,
                 filename: safeName,
                 mimetype: attachment.mimetype,
-                size: attachment.bytes.length,
+                size: attachment.sizeBytes,
               ),
             ],
             sentAt: DateTime.now(),
@@ -1064,36 +1215,51 @@ class _ChatPageState extends State<ChatPage>
     }
     _scheduleScrollToBottom(animated: true);
 
-    final payload = await repo.buildEncryptedWsMediaMessage(
-      chatId: chatId,
-      peerId: peerId,
-      caption: '',
-      attachments: [
-        OutgoingAttachment(
-          bytes: attachment.bytes,
-          filename: safeName,
-          mimetype: attachment.mimetype,
-        ),
-      ],
-    );
+    try {
+      final payload = await repo.buildEncryptedWsMediaMessage(
+        chatId: chatId,
+        peerId: peerId,
+        caption: '',
+        attachments: [
+          OutgoingAttachment(
+            bytes: await _readPendingAttachmentBytes(attachment),
+            filename: safeName,
+            mimetype: attachment.mimetype,
+          ),
+        ],
+      );
 
-    await _ensureWsReady(chatId);
-    final rt = _rt!;
-    rt.sendMessage(
-      chatId: chatId,
-      message: payload['message'] as String,
-      wsType: 'voice_message',
-      messageType: payload['message_type'] as String?,
-      envelopes: payload['envelopes'] as Map<String, dynamic>?,
-      metadata: payload['metadata'] as List<dynamic>?,
-      replyToMessageId: replyTo == null ? null : int.tryParse(replyTo.id),
-    );
+      await _ensureWsReady(chatId);
+      final rt = _rt!;
+      rt.sendMessage(
+        chatId: chatId,
+        message: payload['message'] as String,
+        wsType: 'voice_message',
+        messageType: payload['message_type'] as String?,
+        envelopes: payload['envelopes'] as Map<String, dynamic>?,
+        metadata: payload['metadata'] as List<dynamic>?,
+        replyToMessageId: replyTo == null ? null : int.tryParse(replyTo.id),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _messages.removeWhere((m) => m.id == optimisticId);
+        _messageById.remove(optimisticId);
+        _replyTo = replyTo;
+      });
+      showGlassSnack(
+        context,
+        'Не удалось отправить голосовое сообщение.',
+        kind: GlassSnackKind.error,
+      );
+    }
   }
 
   Future<void> _sendRecordedVideo(PendingChatAttachment attachment) async {
     final chatId = int.tryParse(widget.chat.id) ?? 0;
     final peerId = widget.chat.peerId ?? 0;
     if (chatId <= 0 || peerId <= 0) return;
+    if (!_canAttachFileSize(attachment.sizeBytes)) return;
 
     final repo = context.read<ChatsRepository>();
 
@@ -1104,12 +1270,13 @@ class _ChatPageState extends State<ChatPage>
     final path = preview.localPath;
 
     final replyTo = _replyTo;
+    final optimisticId = 'local_${DateTime.now().millisecondsSinceEpoch}';
     if (mounted) {
       setState(() {
         _replyTo = null;
         _messages.add(
           ChatMessage(
-            id: 'local_${DateTime.now().millisecondsSinceEpoch}',
+            id: optimisticId,
             chatId: chatId.toString(),
             isMe: true,
             text: '',
@@ -1118,7 +1285,7 @@ class _ChatPageState extends State<ChatPage>
                 localPath: path,
                 filename: safeName,
                 mimetype: attachment.mimetype,
-                size: attachment.bytes.length,
+                size: attachment.sizeBytes,
               ),
             ],
             sentAt: DateTime.now(),
@@ -1130,30 +1297,44 @@ class _ChatPageState extends State<ChatPage>
     }
     _scheduleScrollToBottom(animated: true);
 
-    final payload = await repo.buildEncryptedWsMediaMessage(
-      chatId: chatId,
-      peerId: peerId,
-      caption: '',
-      attachments: [
-        OutgoingAttachment(
-          bytes: attachment.bytes,
-          filename: safeName,
-          mimetype: attachment.mimetype,
-        ),
-      ],
-    );
+    try {
+      final payload = await repo.buildEncryptedWsMediaMessage(
+        chatId: chatId,
+        peerId: peerId,
+        caption: '',
+        attachments: [
+          OutgoingAttachment(
+            bytes: await _readPendingAttachmentBytes(attachment),
+            filename: safeName,
+            mimetype: attachment.mimetype,
+          ),
+        ],
+      );
 
-    await _ensureWsReady(chatId);
-    final rt = _rt!;
-    rt.sendMessage(
-      chatId: chatId,
-      message: payload['message'] as String,
-      wsType: 'video_message',
-      messageType: payload['message_type'] as String?,
-      envelopes: payload['envelopes'] as Map<String, dynamic>?,
-      metadata: payload['metadata'] as List<dynamic>?,
-      replyToMessageId: replyTo == null ? null : int.tryParse(replyTo.id),
-    );
+      await _ensureWsReady(chatId);
+      final rt = _rt!;
+      rt.sendMessage(
+        chatId: chatId,
+        message: payload['message'] as String,
+        wsType: 'video_message',
+        messageType: payload['message_type'] as String?,
+        envelopes: payload['envelopes'] as Map<String, dynamic>?,
+        metadata: payload['metadata'] as List<dynamic>?,
+        replyToMessageId: replyTo == null ? null : int.tryParse(replyTo.id),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _messages.removeWhere((m) => m.id == optimisticId);
+        _messageById.remove(optimisticId);
+        _replyTo = replyTo;
+      });
+      showGlassSnack(
+        context,
+        'Не удалось отправить видео.',
+        kind: GlassSnackKind.error,
+      );
+    }
   }
 
   Future<void> _pickPhotos() async {
@@ -1171,16 +1352,21 @@ class _ChatPageState extends State<ChatPage>
 
       final added = <PendingChatAttachment>[];
       for (final f in files) {
-        final bytes = await f.readAsBytes();
         final name = f.name.isNotEmpty
             ? f.name
             : 'image_${DateTime.now().millisecondsSinceEpoch}.jpg';
+        final path = f.path;
+        final size = path.isNotEmpty ? await File(path).length() : 0;
+        if (!_canAttachFileSize(size)) {
+          continue;
+        }
         added.add(
           PendingChatAttachment(
-            bytes: bytes,
+            clientId: _newPendingId(),
             filename: name,
             mimetype: mimetypeFromName(name),
-            localPath: f.path,
+            sizeBytes: size,
+            localPath: path,
           ),
         );
       }
@@ -1199,20 +1385,22 @@ class _ChatPageState extends State<ChatPage>
       final file = await _picker.pickImage(source: ImageSource.camera);
       if (file == null) return;
 
-      final bytes = await file.readAsBytes();
-      if (bytes.isEmpty) return;
-
       final name = file.name.isNotEmpty
           ? file.name
           : 'photo_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final size = await File(file.path).length();
+      if (!_canAttachFileSize(size)) {
+        return;
+      }
 
       if (!mounted) return;
       setState(() {
         _pending.add(
           PendingChatAttachment(
-            bytes: bytes,
+            clientId: _newPendingId(),
             filename: name,
             mimetype: 'image/jpeg',
+            sizeBytes: size,
             localPath: file.path,
           ),
         );
@@ -1226,25 +1414,30 @@ class _ChatPageState extends State<ChatPage>
     try {
       final res = await FilePicker.platform.pickFiles(
         allowMultiple: true,
-        withData: true,
+        withData: false,
       );
       if (res == null) return;
 
       final added = <PendingChatAttachment>[];
       for (final f in res.files) {
-        final bytes = f.bytes;
-        if (bytes == null || bytes.isEmpty) continue;
+        final path = f.path;
+        if (path == null || path.isEmpty) continue;
         final name = (f.name.isNotEmpty)
             ? f.name
             : 'file_${DateTime.now().millisecondsSinceEpoch}';
-        final mime = lookupMimeType(f.path ?? '') ?? 'application/octet-stream';
+        final mime = lookupMimeType(path) ?? 'application/octet-stream';
+        final size = (f.size > 0) ? f.size : await File(path).length();
+        if (!_canAttachFileSize(size)) {
+          continue;
+        }
 
         added.add(
           PendingChatAttachment(
-            bytes: bytes,
+            clientId: _newPendingId(),
             filename: name,
             mimetype: mime,
-            localPath: f.path,
+            sizeBytes: size,
+            localPath: path,
           ),
         );
       }
@@ -1568,8 +1761,16 @@ class _ChatPageState extends State<ChatPage>
             pending: _pending,
             onRemovePending: (index) {
               if (index < 0 || index >= _pending.length) return;
+              if (!_pending[index].canRemove) return;
               setState(() {
                 _pending.removeAt(index);
+              });
+            },
+            onRetryPending: (index) {
+              if (index < 0 || index >= _pending.length) return;
+              if (!_pending[index].canRetry) return;
+              setState(() {
+                _pending[index] = _pending[index].markQueued();
               });
             },
             onPickPhotos: _pickPhotos,
@@ -1605,8 +1806,11 @@ class _ChatPageState extends State<ChatPage>
                 await _sendRecordedVideo(attachment);
                 return;
               }
+              if (!_canAttachFileSize(attachment.sizeBytes)) {
+                return;
+              }
               setState(() {
-                _pending.add(attachment);
+                _pending.add(attachment.markQueued());
               });
             },
           ),

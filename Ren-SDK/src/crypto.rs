@@ -6,6 +6,7 @@ use hkdf::Hkdf;
 use pbkdf2::pbkdf2_hmac;
 use sha2::{Digest, Sha256};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
+use zeroize::Zeroize;
 
 #[path = "mod.rs"]
 pub mod types;
@@ -23,7 +24,9 @@ fn b64_decode(s: &str) -> Result<Vec<u8>, CryptoError> {
 }
 
 fn nonce_from_slice(n: &[u8]) -> Result<Nonce, CryptoError> {
-    if n.len() != 12 { return Err(CryptoError::InvalidKeyLen("nonce".into())); }
+    if n.len() != 12 {
+        return Err(CryptoError::InvalidKeyLen("nonce".into()));
+    }
     let mut arr = [0u8; 12];
     arr.copy_from_slice(n);
     Ok(Nonce::from(arr))
@@ -75,7 +78,9 @@ pub fn export_private_key_b64(private_key: &StaticSecret) -> String {
 /// Импортирует публичный X25519-ключ из Base64 (ожидается 32 байта RAW).
 pub fn import_public_key_b64(b64: &str) -> Result<X25519PublicKey, CryptoError> {
     let bytes = b64_decode(b64)?;
-    if bytes.len() != 32 { return Err(CryptoError::InvalidKeyLen(format!("{}", bytes.len()))); }
+    if bytes.len() != 32 {
+        return Err(CryptoError::InvalidKeyLen(format!("{}", bytes.len())));
+    }
     let mut arr = [0u8; 32];
     arr.copy_from_slice(&bytes);
     Ok(X25519PublicKey::from(arr))
@@ -84,7 +89,9 @@ pub fn import_public_key_b64(b64: &str) -> Result<X25519PublicKey, CryptoError> 
 /// Импортирует приватный X25519-ключ из Base64 (ожидается 32 байта RAW).
 pub fn import_private_key_b64(b64: &str) -> Result<StaticSecret, CryptoError> {
     let bytes = b64_decode(b64)?;
-    if bytes.len() != 32 { return Err(CryptoError::InvalidKeyLen(format!("{}", bytes.len()))); }
+    if bytes.len() != 32 {
+        return Err(CryptoError::InvalidKeyLen(format!("{}", bytes.len())));
+    }
     let mut arr = [0u8; 32];
     arr.copy_from_slice(&bytes);
     Ok(StaticSecret::from(arr))
@@ -96,7 +103,9 @@ pub fn derive_key_from_password(password: &str, salt_b64: &str) -> Result<AeadKe
     let mut out = [0u8; 32];
     let salt = b64_decode(salt_b64)?;
     pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt, 100_000, &mut out);
-    AeadKey::from_bytes(&out)
+    let key = AeadKey::from_bytes(&out);
+    out.zeroize();
+    key
 }
 
 /// Деривирует 32-байтный ключ из произвольной строки: SHA-256(secret)[0..32].
@@ -106,7 +115,9 @@ pub fn derive_key_from_string(secret: &str) -> Result<AeadKey, CryptoError> {
     let digest = hasher.finalize();
     let mut out = [0u8; 32];
     out.copy_from_slice(&digest[..32]);
-    AeadKey::from_bytes(&out)
+    let key = AeadKey::from_bytes(&out);
+    out.zeroize();
+    key
 }
 
 /// Шифрует строку и возвращает Base64-последовательность: nonce(12) || ciphertext.
@@ -125,7 +136,9 @@ pub fn encrypt_data(data: &str, key: &AeadKey) -> Result<String, CryptoError> {
 /// Дешифрует результат `encrypt_data` (Base64: nonce(12)||ciphertext) в строку.
 pub fn decrypt_data(b64_combined: &str, key: &AeadKey) -> Result<String, CryptoError> {
     let data = b64_decode(b64_combined)?;
-    if data.len() < 12 { return Err(CryptoError::Aead); }
+    if data.len() < 12 {
+        return Err(CryptoError::Aead);
+    }
     let (nonce_bytes, ct) = data.split_at(12);
     let nonce = nonce_from_slice(nonce_bytes)?;
     let cipher = ChaCha20Poly1305::new(&key.0);
@@ -137,7 +150,9 @@ pub fn decrypt_data(b64_combined: &str, key: &AeadKey) -> Result<String, CryptoE
 pub fn generate_message_encryption_key() -> AeadKey {
     let mut key_bytes = [0u8; 32];
     getrandom::getrandom(&mut key_bytes).expect("rand");
-    AeadKey::from_bytes(&key_bytes).expect("key size")
+    let key = AeadKey::from_bytes(&key_bytes).expect("key size");
+    key_bytes.zeroize();
+    key
 }
 
 // Wrap symmetric key using X25519 ECDH + HKDF-SHA256 -> ChaCha20-Poly1305
@@ -145,26 +160,38 @@ pub fn generate_message_encryption_key() -> AeadKey {
 pub fn wrap_symmetric_key(
     key_to_wrap: &AeadKey,
     receiver_public_key_b64: &str,
-) -> Result<(String /*wrappedKey*/, String /*ephemeralPublicKey*/, String /*nonce*/ ), CryptoError> {
+) -> Result<
+    (
+        String, /*wrappedKey*/
+        String, /*ephemeralPublicKey*/
+        String, /*nonce*/
+    ),
+    CryptoError,
+> {
     let receiver_pk = import_public_key_b64(receiver_public_key_b64)?;
     // ephemeral keypair
     let mut eph_bytes = [0u8; 32];
     getrandom::getrandom(&mut eph_bytes).expect("rand");
     let eph_sk = StaticSecret::from(eph_bytes);
+    eph_bytes.zeroize();
     let eph_pk = X25519PublicKey::from(&eph_sk);
     // shared secret
     let shared = eph_sk.diffie_hellman(&receiver_pk);
     // derive wrapping key
     let hk = Hkdf::<Sha256>::new(None, shared.as_bytes());
     let mut wrap_key_bytes = [0u8; 32];
-    hk.expand(b"ren-sdk-wrap", &mut wrap_key_bytes).map_err(|_| CryptoError::Aead)?;
+    hk.expand(b"ren-sdk-wrap", &mut wrap_key_bytes)
+        .map_err(|_| CryptoError::Aead)?;
     let wrap_key = AeadKey::from_bytes(&wrap_key_bytes)?;
+    wrap_key_bytes.zeroize();
     // encrypt raw key bytes
     let mut nonce_bytes = [0u8; 12];
     getrandom::getrandom(&mut nonce_bytes).expect("rand");
     let cipher = ChaCha20Poly1305::new(&wrap_key.0);
     let nonce = Nonce::from(nonce_bytes);
-    let ct = cipher.encrypt(&nonce, &key_to_wrap.to_bytes()[..])?;
+    let mut key_bytes = key_to_wrap.to_bytes();
+    let ct = cipher.encrypt(&nonce, &key_bytes[..])?;
+    key_bytes.zeroize();
     Ok((
         b64_encode(&ct),
         export_public_key_b64(&eph_pk),
@@ -186,8 +213,10 @@ pub fn unwrap_symmetric_key(
     let shared = recv_sk.diffie_hellman(&eph_pk);
     let hk = Hkdf::<Sha256>::new(None, shared.as_bytes());
     let mut wrap_key_bytes = [0u8; 32];
-    hk.expand(b"ren-sdk-wrap", &mut wrap_key_bytes).map_err(|_| CryptoError::Aead)?;
+    hk.expand(b"ren-sdk-wrap", &mut wrap_key_bytes)
+        .map_err(|_| CryptoError::Aead)?;
     let wrap_key = AeadKey::from_bytes(&wrap_key_bytes)?;
+    wrap_key_bytes.zeroize();
     let cipher = ChaCha20Poly1305::new(&wrap_key.0);
     let pt = cipher.decrypt(&nonce, ct.as_ref())?;
     AeadKey::from_bytes(&pt)
@@ -200,11 +229,18 @@ pub fn encrypt_message(data: &str, key: &AeadKey) -> Result<EncryptedMessage, Cr
     getrandom::getrandom(&mut nonce_bytes).expect("rand");
     let nonce = Nonce::from(nonce_bytes);
     let ct = cipher.encrypt(&nonce, data.as_bytes())?;
-    Ok(EncryptedMessage { ciphertext: b64_encode(&ct), nonce: b64_encode(&nonce_bytes) })
+    Ok(EncryptedMessage {
+        ciphertext: b64_encode(&ct),
+        nonce: b64_encode(&nonce_bytes),
+    })
 }
 
 /// AEAD-дешифрование сообщения по Base64 `ciphertext` и `nonce`.
-pub fn decrypt_message(ciphertext_b64: &str, nonce_b64: &str, key: &AeadKey) -> Result<String, CryptoError> {
+pub fn decrypt_message(
+    ciphertext_b64: &str,
+    nonce_b64: &str,
+    key: &AeadKey,
+) -> Result<String, CryptoError> {
     let ct = b64_decode(ciphertext_b64)?;
     let nonce = nonce_from_b64(nonce_b64)?;
     let cipher = ChaCha20Poly1305::new(&key.0);
@@ -214,7 +250,11 @@ pub fn decrypt_message(ciphertext_b64: &str, nonce_b64: &str, key: &AeadKey) -> 
 }
 
 /// AEAD-дешифрование файла, когда ciphertext уже в виде raw bytes (без base64).
-pub fn decrypt_file_raw(ciphertext: &[u8], nonce_b64: &str, key: &AeadKey) -> Result<Vec<u8>, CryptoError> {
+pub fn decrypt_file_raw(
+    ciphertext: &[u8],
+    nonce_b64: &str,
+    key: &AeadKey,
+) -> Result<Vec<u8>, CryptoError> {
     let nonce = nonce_from_b64(nonce_b64)?;
     let cipher = ChaCha20Poly1305::new(&key.0);
     let pt = cipher.decrypt(&nonce, ciphertext)?;
@@ -222,17 +262,31 @@ pub fn decrypt_file_raw(ciphertext: &[u8], nonce_b64: &str, key: &AeadKey) -> Re
 }
 
 /// AEAD-шифрование произвольных байт файла. Возвращает Base64 ciphertext и nonce.
-pub fn encrypt_file(bytes: &[u8], filename: &str, mimetype: &str, key: &AeadKey) -> Result<EncryptedFile, CryptoError> {
+pub fn encrypt_file(
+    bytes: &[u8],
+    filename: &str,
+    mimetype: &str,
+    key: &AeadKey,
+) -> Result<EncryptedFile, CryptoError> {
     let cipher = ChaCha20Poly1305::new(&key.0);
     let mut nonce_bytes = [0u8; 12];
     getrandom::getrandom(&mut nonce_bytes).expect("rand");
     let nonce = Nonce::from(nonce_bytes);
     let ct = cipher.encrypt(&nonce, bytes)?;
-    Ok(EncryptedFile { ciphertext: b64_encode(&ct), nonce: b64_encode(&nonce_bytes), filename: filename.to_string(), mimetype: mimetype.to_string() })
+    Ok(EncryptedFile {
+        ciphertext: b64_encode(&ct),
+        nonce: b64_encode(&nonce_bytes),
+        filename: filename.to_string(),
+        mimetype: mimetype.to_string(),
+    })
 }
 
 /// AEAD-дешифрование файла по Base64 `ciphertext` и `nonce`.
-pub fn decrypt_file(ciphertext_b64: &str, nonce_b64: &str, key: &AeadKey) -> Result<Vec<u8>, CryptoError> {
+pub fn decrypt_file(
+    ciphertext_b64: &str,
+    nonce_b64: &str,
+    key: &AeadKey,
+) -> Result<Vec<u8>, CryptoError> {
     let ct = b64_decode(ciphertext_b64)?;
     let nonce = nonce_from_b64(nonce_b64)?;
     let cipher = ChaCha20Poly1305::new(&key.0);
@@ -241,7 +295,10 @@ pub fn decrypt_file(ciphertext_b64: &str, nonce_b64: &str, key: &AeadKey) -> Res
 }
 
 /// AEAD-шифрование произвольных байт файла. Возвращает raw ciphertext bytes + nonce (base64).
-pub fn encrypt_file_raw(bytes: &[u8], key: &AeadKey) -> Result<(Vec<u8> /*ciphertext*/, String /*nonce*/ ), CryptoError> {
+pub fn encrypt_file_raw(
+    bytes: &[u8],
+    key: &AeadKey,
+) -> Result<(Vec<u8> /*ciphertext*/, String /*nonce*/), CryptoError> {
     let cipher = ChaCha20Poly1305::new(&key.0);
     let mut nonce_bytes = [0u8; 12];
     getrandom::getrandom(&mut nonce_bytes).expect("rand");
@@ -251,7 +308,13 @@ pub fn encrypt_file_raw(bytes: &[u8], key: &AeadKey) -> Result<(Vec<u8> /*cipher
 }
 
 /// Удобный вариант: шифрует файл и сообщение под один nonce/ключ.
-pub fn encrypt_file_with_message(bytes: &[u8], message: &str, key: &AeadKey, filename: &str, mimetype: &str) -> Result<EncryptedFileWithMessage, CryptoError> {
+pub fn encrypt_file_with_message(
+    bytes: &[u8],
+    message: &str,
+    key: &AeadKey,
+    filename: &str,
+    mimetype: &str,
+) -> Result<EncryptedFileWithMessage, CryptoError> {
     let cipher = ChaCha20Poly1305::new(&key.0);
     let mut nonce_bytes = [0u8; 12];
     getrandom::getrandom(&mut nonce_bytes).expect("rand");
@@ -268,7 +331,14 @@ pub fn encrypt_file_with_message(bytes: &[u8], message: &str, key: &AeadKey, fil
 }
 
 /// Дешифрует результат `encrypt_file_with_message` и возвращает байты файла и строку сообщения.
-pub fn decrypt_file_with_message(enc_file_b64: &str, ciphertext_b64: &str, nonce_b64: &str, key: &AeadKey, filename: &str, mimetype: &str) -> Result<DecryptedFileWithMessage, CryptoError> {
+pub fn decrypt_file_with_message(
+    enc_file_b64: &str,
+    ciphertext_b64: &str,
+    nonce_b64: &str,
+    key: &AeadKey,
+    filename: &str,
+    mimetype: &str,
+) -> Result<DecryptedFileWithMessage, CryptoError> {
     let nonce = nonce_from_b64(nonce_b64)?;
     let cipher = ChaCha20Poly1305::new(&key.0);
     let file_ct = b64_decode(enc_file_b64)?;
@@ -276,5 +346,10 @@ pub fn decrypt_file_with_message(enc_file_b64: &str, ciphertext_b64: &str, nonce
     let file = cipher.decrypt(&nonce, file_ct.as_ref())?;
     let msg = cipher.decrypt(&nonce, msg_ct.as_ref())?;
     let message = String::from_utf8(msg).map_err(|_| CryptoError::Aead)?;
-    Ok(DecryptedFileWithMessage { file, message, filename: filename.to_string(), mimetype: mimetype.to_string() })
+    Ok(DecryptedFileWithMessage {
+        file,
+        message,
+        filename: filename.to_string(),
+        mimetype: mimetype.to_string(),
+    })
 }
