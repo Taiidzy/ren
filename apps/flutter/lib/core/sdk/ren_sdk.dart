@@ -26,8 +26,13 @@ const Map<Abi, String> _androidPinnedSdkSha256 = <Abi, String>{
   Abi.androidIA32:
       'a10a3de6ae84dc7af0c30f810b8c31c6384cacaeb60f1d4e161cfcd845911a6f',
 };
-const String _iosArm64PinnedSdkSha256 =
+const String _iosArm64PinnedSdkSha256Default =
     'f6045a96db9dc40924794ea6eb5dfecdc3d44806c82e6b7a38908a37be8638c3';
+const String _iosArm64PinnedSdkSha256 = String.fromEnvironment(
+  'REN_IOS_SDK_FINGERPRINT',
+  defaultValue: _iosArm64PinnedSdkSha256Default,
+);
+String? _sdkFingerprintCache;
 
 String _sha256OfFileSync(File file) {
   final bytes = file.readAsBytesSync();
@@ -77,13 +82,33 @@ void _verifyAndroidSdkIntegrityOrThrow() {
 }
 
 String currentSdkFingerprint() {
+  final cached = _sdkFingerprintCache;
+  if (cached != null) {
+    return cached;
+  }
+
+  String value = '';
   if (Platform.isAndroid) {
-    return _androidPinnedSdkSha256[Abi.current()] ?? '';
+    value = _androidPinnedSdkSha256[Abi.current()] ?? '';
+    if (value.isEmpty) {
+      final path = _resolveLoadedLibraryPathPosix('libren_sdk.so');
+      if (path != null && path.isNotEmpty) {
+        final file = File(path);
+        if (file.existsSync()) {
+          value = _sha256OfFileSync(file);
+        }
+      }
+    }
+    _sdkFingerprintCache = value;
+    return value;
   }
   if (Platform.isIOS) {
-    return _iosArm64PinnedSdkSha256;
+    value = _iosArm64PinnedSdkSha256;
+    _sdkFingerprintCache = value;
+    return value;
   }
-  return '';
+  _sdkFingerprintCache = value;
+  return value;
 }
 
 DynamicLibrary _openLibrary() {
