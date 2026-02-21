@@ -7,6 +7,7 @@ import 'package:video_player/video_player.dart';
 import 'package:hugeicons/hugeicons.dart';
 
 import 'package:ren/shared/widgets/glass_surface.dart';
+import 'package:ren/features/chats/utils/video_codec_helper.dart';
 
 class SquareVideoBubble extends StatefulWidget {
   final String videoPath;
@@ -50,7 +51,13 @@ class _SquareVideoBubbleState extends State<SquareVideoBubble> {
         return;
       }
 
-      _controller = VideoPlayerController.file(file);
+      // Пытаемся получить совместимый путь к видео (с конвертацией HEVC в H.264 при необходимости)
+      String? playablePath = await VideoCodecHelper.getPlayableVideoPath(widget.videoPath);
+      if (playablePath == null) {
+        playablePath = widget.videoPath; // Fallback к оригиналу
+      }
+
+      _controller = VideoPlayerController.file(File(playablePath));
       await _controller!.initialize();
       await _controller!.setLooping(true);
       await _controller!.setVolume(0);
@@ -74,6 +81,53 @@ class _SquareVideoBubbleState extends State<SquareVideoBubble> {
       }
     } catch (e) {
       debugPrint('Failed to initialize video player: $e');
+      // Try to handle codec incompatibility by checking if it's an HEVC issue
+      final errorMessage = e.toString();
+      if (errorMessage.contains('MediaCodec') || errorMessage.contains('hevc') || errorMessage.contains('hvc1')) {
+        debugPrint('HEVC codec not supported, attempting conversion...');
+        // Пробуем конвертацию при ошибке
+        final convertedPath = await VideoCodecHelper.convertHevcToH264(widget.videoPath);
+        if (convertedPath != null && mounted) {
+          debugPrint('Retrying with converted file: $convertedPath');
+          // Рекурсивно пробуем с конвертированным файлом
+          await _initializeWithConvertedFile(convertedPath);
+          return;
+        }
+      }
+      if (mounted) {
+        setState(() {
+          _hasError = true;
+        });
+      }
+    }
+  }
+
+  Future<void> _initializeWithConvertedFile(String convertedPath) async {
+    try {
+      _controller = VideoPlayerController.file(File(convertedPath));
+      await _controller!.initialize();
+      await _controller!.setLooping(true);
+      await _controller!.setVolume(0);
+      await _controller!.play();
+
+      _controller!.addListener(() {
+        if (mounted) {
+          final isPlaying = _controller!.value.isPlaying;
+          if (isPlaying != _isPlaying) {
+            setState(() {
+              _isPlaying = isPlaying;
+            });
+          }
+        }
+      });
+
+      if (mounted) {
+        setState(() {
+          _isInitialized = true;
+        });
+      }
+    } catch (e) {
+      debugPrint('Failed to initialize with converted file: $e');
       if (mounted) {
         setState(() {
           _hasError = true;

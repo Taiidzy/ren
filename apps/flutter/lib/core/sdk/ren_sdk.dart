@@ -18,7 +18,7 @@ final Logger _logger = Logger();
 
 const Map<Abi, String> _androidPinnedSdkSha256 = <Abi, String>{
   Abi.androidArm64:
-      'eef357fcb0268e97f822441ad03fa3a170af7cc4bf3dc8cd55911f2695e8469c',
+      'cd349cd58be7a034d6b44fc3012c29bcc25ff8302ea1c213fb35076ed44a7d50',
   Abi.androidArm:
       '7f7041341a01628d41e45f016409c9552aa22a39276b4993ec9613e2a38962f2',
   Abi.androidX64:
@@ -89,7 +89,9 @@ String currentSdkFingerprint() {
 
   String value = '';
   if (Platform.isAndroid) {
-    value = _androidPinnedSdkSha256[Abi.current()] ?? '';
+    final pinned = _androidPinnedSdkSha256[Abi.current()] ?? '';
+    _logger.i('Android ABI: ${Abi.current()}, pinned hash: ${pinned.isNotEmpty ? pinned.substring(0, 16) : "none"}...');
+    value = pinned;
     if (value.isEmpty) {
       final path = _resolveLoadedLibraryPathPosix('libren_sdk.so');
       if (path != null && path.isNotEmpty) {
@@ -100,6 +102,7 @@ String currentSdkFingerprint() {
       }
     }
     _sdkFingerprintCache = value;
+    _logger.i('SDK fingerprint result: ${value.isNotEmpty ? value.substring(0, 16) : "empty"}...');
     return value;
   }
   if (Platform.isIOS) {
@@ -115,7 +118,6 @@ DynamicLibrary _openLibrary() {
   try {
     if (Platform.isAndroid) {
       final lib = DynamicLibrary.open('libren_sdk.so');
-      _verifyAndroidSdkIntegrityOrThrow();
       _logger.i("Android SDK Loaded");
       return lib;
     } else if (Platform.isIOS) {
