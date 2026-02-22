@@ -3521,7 +3521,7 @@ class _ChatMembersSheetBodyState extends State<_ChatMembersSheetBody> {
 
   final TextEditingController _memberIdCtrl = TextEditingController();
   final TextEditingController _memberSearchCtrl = TextEditingController();
-  String _newMemberRole = 'member';
+  final String _newMemberRole = 'member';
   Timer? _memberSearchDebounce;
   int _memberSearchSeq = 0;
   bool _memberSearching = false;
@@ -3789,6 +3789,58 @@ class _ChatMembersSheetBodyState extends State<_ChatMembersSheetBody> {
     }
   }
 
+  Future<void> _showMemberActionsAt(
+    ChatMember member,
+    Offset globalPosition,
+  ) async {
+    final role = member.role.trim().toLowerCase();
+    final canChangeRole =
+        _canManage && member.userId != widget.myUserId && role != 'owner';
+    final canRemove = canChangeRole;
+    if (!canChangeRole) return;
+
+    final action = await RenContextMenu.show<String>(
+      context,
+      globalPosition: globalPosition,
+      entries: [
+        if (role != 'admin')
+          RenContextMenuEntry.action(
+            RenContextMenuAction<String>(
+              icon: HugeIcon(icon: HugeIcons.strokeRoundedShield01, size: 18),
+              label: 'Сделать admin',
+              value: 'admin',
+            ),
+          ),
+        if (role != 'member')
+          RenContextMenuEntry.action(
+            RenContextMenuAction<String>(
+              icon: HugeIcon(icon: HugeIcons.strokeRoundedUser, size: 18),
+              label: 'Сделать member',
+              value: 'member',
+            ),
+          ),
+        if (canRemove) ...[
+          const RenContextMenuEntry.divider(),
+          RenContextMenuEntry.action(
+            RenContextMenuAction<String>(
+              icon: HugeIcon(icon: HugeIcons.strokeRoundedDelete02, size: 18),
+              label: 'Удалить из чата',
+              value: 'remove',
+              danger: true,
+            ),
+          ),
+        ],
+      ],
+    );
+
+    if (!mounted || action == null) return;
+    if (action == 'remove') {
+      await _removeMember(member);
+      return;
+    }
+    await _setRole(member, action);
+  }
+
   String _roleLabel(String role) {
     switch (role.trim().toLowerCase()) {
       case 'owner':
@@ -3851,49 +3903,17 @@ class _ChatMembersSheetBodyState extends State<_ChatMembersSheetBody> {
               ),
               const SizedBox(height: 12),
               if (_canManage) ...[
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _memberIdCtrl,
-                        keyboardType: TextInputType.number,
-                        decoration: const InputDecoration(
-                          labelText: 'ID участника',
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    DropdownButton<String>(
-                      value: _newMemberRole,
-                      items: const [
-                        DropdownMenuItem(
-                          value: 'member',
-                          child: Text('member'),
-                        ),
-                        DropdownMenuItem(value: 'admin', child: Text('admin')),
-                      ],
-                      onChanged: _busy
-                          ? null
-                          : (v) {
-                              if (v == null) return;
-                              setState(() {
-                                _newMemberRole = v;
-                              });
-                            },
-                    ),
-                    const SizedBox(width: 8),
-                    FilledButton(
-                      onPressed: _busy ? null : _addMember,
-                      child: const Text('Добавить'),
-                    ),
-                  ],
-                ),
                 const SizedBox(height: 10),
                 TextField(
                   controller: _memberSearchCtrl,
                   onChanged: _scheduleMemberSearch,
+                  cursorColor: theme.colorScheme.primary,
+                  style: TextStyle(
+                    color: theme.colorScheme.onSurface,
+                    fontSize: 14,
+                  ),
                   decoration: InputDecoration(
-                    labelText: 'Поиск пользователя (username / ID)',
+                    labelText: 'Имя пользователя',
                     suffixIcon: _memberSearchCtrl.text.trim().isEmpty
                         ? null
                         : IconButton(
@@ -3910,6 +3930,12 @@ class _ChatMembersSheetBodyState extends State<_ChatMembersSheetBody> {
                                   },
                             icon: const Icon(Icons.close_rounded),
                           ),
+                    filled: false,
+                    isDense: true,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide.none,
+                    ),
                   ),
                 ),
                 if (_memberSearching)
@@ -3986,14 +4012,25 @@ class _ChatMembersSheetBodyState extends State<_ChatMembersSheetBody> {
                                         ],
                                       ),
                                     ),
-                                    FilledButton(
-                                      onPressed: _busy
+                                    GlassSurface(
+                                      borderRadius: 10,
+                                      blurSigma: 12,
+                                      width: 32,
+                                      height: 32,
+                                      onTap: _busy
                                           ? null
                                           : () async {
                                               _memberIdCtrl.text = '$uid';
                                               await _addMember();
                                             },
-                                      child: const Text('Add'),
+                                      child: Center(
+                                        child: HugeIcon(
+                                          icon: HugeIcons.strokeRoundedAdd01,
+                                          size: 16,
+                                          color: theme.colorScheme.onSurface
+                                              .withOpacity(0.85),
+                                        ),
+                                      ),
                                     ),
                                   ],
                                 ),
@@ -4043,7 +4080,6 @@ class _ChatMembersSheetBodyState extends State<_ChatMembersSheetBody> {
                       _canManage &&
                       member.userId != widget.myUserId &&
                       role != 'owner';
-                  final canRemove = canChangeRole;
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 8),
                     child: GlassSurface(
@@ -4085,32 +4121,41 @@ class _ChatMembersSheetBodyState extends State<_ChatMembersSheetBody> {
                             ),
                           ),
                           if (canChangeRole)
-                            PopupMenuButton<String>(
-                              icon: const Icon(Icons.more_vert_rounded),
-                              onSelected: (value) async {
-                                if (value == 'remove') {
-                                  await _removeMember(member);
-                                  return;
-                                }
-                                await _setRole(member, value);
+                            Builder(
+                              builder: (buttonContext) {
+                                return GlassSurface(
+                                  borderRadius: 10,
+                                  blurSigma: 10,
+                                  width: 34,
+                                  height: 34,
+                                  onTap: _busy
+                                      ? null
+                                      : () async {
+                                          final box = buttonContext
+                                              .findRenderObject();
+                                          if (box is! RenderBox) return;
+                                          final origin = box.localToGlobal(
+                                            Offset.zero,
+                                          );
+                                          final globalPosition = Offset(
+                                            origin.dx - 170,
+                                            origin.dy + box.size.height + 4,
+                                          );
+                                          await _showMemberActionsAt(
+                                            member,
+                                            globalPosition,
+                                          );
+                                        },
+                                  child: Center(
+                                    child: Icon(
+                                      Icons.more_horiz_rounded,
+                                      size: 18,
+                                      color: theme.colorScheme.onSurface
+                                          .withOpacity(0.82),
+                                    ),
+                                  ),
+                                );
                               },
-                              itemBuilder: (_) => [
-                                if (role != 'admin')
-                                  const PopupMenuItem<String>(
-                                    value: 'admin',
-                                    child: Text('Сделать admin'),
-                                  ),
-                                if (role != 'member')
-                                  const PopupMenuItem<String>(
-                                    value: 'member',
-                                    child: Text('Сделать member'),
-                                  ),
-                                if (canRemove)
-                                  const PopupMenuItem<String>(
-                                    value: 'remove',
-                                    child: Text('Удалить из чата'),
-                                  ),
-                              ],
                             ),
                         ],
                       ),

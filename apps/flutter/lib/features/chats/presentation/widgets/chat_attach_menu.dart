@@ -127,23 +127,6 @@ Future<void> showChatAttachMenu(
                   style: theme.textTheme.bodySmall,
                   textAlign: TextAlign.center,
                 ),
-
-                const SizedBox(height: 8),
-
-                // Cancel button
-                SizedBox(
-                  width: double.infinity,
-                  child: TextButton(
-                    onPressed: () => Navigator.of(ctx).pop(),
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                    child: const Text('Отмена'),
-                  ),
-                ),
               ],
             ),
           ),

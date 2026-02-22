@@ -87,10 +87,19 @@
   - заменено поле ввода ID на поиск пользователей (аватар + имя);
   - все текстовые инпуты сделаны прозрачными (без фона, borderless);
   - заменён `DropdownButton` на кастомный `_RoleSelectorDropdown`;
-  - заменён `PopupMenuButton` на кастомный `_MemberActionDropdown`;
+  - заменён `PopupMenuButton` на кастомное меню через `RenContextMenu` (как в `shared/widgets/context_menu.dart`);
+  - действия участника (сделать admin/member, удалить) открываются из glass-кнопки `...` рядом с карточкой участника;
   - единый стиль glass surface на протяжении всего UI.
 - Файлы:
-  - `lib/features/chats/presentation/chat_page.dart` — `_ChatMembersSheetBody` обновлён.
+  - `apps/flutter/lib/features/chats/presentation/chat_page.dart` — `_ChatMembersSheetBody` обновлён.
+
+#### Chat input and attach menu polish
+- Небольшие UI-правки в compose/attach:
+  - из bottom sheet вложений убрана отдельная кнопка `Отмена` (оставлено закрытие через системные жесты/тап вне sheet);
+  - иконка отмены записи в input bar заменена на `HugeIcons.strokeRoundedCancel01` для визуальной консистентности.
+- Файлы:
+  - `apps/flutter/lib/features/chats/presentation/widgets/chat_attach_menu.dart`
+  - `apps/flutter/lib/features/chats/presentation/widgets/chat_input_bar.dart`
 
 #### Owner-only chat info editing
 - Добавлена возможность для владельца изменять информацию о чате:

@@ -982,8 +982,8 @@ class _ChatInputBarState extends State<ChatInputBar> {
                                           ?.cancelRecording();
                                     },
                                     child: Center(
-                                      child: Icon(
-                                        Icons.close,
+                                      child: HugeIcon(
+                                        icon: HugeIcons.strokeRoundedCancel01,
                                         size: 16,
                                         color: theme.colorScheme.onSurface
                                             .withOpacity(0.85),
