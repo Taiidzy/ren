@@ -13,6 +13,7 @@ import 'package:ren/features/auth/presentation/auth_page.dart';
 import 'package:ren/theme/themes.dart';
 
 import 'package:ren/core/providers/background_settings.dart';
+import 'package:ren/core/providers/notifications_settings.dart';
 import 'package:ren/core/providers/theme_settings.dart';
 
 import 'package:ren/core/sdk/ren_sdk.dart';
@@ -124,6 +125,9 @@ class _MyAppState extends State<MyApp> {
       providers: [
         ChangeNotifierProvider<BackgroundSettings>(
           create: (_) => BackgroundSettings(),
+        ),
+        ChangeNotifierProvider<NotificationsSettings>(
+          create: (_) => NotificationsSettings(),
         ),
         ChangeNotifierProvider<ThemeSettings>(create: (_) => ThemeSettings()),
         Provider<RenSdk>.value(value: RenSdk.instance),

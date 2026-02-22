@@ -20,6 +20,10 @@ class ChatMessage {
   final List<ChatAttachment> attachments;
   final DateTime sentAt;
   final String? replyToMessageId;
+  final bool isDelivered;
+  final bool isRead;
+  final String? senderName;
+  final String? senderAvatarUrl;
 
   const ChatMessage({
     required this.id,
@@ -29,6 +33,10 @@ class ChatMessage {
     this.attachments = const [],
     required this.sentAt,
     this.replyToMessageId,
+    this.isDelivered = false,
+    this.isRead = false,
+    this.senderName,
+    this.senderAvatarUrl,
   });
 }
 
@@ -57,6 +65,12 @@ class ChatPreview {
   final bool isFavorite;
   final String lastMessage;
   final DateTime lastMessageAt;
+  final int unreadCount;
+  final String myRole;
+  final bool lastMessageIsMine;
+  final bool lastMessageIsPending;
+  final bool lastMessageIsDelivered;
+  final bool lastMessageIsRead;
 
   const ChatPreview({
     required this.id,
@@ -66,5 +80,27 @@ class ChatPreview {
     this.isFavorite = false,
     required this.lastMessage,
     required this.lastMessageAt,
+    this.unreadCount = 0,
+    this.myRole = 'member',
+    this.lastMessageIsMine = false,
+    this.lastMessageIsPending = false,
+    this.lastMessageIsDelivered = false,
+    this.lastMessageIsRead = false,
+  });
+}
+
+class ChatMember {
+  final int userId;
+  final String username;
+  final String avatarUrl;
+  final String role;
+  final DateTime joinedAt;
+
+  const ChatMember({
+    required this.userId,
+    required this.username,
+    required this.avatarUrl,
+    required this.role,
+    required this.joinedAt,
   });
 }

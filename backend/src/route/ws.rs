@@ -8,6 +8,7 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use serde_json::json;
 use sqlx::Row;
 use std::collections::{HashMap, HashSet};
 use tokio::{
@@ -16,7 +17,7 @@ use tokio::{
 };
 
 use crate::AppState;
-use crate::middleware::{CurrentUser, ensure_member};
+use crate::middleware::{CurrentUser, ensure_can_send_message, ensure_member};
 use crate::models::auth::UserResponse;
 use crate::models::chats::{FileMetadata, Message};
 
@@ -130,6 +131,28 @@ enum ServerEvent<'a> {
     },
 }
 
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum MembershipServerEvent {
+    MemberAdded {
+        chat_id: i32,
+        user_id: i32,
+        role: String,
+        changed_by: i32,
+    },
+    MemberRemoved {
+        chat_id: i32,
+        user_id: i32,
+        changed_by: i32,
+    },
+    MemberRoleChanged {
+        chat_id: i32,
+        user_id: i32,
+        role: String,
+        changed_by: i32,
+    },
+}
+
 // OutMessage теперь использует структуру Message из models
 type OutMessage = Message;
 
@@ -221,6 +244,157 @@ pub async fn publish_profile_updated_for_user(
     }
 
     Ok(())
+}
+
+fn ensure_user_channel(state: &AppState, target_user_id: i32) {
+    if state.user_hub.get(&target_user_id).is_none() {
+        let (tx, _rx) = broadcast::channel::<String>(200);
+        state.user_hub.insert(target_user_id, tx);
+    }
+}
+
+fn publish_user(state: &AppState, target_user_id: i32, payload: String) {
+    if let Some(entry) = state.user_hub.get(&target_user_id) {
+        let _ = entry.send(payload);
+    }
+}
+
+fn publish_membership_event(state: &AppState, recipients: &[i32], event: MembershipServerEvent) {
+    let payload = match serde_json::to_string(&event) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+
+    let mut unique = HashSet::<i32>::new();
+    for uid in recipients {
+        if *uid <= 0 || !unique.insert(*uid) {
+            continue;
+        }
+        ensure_user_channel(state, *uid);
+        publish_user(state, *uid, payload.clone());
+    }
+}
+
+pub fn publish_member_added(
+    state: &AppState,
+    recipients: &[i32],
+    chat_id: i32,
+    user_id: i32,
+    role: String,
+    changed_by: i32,
+) {
+    publish_membership_event(
+        state,
+        recipients,
+        MembershipServerEvent::MemberAdded {
+            chat_id,
+            user_id,
+            role,
+            changed_by,
+        },
+    );
+}
+
+pub fn publish_member_removed(
+    state: &AppState,
+    recipients: &[i32],
+    chat_id: i32,
+    user_id: i32,
+    changed_by: i32,
+) {
+    publish_membership_event(
+        state,
+        recipients,
+        MembershipServerEvent::MemberRemoved {
+            chat_id,
+            user_id,
+            changed_by,
+        },
+    );
+}
+
+pub fn publish_member_role_changed(
+    state: &AppState,
+    recipients: &[i32],
+    chat_id: i32,
+    user_id: i32,
+    role: String,
+    changed_by: i32,
+) {
+    publish_membership_event(
+        state,
+        recipients,
+        MembershipServerEvent::MemberRoleChanged {
+            chat_id,
+            user_id,
+            role,
+            changed_by,
+        },
+    );
+}
+
+pub fn publish_payload_to_users(state: &AppState, recipients: &[i32], payload: String) {
+    let mut unique = HashSet::<i32>::new();
+    for uid in recipients {
+        if *uid <= 0 || !unique.insert(*uid) {
+            continue;
+        }
+        ensure_user_channel(state, *uid);
+        publish_user(state, *uid, payload.clone());
+    }
+}
+
+pub fn publish_chat_created(
+    state: &AppState,
+    recipients: &[i32],
+    chat_id: i32,
+    kind: &str,
+    title: Option<&str>,
+    created_by: i32,
+) {
+    let payload = json!({
+        "type": "chat_created",
+        "chat_id": chat_id,
+        "kind": kind,
+        "title": title,
+        "created_by": created_by
+    })
+    .to_string();
+    publish_payload_to_users(state, recipients, payload);
+}
+
+pub fn publish_message_read(
+    state: &AppState,
+    recipients: &[i32],
+    chat_id: i32,
+    user_id: i32,
+    last_read_message_id: i64,
+) {
+    let payload = json!({
+        "type": "message_read",
+        "chat_id": chat_id,
+        "user_id": user_id,
+        "last_read_message_id": last_read_message_id
+    })
+    .to_string();
+    publish_payload_to_users(state, recipients, payload);
+}
+
+pub fn publish_message_delivered(
+    state: &AppState,
+    recipients: &[i32],
+    chat_id: i32,
+    user_id: i32,
+    last_delivered_message_id: i64,
+) {
+    let payload = json!({
+        "type": "message_delivered",
+        "chat_id": chat_id,
+        "user_id": user_id,
+        "last_delivered_message_id": last_delivered_message_id
+    })
+    .to_string();
+    publish_payload_to_users(state, recipients, payload);
 }
 
 async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
@@ -452,21 +626,18 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                         metadata,
                         reply_to_message_id,
                     }) => {
-                        if !subs.joined.contains(&chat_id) {
-                            // safety: проверка членства
-                            if let Err(e) = ensure_member(&state, chat_id, user_id).await {
-                                let err_msg =
-                                    serde_json::to_string(&ServerEvent::Error { error: &e.1 })
-                                        .unwrap_or_else(|_| {
-                                            format!(
-                                                "{{\"type\":\"error\",\"error\":{}}}",
-                                                serde_json::to_string(&e.1)
-                                                    .unwrap_or_else(|_| "\"Ошибка\"".to_string())
-                                            )
-                                        });
-                                let _ = out_tx.send(WsMessage::Text(err_msg));
-                                continue;
-                            }
+                        if let Err(e) = ensure_can_send_message(&state, chat_id, user_id).await {
+                            let err_msg =
+                                serde_json::to_string(&ServerEvent::Error { error: &e.1 })
+                                    .unwrap_or_else(|_| {
+                                        format!(
+                                            "{{\"type\":\"error\",\"error\":{}}}",
+                                            serde_json::to_string(&e.1)
+                                                .unwrap_or_else(|_| "\"Ошибка\"".to_string())
+                                        )
+                                    });
+                            let _ = out_tx.send(WsMessage::Text(err_msg));
+                            continue;
                         }
 
                         let msg_type = message_type.unwrap_or_else(|| "text".to_string());
@@ -500,6 +671,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                                 deleted_at,
                                 deleted_by::INT8 AS deleted_by,
                                 is_read,
+                                is_delivered,
                                 envelopes,
                                 metadata
                             "#,
@@ -558,6 +730,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                                 .map(|t| t.to_rfc3339()),
                             deleted_by: row.try_get("deleted_by").ok(),
                             is_read: row.try_get("is_read").unwrap_or(false),
+                            is_delivered: row.try_get("is_delivered").unwrap_or(false),
                             has_files,
                             metadata: metadata_vec,
                             envelopes: envelopes_value,
@@ -656,6 +829,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                                 deleted_at,
                                 deleted_by::INT8 AS deleted_by,
                                 is_read,
+                                is_delivered,
                                 envelopes,
                                 metadata
                             "#,
@@ -722,6 +896,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                                 .ok()
                                 .map(|t| t.to_rfc3339()),
                             is_read: row.try_get("is_read").unwrap_or(false),
+                            is_delivered: row.try_get("is_delivered").unwrap_or(false),
                             reply_to_message_id: row.try_get("reply_to_message_id").ok(),
                             forwarded_from_message_id: row
                                 .try_get("forwarded_from_message_id")
@@ -920,7 +1095,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                             let _ = out_tx.send(WsMessage::Text(err_msg));
                             continue;
                         }
-                        if let Err(e) = ensure_member(&state, to_chat_id, user_id).await {
+                        if let Err(e) = ensure_can_send_message(&state, to_chat_id, user_id).await {
                             let err_msg =
                                 serde_json::to_string(&ServerEvent::Error { error: &e.1 })
                                     .unwrap_or_else(|_| {
@@ -1019,6 +1194,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                                 deleted_at,
                                 deleted_by::INT8 AS deleted_by,
                                 is_read,
+                                is_delivered,
                                 envelopes,
                                 metadata
                             "#,
@@ -1086,6 +1262,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                                 .map(|t| t.to_rfc3339()),
                             deleted_by: row.try_get("deleted_by").ok(),
                             is_read: row.try_get("is_read").unwrap_or(false),
+                            is_delivered: row.try_get("is_delivered").unwrap_or(false),
                             has_files,
                             metadata: metadata_vec,
                             envelopes: envelopes_value,

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'package:hugeicons/hugeicons.dart';
 import 'package:provider/provider.dart';
@@ -12,6 +13,7 @@ import 'package:ren/features/profile/presentation/profile_menu_page.dart';
 
 import 'package:ren/core/constants/api_url.dart';
 import 'package:ren/core/constants/keys.dart';
+import 'package:ren/core/providers/notifications_settings.dart';
 import 'package:ren/core/realtime/realtime_client.dart';
 import 'package:ren/core/secure/secure_storage.dart';
 import 'package:ren/core/notifications/local_notifications.dart';
@@ -125,6 +127,7 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
   int _myUserId = 0;
 
   bool _isForeground = true;
+  int? _currentOpenChatId;
 
   OverlayEntry? _topBanner;
   Timer? _topBannerTimer;
@@ -146,6 +149,47 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
     return '${Apiurl.api}/avatars/$normalized';
   }
 
+  void _rebuildChatIndexFromCurrentChats() {
+    _chatIndex
+      ..clear()
+      ..addEntries(
+        _chats
+            .map((c) => MapEntry(int.tryParse(c.id) ?? 0, c))
+            .where((e) => e.key > 0),
+      );
+  }
+
+  ChatPreview _placeholderChatFromRealtime({
+    required int chatId,
+    required String kind,
+    String? title,
+  }) {
+    final normalizedKind = kind.trim().toLowerCase().isEmpty
+        ? 'group'
+        : kind.trim().toLowerCase();
+    final rawTitle = (title ?? '').trim();
+    final name = rawTitle.isNotEmpty
+        ? rawTitle
+        : (normalizedKind == 'channel'
+              ? 'Новый канал'
+              : (normalizedKind == 'private' ? 'Новый чат' : 'Новая группа'));
+    return ChatPreview(
+      id: chatId.toString(),
+      peerId: null,
+      kind: normalizedKind,
+      user: ChatUser(id: '0', name: name, avatarUrl: '', isOnline: false),
+      isFavorite: false,
+      lastMessage: '',
+      lastMessageAt: DateTime.now(),
+      unreadCount: 0,
+      myRole: 'member',
+      lastMessageIsMine: false,
+      lastMessageIsPending: false,
+      lastMessageIsDelivered: false,
+      lastMessageIsRead: false,
+    );
+  }
+
   bool _isChatsDifferent(List<ChatPreview> a, List<ChatPreview> b) {
     if (identical(a, b)) return false;
     if (a.length != b.length) return true;
@@ -158,12 +202,57 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
           x.user.avatarUrl != y.user.avatarUrl ||
           x.lastMessage != y.lastMessage ||
           x.isFavorite != y.isFavorite ||
+          x.unreadCount != y.unreadCount ||
+          x.myRole != y.myRole ||
+          x.lastMessageIsMine != y.lastMessageIsMine ||
+          x.lastMessageIsPending != y.lastMessageIsPending ||
+          x.lastMessageIsDelivered != y.lastMessageIsDelivered ||
+          x.lastMessageIsRead != y.lastMessageIsRead ||
           x.lastMessageAt.millisecondsSinceEpoch !=
               y.lastMessageAt.millisecondsSinceEpoch) {
         return true;
       }
     }
     return false;
+  }
+
+  Future<void> _openChat(ChatPreview chat) async {
+    final chatId = int.tryParse(chat.id) ?? 0;
+    if (chatId > 0 && mounted) {
+      setState(() {
+        _currentOpenChatId = chatId;
+        _chats = _chats
+            .map(
+              (c) => c.id == chat.id
+                  ? ChatPreview(
+                      id: c.id,
+                      peerId: c.peerId,
+                      kind: c.kind,
+                      user: c.user,
+                      isFavorite: c.isFavorite,
+                      lastMessage: c.lastMessage,
+                      lastMessageAt: c.lastMessageAt,
+                      unreadCount: 0,
+                      myRole: c.myRole,
+                      lastMessageIsMine: c.lastMessageIsMine,
+                      lastMessageIsPending: c.lastMessageIsPending,
+                      lastMessageIsDelivered: c.lastMessageIsDelivered,
+                      lastMessageIsRead: c.lastMessageIsRead,
+                    )
+                  : c,
+            )
+            .toList(growable: false);
+      });
+    }
+    if (!mounted) return;
+    await Navigator.of(
+      context,
+    ).push(adaptivePageRoute((_) => ChatPage(chat: chat)));
+    if (!mounted) return;
+    setState(() {
+      _currentOpenChatId = null;
+    });
+    await _syncChats();
   }
 
   Future<void> _loadChatsOfflineFirst() async {
@@ -412,72 +501,15 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
         });
   }
 
-  Future<void> _createChatFlow() async {
-    final controller = TextEditingController();
-    final peerId = await GlassOverlays.showGlassDialog<int>(
-      context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('Новый чат'),
-          content: TextField(
-            controller: controller,
-            keyboardType: TextInputType.number,
-            decoration: const InputDecoration(labelText: 'ID пользователя'),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Отмена'),
-            ),
-            FilledButton(
-              onPressed: () {
-                final id = int.tryParse(controller.text.trim());
-                if (id == null || id <= 0) {
-                  Navigator.of(context).pop(null);
-                  return;
-                }
-                Navigator.of(context).pop(id);
-              },
-              child: const Text('Создать'),
-            ),
-          ],
-        );
-      },
-    );
-
-    if (!mounted) return;
-    if (peerId == null) {
-      if (controller.text.trim().isNotEmpty) {
-        showGlassSnack(
-          context,
-          'Укажите корректный ID пользователя',
-          kind: GlassSnackKind.error,
-        );
-      }
-      return;
-    }
-
-    try {
-      final repo = context.read<ChatsRepository>();
-      final chat = await repo.createPrivateChat(peerId);
-      if (!mounted) return;
-      await _reloadChats();
-      if (!mounted) return;
-      Navigator.of(
-        context,
-      ).push(adaptivePageRoute((_) => ChatPage(chat: chat)));
-    } catch (e) {
-      if (!mounted) return;
-      showGlassSnack(context, e.toString(), kind: GlassSnackKind.error);
-    }
-  }
-
   Future<void> _showChatActionsAt(
     ChatPreview chat,
     Offset globalPosition,
   ) async {
     final chatId = int.tryParse(chat.id) ?? 0;
     if (chatId <= 0) return;
+    final kind = chat.kind.trim().toLowerCase();
+    final isGroupOrChannel = kind == 'group' || kind == 'channel';
+    final isOwner = chat.myRole.trim().toLowerCase() == 'owner';
 
     final action = await RenContextMenu.show<String>(
       context,
@@ -496,11 +528,20 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
         RenContextMenuEntry.action(
           RenContextMenuAction<String>(
             icon: HugeIcon(icon: HugeIcons.strokeRoundedDelete02, size: 20),
-            label: 'Удалить чат',
+            label: isGroupOrChannel ? 'Выйти' : 'Удалить чат',
             danger: true,
-            value: 'delete',
+            value: 'leave_or_delete',
           ),
         ),
+        if (isGroupOrChannel && isOwner)
+          RenContextMenuEntry.action(
+            RenContextMenuAction<String>(
+              icon: HugeIcon(icon: HugeIcons.strokeRoundedDelete02, size: 20),
+              label: 'Удалить чат для всех',
+              danger: true,
+              value: 'delete_for_all',
+            ),
+          ),
       ],
     );
 
@@ -519,13 +560,24 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
       return;
     }
 
-    if (action == 'delete') {
+    if (action == 'leave_or_delete' || action == 'delete_for_all') {
+      final isDeleteForAll = action == 'delete_for_all';
       final confirm = await GlassOverlays.showGlassDialog<bool>(
         context,
         builder: (dctx) {
           return AlertDialog(
-            title: const Text('Удалить чат?'),
-            content: const Text('Чат будет удалён из вашего списка.'),
+            title: Text(
+              isDeleteForAll
+                  ? 'Удалить чат для всех?'
+                  : (isGroupOrChannel ? 'Выйти из чата?' : 'Удалить чат?'),
+            ),
+            content: Text(
+              isDeleteForAll
+                  ? 'Чат/канал будет удалён для всех участников. Действие необратимо.'
+                  : (isGroupOrChannel
+                        ? 'Вы покинете этот чат/канал. Вернуться можно только после повторного добавления.'
+                        : 'Чат будет удалён из вашего списка.'),
+            ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.of(dctx).pop(false),
@@ -533,7 +585,11 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
               ),
               FilledButton(
                 onPressed: () => Navigator.of(dctx).pop(true),
-                child: const Text('Удалить'),
+                child: Text(
+                  isDeleteForAll
+                      ? 'Удалить для всех'
+                      : (isGroupOrChannel ? 'Выйти' : 'Удалить'),
+                ),
               ),
             ],
           );
@@ -544,7 +600,7 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
       if (!mounted) return;
       try {
         final repo = context.read<ChatsRepository>();
-        await repo.deleteChat(chatId);
+        await repo.deleteChat(chatId, forAll: isDeleteForAll);
         await _reloadChats();
       } catch (e) {
         if (!mounted) return;
@@ -599,8 +655,97 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
 
       if (evt.type == 'message_new' ||
           evt.type == 'message_updated' ||
-          evt.type == 'message_deleted') {
+          evt.type == 'message_deleted' ||
+          evt.type == 'message_delivered' ||
+          evt.type == 'message_read') {
         unawaited(_syncChats());
+      }
+
+      if (evt.type == 'chat_created') {
+        final chatId = int.tryParse(
+          '${evt.data['chat_id'] ?? evt.data['chatId'] ?? 0}',
+        );
+        final kind = '${evt.data['kind'] ?? 'group'}';
+        final title = (evt.data['title'] as String?)?.trim();
+        final createdBy = int.tryParse(
+          '${evt.data['created_by'] ?? evt.data['createdBy'] ?? 0}',
+        );
+        if (chatId != null && chatId > 0 && _chatIndex[chatId] == null) {
+          if (!mounted) return;
+          setState(() {
+            final preview = _placeholderChatFromRealtime(
+              chatId: chatId,
+              kind: kind,
+              title: title,
+            );
+            _chats = [preview, ..._chats];
+            _rebuildChatIndexFromCurrentChats();
+          });
+        }
+        if ((createdBy ?? 0) != _myUserId && mounted) {
+          showGlassSnack(
+            context,
+            'Добавлен новый чат: ${(title != null && title.isNotEmpty) ? title : "Без названия"}',
+            kind: GlassSnackKind.info,
+          );
+        }
+        unawaited(_syncChats());
+        return;
+      }
+
+      if (evt.type == 'member_added' ||
+          evt.type == 'member_removed' ||
+          evt.type == 'member_role_changed') {
+        final chatId = int.tryParse(
+          '${evt.data['chat_id'] ?? evt.data['chatId'] ?? 0}',
+        );
+        final targetUserId = int.tryParse(
+          '${evt.data['user_id'] ?? evt.data['userId'] ?? 0}',
+        );
+        if (!mounted) return;
+        if (chatId != null &&
+            chatId > 0 &&
+            targetUserId != null &&
+            targetUserId == _myUserId) {
+          if (evt.type == 'member_added' && _chatIndex[chatId] == null) {
+            if (!mounted) return;
+            setState(() {
+              final preview = _placeholderChatFromRealtime(
+                chatId: chatId,
+                kind: 'group',
+                title: null,
+              );
+              _chats = [preview, ..._chats];
+              _rebuildChatIndexFromCurrentChats();
+            });
+            showGlassSnack(
+              context,
+              'Вас добавили в чат',
+              kind: GlassSnackKind.info,
+            );
+          } else if (evt.type == 'member_removed') {
+            if (!mounted) return;
+            setState(() {
+              _chats = _chats
+                  .where((c) => (int.tryParse(c.id) ?? 0) != chatId)
+                  .toList(growable: false);
+              _rebuildChatIndexFromCurrentChats();
+            });
+            showGlassSnack(
+              context,
+              'Вас удалили из чата',
+              kind: GlassSnackKind.info,
+            );
+          } else if (evt.type == 'member_role_changed') {
+            showGlassSnack(
+              context,
+              'Ваша роль в чате обновлена',
+              kind: GlassSnackKind.info,
+            );
+          }
+        }
+        unawaited(_syncChats());
+        return;
       }
 
       if (evt.type == 'profile_updated') {
@@ -638,16 +783,16 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                   isFavorite: c.isFavorite,
                   lastMessage: c.lastMessage,
                   lastMessageAt: c.lastMessageAt,
+                  unreadCount: c.unreadCount,
+                  myRole: c.myRole,
+                  lastMessageIsMine: c.lastMessageIsMine,
+                  lastMessageIsPending: c.lastMessageIsPending,
+                  lastMessageIsDelivered: c.lastMessageIsDelivered,
+                  lastMessageIsRead: c.lastMessageIsRead,
                 );
               })
               .toList(growable: false);
-          _chatIndex
-            ..clear()
-            ..addEntries(
-              _chats
-                  .map((c) => MapEntry(int.tryParse(c.id) ?? 0, c))
-                  .where((e) => e.key > 0),
-            );
+          _rebuildChatIndexFromCurrentChats();
         });
         return;
       }
@@ -675,9 +820,13 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
           return;
         }
 
+        // Не показываем уведомление если пользователь находится в этом чате
+        if (_currentOpenChatId == chatId) {
+          return;
+        }
+
         final decoded = await repo.decryptIncomingWsMessageFull(message: m);
         final hasAttachments = decoded.attachments.isNotEmpty;
-
         final chat = _chatIndex[chatId];
         final title = (chat?.user.name ?? '').trim().isNotEmpty
             ? (chat!.user.name)
@@ -688,21 +837,25 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
             : (hasAttachments ? 'Вложение' : 'Сообщение');
 
         if (!mounted) return;
+        final notificationsSettings = context.read<NotificationsSettings>();
 
         if (_isForeground) {
-          _showTopGlassBanner(
-            title: title,
-            body: body,
-            avatarUrl: chat?.user.avatarUrl ?? '',
-            avatarName: chat?.user.name ?? title,
-            onTap: () {
-              final c = _chatIndex[chatId];
-              if (c == null) return;
-              Navigator.of(
-                context,
-              ).push(adaptivePageRoute((_) => ChatPage(chat: c)));
-            },
-          );
+          if (notificationsSettings.inAppSoundEnabled) {
+            SystemSound.play(SystemSoundType.click);
+          }
+          if (notificationsSettings.inAppBannersEnabled) {
+            _showTopGlassBanner(
+              title: title,
+              body: body,
+              avatarUrl: chat?.user.avatarUrl ?? '',
+              avatarName: chat?.user.name ?? title,
+              onTap: () {
+                final c = _chatIndex[chatId];
+                if (c == null) return;
+                _openChat(c);
+              },
+            );
+          }
         } else {
           await LocalNotifications.instance.showMessageNotification(
             chatId: chatId,
@@ -880,6 +1033,12 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                       isFavorite: c.isFavorite,
                       lastMessage: c.lastMessage,
                       lastMessageAt: c.lastMessageAt,
+                      unreadCount: c.unreadCount,
+                      myRole: c.myRole,
+                      lastMessageIsMine: c.lastMessageIsMine,
+                      lastMessageIsPending: c.lastMessageIsPending,
+                      lastMessageIsDelivered: c.lastMessageIsDelivered,
+                      lastMessageIsRead: c.lastMessageIsRead,
                     ),
                   )
                   .toList();
@@ -1009,21 +1168,126 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                                       final chat = visibleChats[index];
                                       return _ChatTile(
                                         chat: chat,
+                                        unreadCount: chat.unreadCount,
                                         onLongPressAt: (pos) =>
                                             _showChatActionsAt(chat, pos),
-                                        onTap: () {
-                                          Navigator.of(context).push(
-                                            adaptivePageRoute(
-                                              (_) => ChatPage(chat: chat),
-                                            ),
-                                          );
-                                        },
+                                        onTap: () => _openChat(chat),
                                       );
                                     },
                                   )
                                 : ListView(
                                     padding: const EdgeInsets.only(bottom: 16),
                                     children: [
+                                      Row(
+                                        children: [
+                                          Expanded(
+                                            child: GlassSurface(
+                                              borderRadius: 12,
+                                              blurSigma: 8,
+                                              borderColor: baseInk.withOpacity(
+                                                isDark ? 0.14 : 0.08,
+                                              ),
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 12,
+                                                    vertical: 8,
+                                                  ),
+                                              child: InkWell(
+                                                borderRadius:
+                                                    BorderRadius.circular(12),
+                                                onTap: () {
+                                                  GlassOverlays.showGlassBottomSheet(
+                                                    context,
+                                                    builder: (_) =>
+                                                        _CreateGroupChannelSheet(
+                                                          kind: 'group',
+                                                          initialTitle: _query,
+                                                        ),
+                                                  );
+                                                },
+                                                child: Row(
+                                                  mainAxisSize:
+                                                      MainAxisSize.min,
+                                                  children: [
+                                                    Icon(
+                                                      Icons.group_add_rounded,
+                                                      size: 18,
+                                                      color: theme
+                                                          .colorScheme
+                                                          .onSurface,
+                                                    ),
+                                                    const SizedBox(width: 6),
+                                                    Text(
+                                                      'Создать группу',
+                                                      style: theme
+                                                          .textTheme
+                                                          .bodySmall
+                                                          ?.copyWith(
+                                                            fontWeight:
+                                                                FontWeight.w600,
+                                                          ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Expanded(
+                                            child: GlassSurface(
+                                              borderRadius: 12,
+                                              blurSigma: 8,
+                                              borderColor: baseInk.withOpacity(
+                                                isDark ? 0.14 : 0.08,
+                                              ),
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 12,
+                                                    vertical: 8,
+                                                  ),
+                                              child: InkWell(
+                                                borderRadius:
+                                                    BorderRadius.circular(12),
+                                                onTap: () {
+                                                  GlassOverlays.showGlassBottomSheet(
+                                                    context,
+                                                    builder: (_) =>
+                                                        _CreateGroupChannelSheet(
+                                                          kind: 'channel',
+                                                          initialTitle: _query,
+                                                        ),
+                                                  );
+                                                },
+                                                child: Row(
+                                                  mainAxisSize:
+                                                      MainAxisSize.min,
+                                                  children: [
+                                                    Icon(
+                                                      Icons.campaign_rounded,
+                                                      size: 18,
+                                                      color: theme
+                                                          .colorScheme
+                                                          .onSurface,
+                                                    ),
+                                                    const SizedBox(width: 6),
+                                                    Text(
+                                                      'Создать канал',
+                                                      style: theme
+                                                          .textTheme
+                                                          .bodySmall
+                                                          ?.copyWith(
+                                                            fontWeight:
+                                                                FontWeight.w600,
+                                                          ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 14),
                                       Text(
                                         'Чаты',
                                         style: theme.textTheme.titleSmall
@@ -1037,15 +1301,10 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                                       for (final chat in visibleChats) ...[
                                         _ChatTile(
                                           chat: chat,
+                                          unreadCount: chat.unreadCount,
                                           onLongPressAt: (pos) =>
                                               _showChatActionsAt(chat, pos),
-                                          onTap: () {
-                                            Navigator.of(context).push(
-                                              adaptivePageRoute(
-                                                (_) => ChatPage(chat: chat),
-                                              ),
-                                            );
-                                          },
+                                          onTap: () => _openChat(chat),
                                         ),
                                         const SizedBox(height: 10),
                                       ],
@@ -1130,13 +1389,7 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
 
                                               if (existing != null) {
                                                 if (!context.mounted) return;
-                                                Navigator.of(context).push(
-                                                  adaptivePageRoute(
-                                                    (_) => ChatPage(
-                                                      chat: existing,
-                                                    ),
-                                                  ),
-                                                );
+                                                _openChat(existing);
                                                 return;
                                               }
 
@@ -1154,11 +1407,7 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                                                 if (!context.mounted) return;
                                                 await _reloadChats();
                                                 if (!context.mounted) return;
-                                                Navigator.of(context).push(
-                                                  adaptivePageRoute(
-                                                    (_) => ChatPage(chat: chat),
-                                                  ),
-                                                );
+                                                _openChat(chat);
                                               } catch (e) {
                                                 if (!context.mounted) return;
                                                 showGlassSnack(
@@ -1289,11 +1538,13 @@ class _FavoriteItem extends StatelessWidget {
 
 class _ChatTile extends StatelessWidget {
   final ChatPreview chat;
+  final int unreadCount;
   final VoidCallback onTap;
   final ValueChanged<Offset> onLongPressAt;
 
   const _ChatTile({
     required this.chat,
+    this.unreadCount = 0,
     required this.onTap,
     required this.onLongPressAt,
   });
@@ -1338,25 +1589,94 @@ class _ChatTile extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 2),
-                  Text(
-                    chat.lastMessage,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: theme.colorScheme.onSurface.withOpacity(0.70),
-                    ),
+                  Row(
+                    children: [
+                      if (chat.lastMessageIsMine || chat.lastMessageIsPending)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 4),
+                          child: Icon(
+                            chat.lastMessageIsPending
+                                ? Icons.schedule_rounded
+                                : (chat.lastMessageIsRead ||
+                                          chat.lastMessageIsDelivered
+                                      ? Icons.done_all_rounded
+                                      : Icons.done_rounded),
+                            size: 13,
+                            color: chat.lastMessageIsPending
+                                ? theme.colorScheme.onSurface.withOpacity(0.55)
+                                : (chat.lastMessageIsRead
+                                      ? theme.colorScheme.primary.withOpacity(
+                                          0.92,
+                                        )
+                                      : (chat.lastMessageIsDelivered
+                                            ? theme.colorScheme.onSurface
+                                                  .withOpacity(0.65)
+                                            : theme.colorScheme.onSurface
+                                                  .withOpacity(0.55))),
+                          ),
+                        ),
+                      Expanded(
+                        child: Text(
+                          chat.lastMessage,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: theme.colorScheme.onSurface.withOpacity(
+                              0.70,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
             ),
             const SizedBox(width: 10),
-            Text(
-              _formatTime(chat.lastMessageAt),
-              style: TextStyle(
-                fontSize: 11,
-                color: theme.colorScheme.onSurface.withOpacity(0.60),
-              ),
+            Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  _formatTime(chat.lastMessageAt),
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: theme.colorScheme.onSurface.withOpacity(0.60),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 180),
+                  child: unreadCount > 0
+                      ? Container(
+                          key: ValueKey<int>(unreadCount),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 7,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.primary.withOpacity(0.92),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          constraints: const BoxConstraints(minWidth: 22),
+                          alignment: Alignment.center,
+                          child: Text(
+                            unreadCount > 99 ? '99+' : '$unreadCount',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800,
+                              color: theme.colorScheme.onPrimary,
+                            ),
+                          ),
+                        )
+                      : const SizedBox(
+                          key: ValueKey('no_unread'),
+                          width: 22,
+                          height: 16,
+                        ),
+                ),
+              ],
             ),
           ],
         ),
@@ -1418,6 +1738,442 @@ class _PressableState extends State<_Pressable> {
           child: widget.child,
         ),
       ),
+    );
+  }
+}
+
+class _CreateGroupChannelSheet extends StatefulWidget {
+  final String kind;
+  final String initialTitle;
+
+  const _CreateGroupChannelSheet({required this.kind, this.initialTitle = ''});
+
+  @override
+  State<_CreateGroupChannelSheet> createState() =>
+      _CreateGroupChannelSheetState();
+}
+
+class _CreateGroupChannelSheetState extends State<_CreateGroupChannelSheet> {
+  final _titleCtrl = TextEditingController();
+  final _searchCtrl = TextEditingController();
+  final Set<int> _selectedUserIds = <int>{};
+  final Map<int, ChatUser> _selectedUsers = <int, ChatUser>{};
+  bool _isSearching = false;
+  String? _searchError;
+  List<ChatUser> _searchResults = const [];
+  int _searchSeq = 0;
+  Timer? _searchDebounce;
+  bool _isCreating = false;
+
+  ChatsRepository get _repo => context.read<ChatsRepository>();
+
+  @override
+  void initState() {
+    super.initState();
+    _titleCtrl.text = widget.initialTitle;
+  }
+
+  @override
+  void dispose() {
+    _searchDebounce?.cancel();
+    _titleCtrl.dispose();
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  void _runSearch(String query) {
+    final q = query.trim();
+    final seq = ++_searchSeq;
+
+    if (q.isEmpty) {
+      setState(() {
+        _isSearching = false;
+        _searchError = null;
+        _searchResults = const [];
+      });
+      return;
+    }
+
+    setState(() {
+      _isSearching = true;
+      _searchError = null;
+    });
+
+    _repo
+        .searchUsers(q)
+        .then((users) {
+          if (!mounted || seq != _searchSeq) return;
+          final existing = _selectedUserIds;
+          final filtered = users
+              .where((u) => !existing.contains(int.tryParse(u.id) ?? 0))
+              .toList(growable: false);
+          setState(() {
+            _isSearching = false;
+            _searchError = null;
+            _searchResults = filtered;
+          });
+        })
+        .catchError((e) {
+          if (!mounted || seq != _searchSeq) return;
+          setState(() {
+            _isSearching = false;
+            _searchError = e.toString();
+            _searchResults = const [];
+          });
+        });
+  }
+
+  void _scheduleSearch(String query) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 250), () {
+      if (!mounted) return;
+      _runSearch(query);
+    });
+  }
+
+  void _toggleUser(ChatUser user) {
+    final userId = int.tryParse(user.id) ?? 0;
+    if (userId <= 0) return;
+
+    setState(() {
+      if (_selectedUserIds.contains(userId)) {
+        _selectedUserIds.remove(userId);
+        _selectedUsers.remove(userId);
+      } else {
+        _selectedUserIds.add(userId);
+        _selectedUsers[userId] = user;
+      }
+    });
+  }
+
+  Future<void> _create() async {
+    if (_isCreating) return;
+
+    final title = _titleCtrl.text.trim();
+    if (title.isEmpty) {
+      showGlassSnack(context, 'Укажите название', kind: GlassSnackKind.error);
+      return;
+    }
+
+    final memberIds = _selectedUserIds.toList(growable: false);
+
+    setState(() {
+      _isCreating = true;
+    });
+
+    try {
+      final chat = widget.kind == 'group'
+          ? await _repo.createGroupChat(title: title, memberUserIds: memberIds)
+          : await _repo.createChannel(title: title, memberUserIds: memberIds);
+
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+
+      // Открываем созданный чат
+      final state = context.findAncestorStateOfType<_HomePageState>();
+      if (state != null && state.mounted) {
+        await state._reloadChats();
+        if (state.mounted) {
+          state._openChat(chat);
+        }
+      }
+    } catch (e) {
+      if (!mounted) return;
+      showGlassSnack(context, e.toString(), kind: GlassSnackKind.error);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isCreating = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final baseInk = isDark ? Colors.white : Colors.black;
+
+    return DraggableScrollableSheet(
+      initialChildSize: 0.85,
+      minChildSize: 0.5,
+      maxChildSize: 0.95,
+      builder: (ctx, scrollController) {
+        return GlassSurface(
+          blurSigma: 16,
+          borderRadiusGeometry: const BorderRadius.only(
+            topLeft: Radius.circular(26),
+            topRight: Radius.circular(26),
+          ),
+          borderColor: baseInk.withOpacity(isDark ? 0.22 : 0.12),
+          child: ListView(
+            controller: scrollController,
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 18),
+            children: [
+              Center(
+                child: Container(
+                  width: 44,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.onSurface.withOpacity(0.25),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                widget.kind == 'group' ? 'Новая группа' : 'Новый канал',
+                style: theme.textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 16),
+              GlassSurface(
+                borderRadius: 14,
+                blurSigma: 8,
+                borderColor: baseInk.withOpacity(isDark ? 0.14 : 0.08),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
+                child: TextField(
+                  controller: _titleCtrl,
+                  decoration: InputDecoration(
+                    labelText: 'Название',
+                    border: InputBorder.none,
+                    filled: false,
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(vertical: 8),
+                  ),
+                  style: TextStyle(color: theme.colorScheme.onSurface),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Участники',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 8),
+              GlassSurface(
+                borderRadius: 14,
+                blurSigma: 8,
+                borderColor: baseInk.withOpacity(isDark ? 0.14 : 0.08),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 4,
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _searchCtrl,
+                        onChanged: _scheduleSearch,
+                        decoration: InputDecoration(
+                          hintText: 'Поиск пользователей',
+                          border: InputBorder.none,
+                          filled: false,
+                          isDense: true,
+                          suffixIcon: _searchCtrl.text.trim().isEmpty
+                              ? null
+                              : IconButton(
+                                  icon: const Icon(Icons.close_rounded),
+                                  onPressed: () {
+                                    _searchCtrl.clear();
+                                    _searchDebounce?.cancel();
+                                    setState(() {
+                                      _isSearching = false;
+                                      _searchError = null;
+                                      _searchResults = const [];
+                                    });
+                                  },
+                                ),
+                        ),
+                        style: TextStyle(color: theme.colorScheme.onSurface),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (_isSearching)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 8),
+                  child: LinearProgressIndicator(minHeight: 2),
+                )
+              else if (_searchError != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    _searchError!.replaceFirst('Exception: ', ''),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.error,
+                    ),
+                  ),
+                )
+              else if (_searchResults.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Column(
+                    children: _searchResults
+                        .map((user) {
+                          final uid = int.tryParse(user.id) ?? 0;
+                          if (uid <= 0) return const SizedBox.shrink();
+                          final isSelected = _selectedUserIds.contains(uid);
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: GlassSurface(
+                              borderRadius: 14,
+                              blurSigma: 8,
+                              borderColor: isSelected
+                                  ? theme.colorScheme.primary.withOpacity(0.5)
+                                  : baseInk.withOpacity(isDark ? 0.14 : 0.08),
+                              padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(14),
+                                onTap: () => _toggleUser(user),
+                                child: Row(
+                                  children: [
+                                    RenAvatar(
+                                      url: user.avatarUrl,
+                                      name: user.name,
+                                      isOnline: false,
+                                      size: 34,
+                                      onlineDotSize: 0,
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            user.name,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: theme.textTheme.titleSmall
+                                                ?.copyWith(
+                                                  fontWeight: FontWeight.w700,
+                                                ),
+                                          ),
+                                          Text(
+                                            'ID: $uid',
+                                            style: theme.textTheme.bodySmall
+                                                ?.copyWith(
+                                                  color: theme
+                                                      .colorScheme
+                                                      .onSurface
+                                                      .withOpacity(0.7),
+                                                ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    if (isSelected)
+                                      CircleAvatar(
+                                        radius: 12,
+                                        backgroundColor:
+                                            theme.colorScheme.primary,
+                                        child: const Icon(
+                                          Icons.check_rounded,
+                                          size: 16,
+                                          color: Colors.white,
+                                        ),
+                                      )
+                                    else
+                                      CircleAvatar(
+                                        radius: 12,
+                                        backgroundColor: theme
+                                            .colorScheme
+                                            .onSurface
+                                            .withOpacity(0.12),
+                                        child: const Icon(
+                                          Icons.add_rounded,
+                                          size: 16,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          );
+                        })
+                        .toList(growable: false),
+                  ),
+                ),
+              if (_selectedUsers.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                Text(
+                  'Выбрано: ${_selectedUsers.length}',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurface.withOpacity(0.7),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: _selectedUsers.values.map((user) {
+                    return GlassSurface(
+                      borderRadius: 20,
+                      blurSigma: 8,
+                      borderColor: theme.colorScheme.primary.withOpacity(0.3),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 6,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          RenAvatar(
+                            url: user.avatarUrl,
+                            name: user.name,
+                            isOnline: false,
+                            size: 24,
+                            onlineDotSize: 0,
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            user.name,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          InkWell(
+                            onTap: () => _toggleUser(user),
+                            borderRadius: BorderRadius.circular(12),
+                            child: const Padding(
+                              padding: EdgeInsets.all(2),
+                              child: Icon(Icons.close_rounded, size: 14),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ],
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: _isCreating ? null : _create,
+                  child: _isCreating
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('Создать'),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

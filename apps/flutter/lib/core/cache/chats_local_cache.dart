@@ -90,6 +90,12 @@ class ChatsLocalCache {
       'isFavorite': c.isFavorite,
       'lastMessage': c.lastMessage,
       'lastMessageAt': c.lastMessageAt.toIso8601String(),
+      'unreadCount': c.unreadCount,
+      'myRole': c.myRole,
+      'lastMessageIsMine': c.lastMessageIsMine,
+      'lastMessageIsPending': c.lastMessageIsPending,
+      'lastMessageIsDelivered': c.lastMessageIsDelivered,
+      'lastMessageIsRead': c.lastMessageIsRead,
       'user': {
         'id': c.user.id,
         'name': c.user.name,
@@ -122,6 +128,16 @@ class ChatsLocalCache {
       lastMessage: (m['lastMessage'] as String?) ?? '',
       lastMessageAt:
           DateTime.tryParse('${m['lastMessageAt'] ?? ''}') ?? DateTime.now(),
+      unreadCount: (m['unreadCount'] is int)
+          ? m['unreadCount'] as int
+          : int.tryParse('${m['unreadCount'] ?? ''}') ?? 0,
+      myRole: ((m['myRole'] as String?) ?? 'member').trim().isEmpty
+          ? 'member'
+          : ((m['myRole'] as String?) ?? 'member').trim().toLowerCase(),
+      lastMessageIsMine: m['lastMessageIsMine'] == true,
+      lastMessageIsPending: m['lastMessageIsPending'] == true,
+      lastMessageIsDelivered: m['lastMessageIsDelivered'] == true,
+      lastMessageIsRead: m['lastMessageIsRead'] == true,
     );
   }
 
@@ -133,6 +149,8 @@ class ChatsLocalCache {
       'text': m.text,
       'sentAt': m.sentAt.toIso8601String(),
       'replyToMessageId': m.replyToMessageId,
+      'isDelivered': m.isDelivered,
+      'isRead': m.isRead,
       'attachments': m.attachments
           .map(
             (a) => {
@@ -176,6 +194,8 @@ class ChatsLocalCache {
       attachments: attachments,
       sentAt: DateTime.tryParse('${m['sentAt'] ?? ''}') ?? DateTime.now(),
       replyToMessageId: (m['replyToMessageId'] as String?),
+      isDelivered: m['isDelivered'] == true,
+      isRead: m['isRead'] == true,
     );
   }
 
@@ -238,10 +258,44 @@ class ChatsLocalCache {
   Future<void> writeCacheLimitBytes(int bytes) async {
     final normalized = bytes.clamp(minCacheLimitBytes, maxCacheLimitBytes);
     final file = await _settingsFile();
-    await _atomicWriteJson(file, {
-      'cacheLimitBytes': normalized,
-      'updatedAt': DateTime.now().toIso8601String(),
-    });
+    final decoded = await _readJsonIfExists(file) ?? <String, dynamic>{};
+    decoded['cacheLimitBytes'] = normalized;
+    decoded['updatedAt'] = DateTime.now().toIso8601String();
+    await _atomicWriteJson(file, decoded);
+  }
+
+  Future<double?> readChatScrollOffset(String chatId) async {
+    final normalizedChatId = chatId.trim();
+    if (normalizedChatId.isEmpty) return null;
+    final file = await _settingsFile();
+    final decoded = await _readJsonIfExists(file);
+    final offsets = decoded?['chatScrollOffsets'];
+    if (offsets is! Map) return null;
+    final value = offsets[normalizedChatId];
+    if (value is num && value.isFinite) return value.toDouble();
+    if (value is String) {
+      final parsed = double.tryParse(value);
+      if (parsed != null && parsed.isFinite) return parsed;
+    }
+    return null;
+  }
+
+  Future<void> writeChatScrollOffset(String chatId, double offset) async {
+    final normalizedChatId = chatId.trim();
+    if (normalizedChatId.isEmpty || !offset.isFinite) return;
+    final clamped = offset < 0 ? 0.0 : offset;
+
+    final file = await _settingsFile();
+    final decoded = await _readJsonIfExists(file) ?? <String, dynamic>{};
+    final rawOffsets = decoded['chatScrollOffsets'];
+    final offsets = (rawOffsets is Map<String, dynamic>)
+        ? Map<String, dynamic>.from(rawOffsets)
+        : <String, dynamic>{};
+
+    offsets[normalizedChatId] = clamped;
+    decoded['chatScrollOffsets'] = offsets;
+    decoded['updatedAt'] = DateTime.now().toIso8601String();
+    await _atomicWriteJson(file, decoded);
   }
 
   Future<String> saveMediaBytes({

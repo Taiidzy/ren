@@ -12,6 +12,9 @@ class ChatPageAppBar extends StatelessWidget implements PreferredSizeWidget {
   final bool peerOnline;
   final bool peerTyping;
   final bool isSyncing;
+  final String chatKind;
+  final String myRole;
+  final bool canSend;
 
   final VoidCallback onBack;
   final VoidCallback onShareSelected;
@@ -27,6 +30,9 @@ class ChatPageAppBar extends StatelessWidget implements PreferredSizeWidget {
     required this.peerOnline,
     required this.peerTyping,
     required this.isSyncing,
+    required this.chatKind,
+    required this.myRole,
+    required this.canSend,
     required this.onBack,
     required this.onShareSelected,
     required this.onDeleteSelected,
@@ -41,6 +47,32 @@ class ChatPageAppBar extends StatelessWidget implements PreferredSizeWidget {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final baseInk = isDark ? Colors.white : Colors.black;
+    final kind = chatKind.trim().toLowerCase();
+    final role = myRole.trim().toLowerCase();
+
+    String kindLabel() {
+      switch (kind) {
+        case 'channel':
+          return 'CHANNEL';
+        case 'group':
+          return 'GROUP';
+        default:
+          return 'PRIVATE';
+      }
+    }
+
+    String roleLabel() {
+      switch (role) {
+        case 'owner':
+          return 'ВЛАДЕЛЕЦ';
+        case 'admin':
+          return 'АДМИН';
+        default:
+          return 'УЧАСТНИК';
+      }
+    }
+
+    final showRole = kind == 'channel' || kind == 'group';
 
     return AppBar(
       backgroundColor: Colors.transparent,
@@ -106,10 +138,32 @@ class ChatPageAppBar extends StatelessWidget implements PreferredSizeWidget {
                             Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Text(
-                                  peerTyping
-                                      ? 'Печатает...'
-                                      : (peerOnline ? 'Online' : 'Offline'),
+                                if (kind != "private")
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                    vertical: 2,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: theme.colorScheme.onSurface
+                                        .withOpacity(isDark ? 0.13 : 0.10),
+                                    borderRadius: BorderRadius.circular(999),
+                                  ),
+                                  child: Text(
+                                    showRole
+                                        ? '${kindLabel()} • ${roleLabel()}'
+                                        : kindLabel(),
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w700,
+                                      color: theme.colorScheme.onSurface
+                                          .withOpacity(0.82),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                if (kind == 'private')
+                                Text( peerTyping ? 'Печатает...' : (kind == 'channel' ? (canSend ? 'Можно писать' : 'Read-only') : (peerOnline ? 'Online' : 'Offline')),
                                   style: TextStyle(
                                     fontSize: 12,
                                     color: theme.colorScheme.onSurface

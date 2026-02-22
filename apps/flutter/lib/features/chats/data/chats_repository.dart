@@ -62,6 +62,8 @@ class ChatsRepository {
 
   ChatsRepository(this.api, this.renSdk);
 
+  bool _isPrivateKind(String kind) => kind.trim().toLowerCase() == 'private';
+
   Future<T> _runInMediaPipeline<T>(Future<T> Function() task) {
     final completer = Completer<T>();
     _mediaPipelineTail = _mediaPipelineTail.catchError((_) {}).then((_) async {
@@ -222,15 +224,37 @@ class ChatsRepository {
           : int.tryParse('${m['peer_id']}');
       final peerUsername = (m['peer_username'] as String?) ?? '';
       final peerAvatar = (m['peer_avatar'] as String?) ?? '';
+      final title = ((m['title'] as String?) ?? '').trim();
+      final kind = ((m['kind'] as String?) ?? 'private').trim().toLowerCase();
       final isFavorite =
           (m['is_favorite'] == true) || (m['isFavorite'] == true);
+      final unreadCount = (m['unread_count'] is int)
+          ? m['unread_count'] as int
+          : int.tryParse('${m['unread_count'] ?? ''}') ?? 0;
+      final myRoleRaw = ((m['my_role'] as String?) ?? 'member').trim();
+      final myRole = myRoleRaw.isEmpty ? 'member' : myRoleRaw.toLowerCase();
       final updatedAtStr = (m['updated_at'] as String?) ?? '';
+      final lastMessageId = (m['last_message_id'] is int)
+          ? m['last_message_id'] as int
+          : int.tryParse('${m['last_message_id'] ?? ''}') ?? 0;
+      final lastMessageRaw = (m['last_message'] as String?) ?? '';
+      final lastMessageType = ((m['last_message_type'] as String?) ?? '')
+          .trim()
+          .toLowerCase();
+      final lastMessageOutgoing = m['last_message_is_outgoing'] == true;
+      final lastMessageDelivered = m['last_message_is_delivered'] == true;
+      final lastMessageRead = m['last_message_is_read'] == true;
+      final lastMessageAtStr = (m['last_message_created_at'] as String?) ?? '';
 
       final updatedAt = DateTime.tryParse(updatedAtStr) ?? DateTime.now();
+      final lastMessageAt = DateTime.tryParse(lastMessageAtStr) ?? updatedAt;
 
+      final userName = _isPrivateKind(kind)
+          ? (peerUsername.isNotEmpty ? peerUsername : 'User')
+          : (title.isNotEmpty ? title : 'Chat');
       final user = ChatUser(
         id: (peerId ?? 0).toString(),
-        name: peerUsername.isNotEmpty ? peerUsername : 'User',
+        name: userName,
         avatarUrl: _avatarUrl(peerAvatar),
         isOnline: false,
       );
@@ -239,17 +263,94 @@ class ChatsRepository {
         ChatPreview(
           id: id.toString(),
           peerId: peerId,
-          kind: (m['kind'] as String?) ?? 'private',
+          kind: kind,
           user: user,
           isFavorite: isFavorite,
-          lastMessage: '',
-          lastMessageAt: updatedAt,
+          lastMessage: _buildChatListMessagePreview(
+            kind: kind,
+            messageId: lastMessageId,
+            rawMessage: lastMessageRaw,
+            messageType: lastMessageType,
+          ),
+          lastMessageAt: lastMessageAt,
+          unreadCount: unreadCount < 0 ? 0 : unreadCount,
+          myRole: myRole,
+          lastMessageIsMine: lastMessageOutgoing,
+          lastMessageIsPending: false,
+          lastMessageIsDelivered: lastMessageDelivered,
+          lastMessageIsRead: lastMessageRead,
         ),
       );
     }
 
-    items.sort((a, b) => b.lastMessageAt.compareTo(a.lastMessageAt));
-    return items;
+    final withPending = await _applyLocalPendingLastMessage(items);
+    withPending.sort((a, b) => b.lastMessageAt.compareTo(a.lastMessageAt));
+    return withPending;
+  }
+
+  String _buildChatListMessagePreview({
+    required String kind,
+    required int messageId,
+    required String rawMessage,
+    required String messageType,
+  }) {
+    if (messageId <= 0) return '';
+    if (messageType == 'voice_message') return 'Голосовое сообщение';
+    if (messageType == 'video_message') return 'Видео';
+    if (messageType == 'image' || messageType == 'photo') return 'Фото';
+    if (messageType == 'file') return 'Файл';
+
+    final trimmed = rawMessage.trim();
+    if (trimmed.isEmpty) return 'Сообщение';
+
+    // В private чатах сообщение обычно E2EE: не показываем ciphertext в списке.
+    if (_isPrivateKind(kind)) return 'Сообщение';
+    return trimmed;
+  }
+
+  String _localPendingPreview(ChatMessage message) {
+    final text = message.text.trim();
+    if (text.isNotEmpty) return text;
+    if (message.attachments.isNotEmpty) {
+      final first = message.attachments.first;
+      if (first.isImage) return 'Фото';
+      if (first.isVideo) return 'Видео';
+      if (first.mimetype.startsWith('audio/')) return 'Голосовое сообщение';
+      return 'Файл';
+    }
+    return 'Сообщение';
+  }
+
+  Future<List<ChatPreview>> _applyLocalPendingLastMessage(
+    List<ChatPreview> source,
+  ) async {
+    if (source.isEmpty) return source;
+    final out = List<ChatPreview>.from(source);
+    for (var i = 0; i < out.length; i++) {
+      final chat = out[i];
+      final chatId = int.tryParse(chat.id) ?? 0;
+      if (chatId <= 0) continue;
+      final local = await _localCache.readMessages(chatId);
+      if (local.isEmpty) continue;
+      final latest = local.last;
+      if (!latest.isMe || !latest.id.startsWith('local_')) continue;
+      out[i] = ChatPreview(
+        id: chat.id,
+        peerId: chat.peerId,
+        kind: chat.kind,
+        user: chat.user,
+        isFavorite: chat.isFavorite,
+        lastMessage: _localPendingPreview(latest),
+        lastMessageAt: latest.sentAt,
+        unreadCount: chat.unreadCount,
+        myRole: chat.myRole,
+        lastMessageIsMine: true,
+        lastMessageIsPending: true,
+        lastMessageIsDelivered: false,
+        lastMessageIsRead: false,
+      );
+    }
+    return out;
   }
 
   Future<List<ChatPreview>> getCachedChats() async {
@@ -344,6 +445,8 @@ class ChatsRepository {
       final senderId = (m['sender_id'] is int)
           ? m['sender_id'] as int
           : int.tryParse('${m['sender_id']}') ?? 0;
+      final isDelivered = m['is_delivered'] == true || m['isDelivered'] == true;
+      final isRead = m['is_read'] == true || m['isRead'] == true;
 
       final replyDyn = m['reply_to_message_id'] ?? m['replyToMessageId'];
       final replyId = (replyDyn is int)
@@ -355,13 +458,18 @@ class ChatsRepository {
           .toLocal();
 
       final encrypted = (m['message'] as String?) ?? '';
+      final messageType = ((m['message_type'] as String?) ?? 'text')
+          .trim()
+          .toLowerCase();
 
-      final decrypted = await _tryDecryptMessageAndKey(
-        encrypted: encrypted,
-        envelopes: m['envelopes'],
-        myUserId: myUserId,
-        myPrivateKeyB64: privateKey,
-      );
+      final decrypted = (messageType == 'system')
+          ? (text: encrypted, key: null)
+          : await _tryDecryptMessageAndKey(
+              encrypted: encrypted,
+              envelopes: m['envelopes'],
+              myUserId: myUserId,
+              myPrivateKeyB64: privateKey,
+            );
 
       final msgKey = decrypted.key;
       final attachments = await _tryDecryptAttachments(
@@ -382,6 +490,8 @@ class ChatsRepository {
           replyToMessageId: (replyId != null && replyId > 0)
               ? replyId.toString()
               : null,
+          isDelivered: isDelivered,
+          isRead: isRead,
         ),
       );
     }
@@ -475,13 +585,15 @@ class ChatsRepository {
   }) async {
     if (metadata is! List) return const [];
     final key = msgKeyB64?.trim();
-    if (key == null || key.isEmpty) return const [];
+    final hasKey = key != null && key.isNotEmpty;
 
-    Uint8List keyBytes;
-    try {
-      keyBytes = base64Decode(key);
-    } catch (_) {
-      return const [];
+    Uint8List? keyBytes;
+    if (hasKey) {
+      try {
+        keyBytes = base64Decode(key);
+      } catch (_) {
+        return const [];
+      }
     }
 
     final outByIndex = List<ChatAttachment?>.filled(metadata.length, null);
@@ -498,10 +610,6 @@ class ChatsRepository {
       final size = (m['size'] is int)
           ? m['size'] as int
           : int.tryParse('${m['size']}') ?? 0;
-
-      if (nonce == null || nonce.isEmpty) {
-        return;
-      }
 
       Uint8List? ciphertextBytes;
       String? ciphertextB64;
@@ -523,15 +631,32 @@ class ChatsRepository {
         ciphertextB64 = encFile;
       }
 
-      final bytes = (ciphertextBytes != null)
-          ? await renSdk.decryptFileBytesRawWithKeyBytes(
-              ciphertextBytes,
-              nonce,
-              keyBytes,
-            )
-          : (ciphertextB64 != null && ciphertextB64.isNotEmpty)
-          ? await renSdk.decryptFileBytes(ciphertextB64, nonce, key)
-          : null;
+      Uint8List? bytes;
+      if (hasKey) {
+        if (nonce == null || nonce.isEmpty || keyBytes == null) {
+          return;
+        }
+        bytes = (ciphertextBytes != null)
+            ? await renSdk.decryptFileBytesRawWithKeyBytes(
+                ciphertextBytes,
+                nonce,
+                keyBytes,
+              )
+            : (ciphertextB64 != null && ciphertextB64.isNotEmpty)
+            ? await renSdk.decryptFileBytes(ciphertextB64, nonce, key)
+            : null;
+      } else {
+        // non-E2EE attachments: store bytes as-is
+        if (ciphertextBytes != null) {
+          bytes = ciphertextBytes;
+        } else if (ciphertextB64 != null && ciphertextB64.isNotEmpty) {
+          try {
+            bytes = Uint8List.fromList(base64Decode(ciphertextB64));
+          } catch (_) {
+            bytes = null;
+          }
+        }
+      }
       if (bytes == null) return;
 
       final path = await _localCache.saveMediaBytes(
@@ -583,7 +708,8 @@ class ChatsRepository {
     try {
       payload = jsonDecode(encrypted) as Map<String, dynamic>;
     } catch (_) {
-      return (text: '[encrypted]', key: null);
+      // non-E2EE chats may carry plaintext directly in message
+      return (text: encrypted, key: null);
     }
 
     final ciphertext = (payload['ciphertext'] as String?)?.trim();
@@ -706,18 +832,200 @@ class ChatsRepository {
       isFavorite: isFavorite,
       lastMessage: '',
       lastMessageAt: DateTime.now(),
+      unreadCount: 0,
+      myRole: ((json['my_role'] as String?) ?? 'member').trim().isEmpty
+          ? 'member'
+          : ((json['my_role'] as String?) ?? 'member').trim().toLowerCase(),
+      lastMessageIsMine: false,
+      lastMessageIsPending: false,
+      lastMessageIsDelivered: false,
+      lastMessageIsRead: false,
     );
+  }
+
+  ChatPreview _chatPreviewFromCreateResponse(
+    Map<String, dynamic> json, {
+    required String kind,
+    int? peerId,
+    String? fallbackName,
+  }) {
+    final id = (json['id'] is int)
+        ? json['id'] as int
+        : int.tryParse('${json['id']}') ?? 0;
+    final isFavorite =
+        (json['is_favorite'] == true) || (json['isFavorite'] == true);
+    final title = ((json['title'] as String?) ?? '').trim();
+
+    final name = _isPrivateKind(kind)
+        ? ((fallbackName ?? 'User').trim().isEmpty
+              ? 'User'
+              : (fallbackName ?? 'User').trim())
+        : (title.isNotEmpty ? title : (fallbackName ?? 'Chat'));
+
+    return ChatPreview(
+      id: id.toString(),
+      peerId: peerId,
+      kind: kind,
+      user: ChatUser(
+        id: (peerId ?? 0).toString(),
+        name: name,
+        avatarUrl: '',
+        isOnline: false,
+      ),
+      isFavorite: isFavorite,
+      lastMessage: '',
+      lastMessageAt: DateTime.now(),
+      unreadCount: 0,
+      myRole: ((json['my_role'] as String?) ?? 'member').trim().isEmpty
+          ? 'member'
+          : ((json['my_role'] as String?) ?? 'member').trim().toLowerCase(),
+      lastMessageIsMine: false,
+      lastMessageIsPending: false,
+      lastMessageIsDelivered: false,
+      lastMessageIsRead: false,
+    );
+  }
+
+  Future<ChatPreview> createGroupChat({
+    required String title,
+    required List<int> memberUserIds,
+  }) async {
+    final myUserId = await _getMyUserId();
+    final users = <int>{
+      myUserId,
+      ...memberUserIds.where((e) => e > 0),
+    }.toList(growable: false);
+    final json = await api.createChat(
+      kind: 'group',
+      title: title,
+      userIds: users,
+    );
+    return _chatPreviewFromCreateResponse(
+      json,
+      kind: 'group',
+      fallbackName: title.trim().isEmpty ? 'Group' : title.trim(),
+    );
+  }
+
+  Future<ChatPreview> createChannel({
+    required String title,
+    required List<int> memberUserIds,
+  }) async {
+    final myUserId = await _getMyUserId();
+    final users = <int>{
+      myUserId,
+      ...memberUserIds.where((e) => e > 0),
+    }.toList(growable: false);
+    final json = await api.createChat(
+      kind: 'channel',
+      title: title,
+      userIds: users,
+    );
+    return _chatPreviewFromCreateResponse(
+      json,
+      kind: 'channel',
+      fallbackName: title.trim().isEmpty ? 'Channel' : title.trim(),
+    );
+  }
+
+  Future<List<ChatMember>> listMembers(int chatId) async {
+    final raw = await api.listMembers(chatId);
+    final out = <ChatMember>[];
+    for (final it in raw) {
+      if (it is! Map) continue;
+      final m = it.cast<String, dynamic>();
+      final userId = (m['user_id'] is int)
+          ? m['user_id'] as int
+          : int.tryParse('${m['user_id'] ?? ''}') ?? 0;
+      if (userId <= 0) continue;
+      final username = ((m['username'] as String?) ?? '').trim();
+      final avatarRaw = ((m['avatar'] as String?) ?? '').trim();
+      final role = ((m['role'] as String?) ?? 'member').trim();
+      final joinedAt =
+          DateTime.tryParse('${m['joined_at'] ?? ''}') ??
+          DateTime.fromMillisecondsSinceEpoch(0);
+      out.add(
+        ChatMember(
+          userId: userId,
+          username: username.isEmpty ? 'User' : username,
+          avatarUrl: _avatarUrl(avatarRaw),
+          role: role.isEmpty ? 'member' : role,
+          joinedAt: joinedAt,
+        ),
+      );
+    }
+    return out;
+  }
+
+  Future<void> addMember(
+    int chatId, {
+    required int userId,
+    String? role,
+  }) async {
+    await api.addMember(chatId, userId: userId, role: role);
+  }
+
+  Future<void> updateMemberRole(
+    int chatId, {
+    required int userId,
+    required String role,
+  }) async {
+    await api.updateMemberRole(chatId, userId: userId, role: role);
+  }
+
+  Future<void> removeMember(int chatId, {required int userId}) async {
+    await api.removeMember(chatId, userId: userId);
+  }
+
+  Future<void> updateChatInfo(
+    int chatId, {
+    String? title,
+    String? avatarPath,
+  }) async {
+    await api.updateChatInfo(chatId, title: title, avatarPath: avatarPath);
   }
 
   Future<void> deleteChat(int chatId, {bool forAll = false}) async {
     await api.deleteChat(chatId, forAll: forAll);
   }
 
-  Future<Map<String, dynamic>> buildEncryptedWsMessage({
+  Future<int> markChatRead(int chatId, {int? messageId}) async {
+    final json = await api.markChatRead(chatId, messageId: messageId);
+    final lastRead = (json['last_read_message_id'] is int)
+        ? json['last_read_message_id'] as int
+        : int.tryParse('${json['last_read_message_id'] ?? ''}') ?? 0;
+    return lastRead;
+  }
+
+  Future<int> markChatDelivered(int chatId, {int? messageId}) async {
+    final json = await api.markChatDelivered(chatId, messageId: messageId);
+    final lastDelivered = (json['last_delivered_message_id'] is int)
+        ? json['last_delivered_message_id'] as int
+        : int.tryParse('${json['last_delivered_message_id'] ?? ''}') ?? 0;
+    return lastDelivered;
+  }
+
+  Future<Map<String, dynamic>> buildOutgoingWsTextMessage({
     required int chatId,
-    required int peerId,
+    required String chatKind,
+    int? peerId,
     required String plaintext,
   }) async {
+    if (!_isPrivateKind(chatKind)) {
+      return {
+        'chat_id': chatId,
+        'message': plaintext,
+        'message_type': 'text',
+        'envelopes': null,
+        'metadata': null,
+      };
+    }
+
+    final peer = peerId ?? 0;
+    if (peer <= 0) {
+      throw Exception('Некорректный peerId для private-чата');
+    }
+
     final myUserId = await _getMyUserId();
     final myPrivateKeyB64 = await _getMyPrivateKeyB64();
     final myPublicKeyB64 = await _getMyPublicKeyB64();
@@ -732,7 +1040,7 @@ class ChatsRepository {
       throw Exception('Не найден публичный ключ');
     }
 
-    final peerPublicKeyB64 = await _getPeerPublicKeyB64(peerId);
+    final peerPublicKeyB64 = await _getPeerPublicKeyB64(peer);
 
     final msgKeyB64 = renSdk.generateMessageKey().trim();
     final enc = renSdk.encryptMessage(plaintext, msgKeyB64);
@@ -777,7 +1085,7 @@ class ChatsRepository {
 
     final envelopes = <String, dynamic>{
       '$myUserId': env('$myUserId', wrappedForMe),
-      '$peerId': env('$peerId', wrappedForPeer),
+      '$peer': env('$peer', wrappedForPeer),
     };
 
     final messageJson = jsonEncode({
@@ -902,14 +1210,63 @@ class ChatsRepository {
     });
   }
 
-  Future<Map<String, dynamic>> buildEncryptedWsMediaMessage({
+  Future<Map<String, dynamic>> buildOutgoingWsMediaMessage({
     required int chatId,
-    required int peerId,
+    required String chatKind,
+    int? peerId,
     required String caption,
     required List<OutgoingAttachment> attachments,
   }) async {
     return _runInMediaPipeline(() async {
-      if (peerId <= 0) {
+      if (!_isPrivateKind(chatKind)) {
+        final metadata = <Map<String, dynamic>>[];
+        for (final att in attachments) {
+          final filename = att.filename.isNotEmpty
+              ? att.filename
+              : 'file_${DateTime.now().millisecondsSinceEpoch}';
+          final mimetype = att.mimetype.isNotEmpty
+              ? att.mimetype
+              : 'application/octet-stream';
+          final rawBytes = att.bytes is Uint8List
+              ? att.bytes as Uint8List
+              : Uint8List.fromList(att.bytes);
+
+          final uploadResp = await _uploadMediaWithRetry(
+            chatId: chatId,
+            ciphertextBytes: rawBytes,
+            filename: filename,
+            mimetype: mimetype,
+          );
+          final uploadedId = uploadResp['file_id'];
+          final fileId = (uploadedId is int)
+              ? uploadedId
+              : int.tryParse('$uploadedId') ?? 0;
+          if (fileId <= 0) {
+            throw Exception('Не удалось загрузить файл');
+          }
+
+          metadata.add({
+            'file_id': fileId,
+            'filename': filename,
+            'mimetype': mimetype,
+            'size': rawBytes.length,
+            'enc_file': null,
+            'nonce': null,
+            'file_creation_date': null,
+          });
+        }
+
+        return {
+          'chat_id': chatId,
+          'message': caption,
+          'message_type': 'media',
+          'envelopes': null,
+          'metadata': metadata,
+        };
+      }
+
+      final peer = peerId ?? 0;
+      if (peer <= 0) {
         throw Exception('Некорректный peerId');
       }
 
@@ -923,7 +1280,7 @@ class ChatsRepository {
         throw Exception('Отсутствует публичный ключ');
       }
 
-      final peerPublicKeyB64 = await _getPeerPublicKeyB64(peerId);
+      final peerPublicKeyB64 = await _getPeerPublicKeyB64(peer);
 
       final msgKeyB64 = renSdk.generateMessageKey().trim();
 
@@ -951,7 +1308,7 @@ class ChatsRepository {
 
       final envelopes = {
         '$myId': env('$myId', wrappedForMe),
-        '$peerId': env('$peerId', wrappedForPeer),
+        '$peer': env('$peer', wrappedForPeer),
       };
 
       final metadata = <Map<String, dynamic>>[];
@@ -1027,6 +1384,12 @@ class ChatsRepository {
     final myPrivateKeyB64 = await _getMyPrivateKeyB64();
 
     final encrypted = message['message'] as String? ?? '';
+    final messageType = ((message['message_type'] as String?) ?? 'text')
+        .trim()
+        .toLowerCase();
+    if (messageType == 'system') {
+      return encrypted;
+    }
     final envelopes = message['envelopes'];
 
     final decrypted = await _tryDecryptMessageAndKey(
@@ -1045,6 +1408,12 @@ class ChatsRepository {
     final myPrivateKeyB64 = await _getMyPrivateKeyB64();
 
     final encrypted = message['message'] as String? ?? '';
+    final messageType = ((message['message_type'] as String?) ?? 'text')
+        .trim()
+        .toLowerCase();
+    if (messageType == 'system') {
+      return (text: encrypted, attachments: const <ChatAttachment>[]);
+    }
     final envelopes = message['envelopes'];
 
     final decrypted = await _tryDecryptMessageAndKey(
@@ -1096,6 +1465,14 @@ class ChatsRepository {
     List<ChatMessage> messages,
   ) async {
     await _localCache.writeMessages(chatId, messages);
+  }
+
+  Future<double?> loadChatScrollOffset(String chatId) async {
+    return _localCache.readChatScrollOffset(chatId);
+  }
+
+  Future<void> saveChatScrollOffset(String chatId, double offset) async {
+    await _localCache.writeChatScrollOffset(chatId, offset);
   }
 
   Future<void> clearAppCache({

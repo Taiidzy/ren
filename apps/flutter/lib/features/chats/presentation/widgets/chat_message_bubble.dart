@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 
 import 'package:ren/features/chats/domain/chat_models.dart';
+import 'package:ren/shared/widgets/avatar.dart';
 import 'package:ren/shared/widgets/glass_surface.dart';
 
 class ChatMessageBubble extends StatelessWidget {
@@ -12,8 +13,13 @@ class ChatMessageBubble extends StatelessWidget {
   final List<ChatAttachment> attachments;
   final String timeLabel;
   final bool isMe;
+  final bool isDelivered;
+  final bool isRead;
+  final bool isPending;
   final bool isDark;
   final void Function(ChatAttachment a)? onOpenAttachment;
+  final String? senderName;
+  final String? senderAvatarUrl;
 
   const ChatMessageBubble({
     super.key,
@@ -22,8 +28,13 @@ class ChatMessageBubble extends StatelessWidget {
     this.attachments = const [],
     required this.timeLabel,
     required this.isMe,
+    this.isDelivered = false,
+    this.isRead = false,
+    this.isPending = false,
     required this.isDark,
     this.onOpenAttachment,
+    this.senderName,
+    this.senderAvatarUrl,
   });
 
   @override
@@ -63,6 +74,32 @@ class ChatMessageBubble extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
+              if (!isMe && senderName != null && senderName!.isNotEmpty) ...[
+                Row(
+                  children: [
+                    RenAvatar(
+                      url: senderAvatarUrl ?? '',
+                      name: senderName ?? '',
+                      isOnline: false,
+                      size: 24,
+                      onlineDotSize: 0,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        senderName ?? '',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          color: theme.colorScheme.primary,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+              ],
               if (replyPreview != null && replyPreview!.trim().isNotEmpty) ...[
                 Container(
                   width: double.infinity,
@@ -196,12 +233,39 @@ class ChatMessageBubble extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 4),
-              Text(
-                timeLabel,
-                style: TextStyle(
-                  fontSize: 10,
-                  color: theme.colorScheme.onSurface.withOpacity(0.55),
-                ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    timeLabel,
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: theme.colorScheme.onSurface.withOpacity(0.55),
+                    ),
+                  ),
+                  if (isMe) ...[
+                    const SizedBox(width: 4),
+                    Icon(
+                      isPending
+                          ? Icons.schedule_rounded
+                          : (isRead || isDelivered
+                                ? Icons.done_all_rounded
+                                : Icons.done_rounded),
+                      size: 13,
+                      color: isPending
+                          ? theme.colorScheme.onSurface.withOpacity(0.55)
+                          : (isRead
+                                ? theme.colorScheme.primary.withOpacity(0.92)
+                                : (isDelivered
+                                      ? theme.colorScheme.onSurface.withOpacity(
+                                          0.65,
+                                        )
+                                      : theme.colorScheme.onSurface.withOpacity(
+                                          0.55,
+                                        ))),
+                    ),
+                  ],
+                ],
               ),
             ],
           ),

@@ -15,4 +15,10 @@ class Keys {
   static const String backgroundImageBlur = 'backgroundImageBlurSigma';
 
   static const String backgroundGalleryHistory = 'backgroundGalleryHistory';
+
+  static const String notificationsHapticEnabled = 'notificationsHapticEnabled';
+  static const String notificationsInAppBannersEnabled =
+      'notificationsInAppBannersEnabled';
+  static const String notificationsInAppSoundEnabled =
+      'notificationsInAppSoundEnabled';
 }

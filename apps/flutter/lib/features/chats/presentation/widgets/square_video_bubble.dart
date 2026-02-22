@@ -13,6 +13,9 @@ class SquareVideoBubble extends StatefulWidget {
   final String videoPath;
   final String timeLabel;
   final bool isMe;
+  final bool isDelivered;
+  final bool isRead;
+  final bool isPending;
   final bool isDark;
 
   const SquareVideoBubble({
@@ -20,6 +23,9 @@ class SquareVideoBubble extends StatefulWidget {
     required this.videoPath,
     required this.timeLabel,
     required this.isMe,
+    this.isDelivered = false,
+    this.isRead = false,
+    this.isPending = false,
     required this.isDark,
   });
 
@@ -52,10 +58,10 @@ class _SquareVideoBubbleState extends State<SquareVideoBubble> {
       }
 
       // Пытаемся получить совместимый путь к видео (с конвертацией HEVC в H.264 при необходимости)
-      String? playablePath = await VideoCodecHelper.getPlayableVideoPath(widget.videoPath);
-      if (playablePath == null) {
-        playablePath = widget.videoPath; // Fallback к оригиналу
-      }
+      String? playablePath = await VideoCodecHelper.getPlayableVideoPath(
+        widget.videoPath,
+      );
+      playablePath ??= widget.videoPath; // Fallback к оригиналу
 
       _controller = VideoPlayerController.file(File(playablePath));
       await _controller!.initialize();
@@ -83,10 +89,14 @@ class _SquareVideoBubbleState extends State<SquareVideoBubble> {
       debugPrint('Failed to initialize video player: $e');
       // Try to handle codec incompatibility by checking if it's an HEVC issue
       final errorMessage = e.toString();
-      if (errorMessage.contains('MediaCodec') || errorMessage.contains('hevc') || errorMessage.contains('hvc1')) {
+      if (errorMessage.contains('MediaCodec') ||
+          errorMessage.contains('hevc') ||
+          errorMessage.contains('hvc1')) {
         debugPrint('HEVC codec not supported, attempting conversion...');
         // Пробуем конвертацию при ошибке
-        final convertedPath = await VideoCodecHelper.convertHevcToH264(widget.videoPath);
+        final convertedPath = await VideoCodecHelper.convertHevcToH264(
+          widget.videoPath,
+        );
         if (convertedPath != null && mounted) {
           debugPrint('Retrying with converted file: $convertedPath');
           // Рекурсивно пробуем с конвертированным файлом
@@ -183,8 +193,8 @@ class _SquareVideoBubbleState extends State<SquareVideoBubble> {
     final baseInk = widget.isDark ? Colors.white : Colors.black;
     final isMeColor = widget.isMe
         ? (widget.isDark
-            ? theme.colorScheme.primary.withOpacity(0.35)
-            : theme.colorScheme.primary.withOpacity(0.22))
+              ? theme.colorScheme.primary.withOpacity(0.35)
+              : theme.colorScheme.primary.withOpacity(0.22))
         : null;
 
     const size = 220.0;
@@ -231,23 +241,25 @@ class _SquareVideoBubbleState extends State<SquareVideoBubble> {
                       else if (_controller != null)
                         Hero(
                           tag: widget.videoPath,
-                          flightShuttleBuilder: (
-                            BuildContext flightContext,
-                            Animation<double> animation,
-                            HeroFlightDirection flightDirection,
-                            BuildContext fromHeroContext,
-                            BuildContext toHeroContext,
-                          ) {
-                            // Во время обратной анимации показываем snapshot
-                            if (flightDirection == HeroFlightDirection.pop) {
-                              return _VideoSnapshot(
-                                controller: _controller!,
-                                size: size,
-                              );
-                            }
-                            // При открытии используем обычный виджет
-                            return toHeroContext.widget;
-                          },
+                          flightShuttleBuilder:
+                              (
+                                BuildContext flightContext,
+                                Animation<double> animation,
+                                HeroFlightDirection flightDirection,
+                                BuildContext fromHeroContext,
+                                BuildContext toHeroContext,
+                              ) {
+                                // Во время обратной анимации показываем snapshot
+                                if (flightDirection ==
+                                    HeroFlightDirection.pop) {
+                                  return _VideoSnapshot(
+                                    controller: _controller!,
+                                    size: size,
+                                  );
+                                }
+                                // При открытии используем обычный виджет
+                                return toHeroContext.widget;
+                              },
                           child: SizedBox.expand(
                             child: FittedBox(
                               fit: BoxFit.cover,
@@ -273,15 +285,44 @@ class _SquareVideoBubbleState extends State<SquareVideoBubble> {
                   alignment: Alignment.centerRight,
                   child: FittedBox(
                     fit: BoxFit.scaleDown,
-                    child: Text(
-                      widget.timeLabel,
-                      maxLines: 1,
-                      overflow: TextOverflow.visible,
-                      style: TextStyle(
-                        fontSize: 10,
-                        height: 1.05,
-                        color: theme.colorScheme.onSurface.withOpacity(0.55),
-                      ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          widget.timeLabel,
+                          maxLines: 1,
+                          overflow: TextOverflow.visible,
+                          style: TextStyle(
+                            fontSize: 10,
+                            height: 1.05,
+                            color: theme.colorScheme.onSurface.withOpacity(
+                              0.55,
+                            ),
+                          ),
+                        ),
+                        if (widget.isMe) ...[
+                          const SizedBox(width: 4),
+                          Icon(
+                            widget.isPending
+                                ? Icons.schedule_rounded
+                                : (widget.isRead || widget.isDelivered
+                                      ? Icons.done_all_rounded
+                                      : Icons.done_rounded),
+                            size: 13,
+                            color: widget.isPending
+                                ? theme.colorScheme.onSurface.withOpacity(0.55)
+                                : (widget.isRead
+                                      ? theme.colorScheme.primary.withOpacity(
+                                          0.92,
+                                        )
+                                      : (widget.isDelivered
+                                            ? theme.colorScheme.onSurface
+                                                  .withOpacity(0.65)
+                                            : theme.colorScheme.onSurface
+                                                  .withOpacity(0.55))),
+                          ),
+                        ],
+                      ],
                     ),
                   ),
                 ),
@@ -299,10 +340,7 @@ class _VideoSnapshot extends StatelessWidget {
   final VideoPlayerController controller;
   final double size;
 
-  const _VideoSnapshot({
-    required this.controller,
-    required this.size,
-  });
+  const _VideoSnapshot({required this.controller, required this.size});
 
   @override
   Widget build(BuildContext context) {
@@ -373,7 +411,9 @@ class _SquareVideoFullscreenState extends State<_SquareVideoFullscreen> {
   Future<void> _seekToFraction(double t) async {
     final d = _c.value.duration;
     if (d == Duration.zero) return;
-    final target = Duration(milliseconds: (d.inMilliseconds * t.clamp(0.0, 1.0)).round());
+    final target = Duration(
+      milliseconds: (d.inMilliseconds * t.clamp(0.0, 1.0)).round(),
+    );
     try {
       await _c.seekTo(target);
     } catch (_) {}
@@ -385,7 +425,10 @@ class _SquareVideoFullscreenState extends State<_SquareVideoFullscreen> {
     final side = (mq.size.shortestSide * 0.86).clamp(240.0, 520.0);
     final theme = Theme.of(context);
 
-    final contentAnim = CurvedAnimation(parent: widget.animation, curve: Curves.easeOut);
+    final contentAnim = CurvedAnimation(
+      parent: widget.animation,
+      curve: Curves.easeOut,
+    );
 
     final durMs = _c.value.duration.inMilliseconds;
     final posMs = _c.value.position.inMilliseconds;
@@ -460,9 +503,12 @@ class _SquareVideoFullscreenState extends State<_SquareVideoFullscreen> {
                               height: 32,
                               child: Center(
                                 child: HugeIcon(
-                                  icon: _c.value.isPlaying ? HugeIcons.strokeRoundedStop : HugeIcons.strokeRoundedPlay,
+                                  icon: _c.value.isPlaying
+                                      ? HugeIcons.strokeRoundedStop
+                                      : HugeIcons.strokeRoundedPlay,
                                   size: 18,
-                                  color: theme.colorScheme.onSurface.withOpacity(0.9),
+                                  color: theme.colorScheme.onSurface
+                                      .withOpacity(0.9),
                                 ),
                               ),
                             ),
@@ -479,19 +525,28 @@ class _SquareVideoFullscreenState extends State<_SquareVideoFullscreen> {
 
                                 return GestureDetector(
                                   behavior: HitTestBehavior.opaque,
-                                  onTapDown: (d) => seekFromX(d.localPosition.dx),
-                                  onHorizontalDragStart: (d) => seekFromX(d.localPosition.dx),
-                                  onHorizontalDragUpdate: (d) => seekFromX(d.localPosition.dx),
+                                  onTapDown: (d) =>
+                                      seekFromX(d.localPosition.dx),
+                                  onHorizontalDragStart: (d) =>
+                                      seekFromX(d.localPosition.dx),
+                                  onHorizontalDragUpdate: (d) =>
+                                      seekFromX(d.localPosition.dx),
                                   child: SizedBox(
                                     height: 22,
                                     child: Center(
                                       child: ClipRRect(
-                                        borderRadius: BorderRadius.circular(999),
+                                        borderRadius: BorderRadius.circular(
+                                          999,
+                                        ),
                                         child: Container(
                                           height: 4,
-                                          color: theme.colorScheme.onSurface.withOpacity(
-                                            theme.brightness == Brightness.dark ? 0.18 : 0.12,
-                                          ),
+                                          color: theme.colorScheme.onSurface
+                                              .withOpacity(
+                                                theme.brightness ==
+                                                        Brightness.dark
+                                                    ? 0.18
+                                                    : 0.12,
+                                              ),
                                           alignment: Alignment.centerLeft,
                                           child: FractionallySizedBox(
                                             widthFactor: progress,

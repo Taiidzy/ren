@@ -117,7 +117,14 @@ async fn async_main() {
         .layer(
             CorsLayer::new()
                 .allow_origin(AllowOrigin::list(cors_allow_origins))
-                .allow_methods([Method::GET, Method::POST, Method::PUT, Method::PATCH, Method::DELETE, Method::OPTIONS])
+                .allow_methods([
+                    Method::GET,
+                    Method::POST,
+                    Method::PUT,
+                    Method::PATCH,
+                    Method::DELETE,
+                    Method::OPTIONS,
+                ])
                 .allow_headers([
                     header::AUTHORIZATION,
                     header::CONTENT_TYPE,

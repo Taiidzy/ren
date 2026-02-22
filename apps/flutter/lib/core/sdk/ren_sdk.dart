@@ -20,11 +20,11 @@ const Map<Abi, String> _androidPinnedSdkSha256 = <Abi, String>{
   Abi.androidArm64:
       'cd349cd58be7a034d6b44fc3012c29bcc25ff8302ea1c213fb35076ed44a7d50',
   Abi.androidArm:
-      '7f7041341a01628d41e45f016409c9552aa22a39276b4993ec9613e2a38962f2',
+      'f7e32a69b5ee6929cf84cf7d86e330b8389cc555af86df481e82946e968c0dd4',
   Abi.androidX64:
-      '51a091dd2cf187f8bc3b324afd37285f3fae585742881e86b447bc972c704b5e',
+      '1d9bf5c81d8473f1761dabaf8b4aa22a40df770491d84fdec21b2ad2dadb9399',
   Abi.androidIA32:
-      'a10a3de6ae84dc7af0c30f810b8c31c6384cacaeb60f1d4e161cfcd845911a6f',
+      '97774bdb468610c22551131b6321580ed46aece2f4262dd35ece2a3145278542',
 };
 const String _iosArm64PinnedSdkSha256Default =
     'f6045a96db9dc40924794ea6eb5dfecdc3d44806c82e6b7a38908a37be8638c3';

@@ -20,6 +20,7 @@ import 'package:ren/features/chats/data/chats_repository.dart';
 import 'package:ren/features/chats/domain/chat_models.dart';
 import 'package:ren/core/realtime/realtime_client.dart';
 import 'package:ren/shared/widgets/background.dart';
+import 'package:ren/shared/widgets/avatar.dart';
 import 'package:ren/shared/widgets/glass_overlays.dart';
 import 'package:ren/shared/widgets/glass_surface.dart';
 import 'package:ren/shared/widgets/glass_snackbar.dart';
@@ -53,6 +54,10 @@ class _ChatPageState extends State<ChatPage>
   final _controller = TextEditingController();
   final _focusNode = FocusNode();
   final _scrollController = ScrollController();
+  static final Map<String, double> _savedScrollOffsetByChatId =
+      <String, double>{};
+  final Map<String, GlobalKey> _messageItemKeys = <String, GlobalKey>{};
+  bool _didApplyInitialScroll = false;
   bool _loading = true;
   bool _loadingMore = false;
   bool _hasMore = true;
@@ -86,9 +91,18 @@ class _ChatPageState extends State<ChatPage>
   bool _peerTyping = false;
   String _peerName = '';
   String _peerAvatarUrl = '';
+  String _myRoleInChat = 'member';
+  bool _canSendInCurrentChat = true;
   Timer? _typingDebounce;
+  Timer? _markReadDebounce;
+  Timer? _markDeliveredDebounce;
+  int _lastReadMarkedMessageId = 0;
+  int _lastDeliveredMarkedMessageId = 0;
+  String? _firstUnreadMessageId;
+  bool _didInitUnreadDividerAnchor = false;
 
   bool _isAtBottom = true;
+  int _newMessagesWhileAway = 0;
 
   int _scrollToBottomRequestId = 0;
 
@@ -100,6 +114,7 @@ class _ChatPageState extends State<ChatPage>
   Timer? _loadOlderDebounce;
   late final ValueNotifier<bool> _messagesSyncingN;
   late final ChatsRepository _repo;
+  bool get _isPrivateChat => widget.chat.kind.trim().toLowerCase() == 'private';
 
   bool _showVideoRecordingOverlay = false;
   String _videoRecordingDurationText = '0:00';
@@ -114,6 +129,7 @@ class _ChatPageState extends State<ChatPage>
   late final AnimationController _videoProgressController;
   late final AnimationController _videoLockedTransition;
   late final AnimationController _videoPulse;
+  late final AnimationController _jumpBadgePulse;
 
   void _setVideoRecordingOverlay({required bool show}) {
     if (_showVideoRecordingOverlay == show) return;
@@ -186,6 +202,11 @@ class _ChatPageState extends State<ChatPage>
       return '${(bytes / kb).toStringAsFixed(1)} KB';
     }
     return '$bytes B';
+  }
+
+  int _asInt(dynamic value) {
+    if (value is int) return value;
+    return int.tryParse('$value') ?? 0;
   }
 
   String _newPendingId() {
@@ -315,9 +336,48 @@ class _ChatPageState extends State<ChatPage>
 
   void _reindexMessages() {
     _messageById.clear();
+    final ids = <String>{};
     for (final m in _messages) {
       _messageById[m.id] = m;
+      ids.add(m.id);
     }
+    _messageItemKeys.removeWhere((id, _) => !ids.contains(id));
+  }
+
+  void _recomputeUnreadDividerAnchor() {
+    final unread = widget.chat.unreadCount;
+    if (unread <= 0 || _messages.isEmpty) {
+      _firstUnreadMessageId = null;
+      return;
+    }
+
+    final startIndex = (_messages.length - unread).clamp(
+      0,
+      _messages.length - 1,
+    );
+    for (var i = startIndex; i < _messages.length; i++) {
+      final mid = int.tryParse(_messages[i].id) ?? 0;
+      if (mid > 0) {
+        _firstUnreadMessageId = _messages[i].id;
+        return;
+      }
+    }
+
+    _firstUnreadMessageId = null;
+  }
+
+  void _clearUnreadDividerIfCoveredByReadCursor(int lastReadMessageId) {
+    final anchorId = int.tryParse(_firstUnreadMessageId ?? '') ?? 0;
+    if (anchorId <= 0) return;
+    if (lastReadMessageId >= anchorId) {
+      _firstUnreadMessageId = null;
+    }
+  }
+
+  void _initUnreadDividerAnchorOnce() {
+    if (_didInitUnreadDividerAnchor) return;
+    _didInitUnreadDividerAnchor = true;
+    _recomputeUnreadDividerAnchor();
   }
 
   String _messageSummary(ChatMessage m) {
@@ -381,6 +441,9 @@ class _ChatPageState extends State<ChatPage>
         audioPath: audioPath,
         timeLabel: _formatTime(msg.sentAt),
         isMe: msg.isMe,
+        isDelivered: msg.isDelivered,
+        isRead: msg.isRead,
+        isPending: msg.id.startsWith('local_'),
         isDark: isDark,
       );
     }
@@ -391,6 +454,9 @@ class _ChatPageState extends State<ChatPage>
         videoPath: videoPath,
         timeLabel: _formatTime(msg.sentAt),
         isMe: msg.isMe,
+        isDelivered: msg.isDelivered,
+        isRead: msg.isRead,
+        isPending: msg.id.startsWith('local_'),
         isDark: isDark,
       );
     }
@@ -403,6 +469,9 @@ class _ChatPageState extends State<ChatPage>
       attachments: msg.attachments,
       timeLabel: _formatTime(msg.sentAt),
       isMe: msg.isMe,
+      isDelivered: msg.isDelivered,
+      isRead: msg.isRead,
+      isPending: msg.id.startsWith('local_'),
       isDark: isDark,
       onOpenAttachment: (a) => _openAttachmentSheet(a),
     );
@@ -435,6 +504,69 @@ class _ChatPageState extends State<ChatPage>
     );
   }
 
+  Future<void> _openMembersSheet() async {
+    final chatId = int.tryParse(widget.chat.id) ?? 0;
+    if (chatId <= 0) return;
+    final kind = widget.chat.kind.trim().toLowerCase();
+    if (kind == 'private') {
+      showGlassSnack(
+        context,
+        'Для private-чата список участников недоступен',
+        kind: GlassSnackKind.info,
+      );
+      return;
+    }
+
+    final myId = _myUserId ?? await _readMyUserId();
+    if (!mounted) return;
+    await GlassOverlays.showGlassBottomSheet<void>(
+      context,
+      builder: (_) => _ChatMembersSheetBody(
+        chatId: chatId,
+        chatKind: kind,
+        myUserId: myId,
+        repo: _repo,
+      ),
+    );
+    await _refreshMyChatRole();
+  }
+
+  Future<void> _refreshMyChatRole() async {
+    final kind = widget.chat.kind.trim().toLowerCase();
+    if (kind != 'channel') {
+      if (!mounted) return;
+      setState(() {
+        _myRoleInChat = 'member';
+        _canSendInCurrentChat = true;
+      });
+      return;
+    }
+
+    final myId = _myUserId ?? await _readMyUserId();
+    final chatId = int.tryParse(widget.chat.id) ?? 0;
+    if (chatId <= 0) return;
+    try {
+      final members = await _repo.listMembers(chatId);
+      final me = members
+          .where((m) => m.userId == myId)
+          .cast<ChatMember?>()
+          .firstWhere((m) => m != null, orElse: () => null);
+      final role = (me?.role ?? 'member').trim().toLowerCase();
+      final canSend = role == 'owner' || role == 'admin';
+      if (!mounted) return;
+      setState(() {
+        _myRoleInChat = role.isEmpty ? 'member' : role;
+        _canSendInCurrentChat = canSend;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _myRoleInChat = 'member';
+        _canSendInCurrentChat = false;
+      });
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -456,6 +588,10 @@ class _ChatPageState extends State<ChatPage>
       vsync: this,
       duration: const Duration(milliseconds: 920),
     )..repeat();
+    _jumpBadgePulse = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 420),
+    );
     _peerOnline = widget.chat.user.isOnline;
     _peerName = widget.chat.user.name;
     _peerAvatarUrl = widget.chat.user.avatarUrl;
@@ -477,7 +613,23 @@ class _ChatPageState extends State<ChatPage>
     }
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if ((state == AppLifecycleState.inactive ||
+            state == AppLifecycleState.paused) &&
+        _scrollController.hasClients) {
+      final offset = _scrollController.offset;
+      _savedScrollOffsetByChatId[widget.chat.id] = offset;
+      unawaited(_repo.saveChatScrollOffset(widget.chat.id, offset));
+    }
+  }
+
   void _scheduleScrollToBottom({required bool animated}) {
+    if (_newMessagesWhileAway > 0 && mounted) {
+      setState(() {
+        _newMessagesWhileAway = 0;
+      });
+    }
     _scrollToBottomRequestId++;
     final reqId = _scrollToBottomRequestId;
 
@@ -512,6 +664,9 @@ class _ChatPageState extends State<ChatPage>
     if (atBottom != _isAtBottom && mounted) {
       setState(() {
         _isAtBottom = atBottom;
+        if (atBottom) {
+          _newMessagesWhileAway = 0;
+        }
       });
     }
 
@@ -523,6 +678,8 @@ class _ChatPageState extends State<ChatPage>
         _loadOlder();
       });
     }
+
+    _scheduleMarkRead();
   }
 
   Future<void> _loadOlder() async {
@@ -632,10 +789,226 @@ class _ChatPageState extends State<ChatPage>
   }
 
   void _sendTyping(bool isTyping) {
+    if (!_canSendInCurrentChat) return;
     final chatId = int.tryParse(widget.chat.id) ?? 0;
     final rt = _rt;
     if (rt == null || !rt.isConnected) return;
     rt.typing(chatId, isTyping);
+  }
+
+  GlobalKey _messageKey(String messageId) {
+    return _messageItemKeys.putIfAbsent(
+      messageId,
+      () => GlobalKey(debugLabel: 'msg_$messageId'),
+    );
+  }
+
+  int _latestVisibleRemoteMessageId() {
+    if (!_scrollController.hasClients) return 0;
+    final viewportRenderObject = _scrollController
+        .position
+        .context
+        .storageContext
+        .findRenderObject();
+    if (viewportRenderObject is! RenderBox || !viewportRenderObject.attached) {
+      return 0;
+    }
+
+    final viewportRect = Offset.zero & viewportRenderObject.size;
+    var maxVisibleId = 0;
+
+    for (final msg in _messages) {
+      final mid = int.tryParse(msg.id) ?? 0;
+      if (mid <= 0) continue;
+
+      final key = _messageItemKeys[msg.id];
+      final ctx = key?.currentContext;
+      if (ctx == null) continue;
+      final box = ctx.findRenderObject();
+      if (box is! RenderBox || !box.attached) continue;
+
+      final topLeft = box.localToGlobal(
+        Offset.zero,
+        ancestor: viewportRenderObject,
+      );
+      final rect = topLeft & box.size;
+      final visible = rect.intersect(viewportRect);
+      if (visible.isEmpty) continue;
+
+      final minVisibleHeight = math.max(20.0, rect.height * 0.35);
+      if (visible.height < minVisibleHeight) continue;
+
+      if (mid > maxVisibleId) {
+        maxVisibleId = mid;
+      }
+    }
+
+    return maxVisibleId;
+  }
+
+  int _latestIncomingRemoteMessageId() {
+    var maxId = 0;
+    for (final msg in _messages) {
+      if (msg.isMe) continue;
+      final id = int.tryParse(msg.id) ?? 0;
+      if (id > maxId) {
+        maxId = id;
+      }
+    }
+    return maxId;
+  }
+
+  bool _tryApplyUnreadAnchorInitialPosition() {
+    final anchorId = _firstUnreadMessageId;
+    if (anchorId == null || anchorId.isEmpty) return false;
+    final anchorIndex = _messages.indexWhere((m) => m.id == anchorId);
+    if (anchorIndex < 0 || _messages.length <= 1) return false;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scrollController.hasClients) return;
+      final pos = _scrollController.position;
+      final ratio = anchorIndex / (_messages.length - 1);
+      final coarse = (pos.maxScrollExtent * ratio).clamp(
+        0.0,
+        pos.maxScrollExtent,
+      );
+      _scrollController.jumpTo(coarse);
+
+      final anchorCtx = _messageItemKeys[anchorId]?.currentContext;
+      if (anchorCtx != null) {
+        Scrollable.ensureVisible(
+          anchorCtx,
+          alignment: 0.18,
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOut,
+        );
+      }
+
+      final dist = pos.maxScrollExtent - _scrollController.offset;
+      final atBottom = dist < 120;
+      if (atBottom != _isAtBottom && mounted) {
+        setState(() {
+          _isAtBottom = atBottom;
+        });
+      }
+    });
+    return true;
+  }
+
+  void _applyInitialScrollPosition() {
+    if (_didApplyInitialScroll) return;
+    _didApplyInitialScroll = true;
+
+    final savedOffset = _savedScrollOffsetByChatId[widget.chat.id];
+    if (savedOffset == null) {
+      final anchored = _tryApplyUnreadAnchorInitialPosition();
+      if (!anchored) {
+        _scheduleScrollToBottom(animated: false);
+      }
+      return;
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scrollController.hasClients) return;
+      final pos = _scrollController.position;
+      final target = savedOffset.clamp(0.0, pos.maxScrollExtent);
+      _scrollController.jumpTo(target);
+      final dist = pos.maxScrollExtent - target;
+      final atBottom = dist < 120;
+      if (atBottom != _isAtBottom && mounted) {
+        setState(() {
+          _isAtBottom = atBottom;
+        });
+      }
+    });
+  }
+
+  void _scheduleInitialReadAndDelivered() {
+    Future.delayed(const Duration(milliseconds: 260), () {
+      if (!mounted) return;
+      _scheduleMarkDelivered();
+      _scheduleMarkRead();
+    });
+  }
+
+  Future<void> _markChatReadUpToLatest() async {
+    final chatId = int.tryParse(widget.chat.id) ?? 0;
+    if (chatId <= 0) return;
+
+    final latestId = _latestVisibleRemoteMessageId();
+    if (latestId <= 0 || latestId <= _lastReadMarkedMessageId) return;
+
+    try {
+      final acknowledged = await _repo.markChatRead(
+        chatId,
+        messageId: latestId,
+      );
+      if (acknowledged > _lastReadMarkedMessageId) {
+        _lastReadMarkedMessageId = acknowledged;
+        if (mounted) {
+          setState(() {
+            _clearUnreadDividerIfCoveredByReadCursor(acknowledged);
+          });
+        } else {
+          _clearUnreadDividerIfCoveredByReadCursor(acknowledged);
+        }
+      }
+    } catch (_) {
+      // ignore transient read sync failures
+    }
+  }
+
+  Future<void> _markChatDeliveredUpToLatestIncoming() async {
+    final chatId = int.tryParse(widget.chat.id) ?? 0;
+    if (chatId <= 0) return;
+
+    final latestIncomingId = _latestIncomingRemoteMessageId();
+    if (latestIncomingId <= 0 ||
+        latestIncomingId <= _lastDeliveredMarkedMessageId) {
+      return;
+    }
+
+    try {
+      final acknowledged = await _repo.markChatDelivered(
+        chatId,
+        messageId: latestIncomingId,
+      );
+      if (acknowledged > _lastDeliveredMarkedMessageId) {
+        _lastDeliveredMarkedMessageId = acknowledged;
+      }
+    } catch (_) {
+      // ignore transient delivery sync failures
+    }
+  }
+
+  void _scheduleMarkRead() {
+    _markReadDebounce?.cancel();
+    _markReadDebounce = Timer(const Duration(milliseconds: 220), () {
+      if (!mounted) return;
+      unawaited(_markChatReadUpToLatest());
+    });
+  }
+
+  void _scheduleMarkDelivered() {
+    _markDeliveredDebounce?.cancel();
+    _markDeliveredDebounce = Timer(const Duration(milliseconds: 180), () {
+      if (!mounted) return;
+      unawaited(_markChatDeliveredUpToLatestIncoming());
+    });
+  }
+
+  Future<void> _ensurePersistedScrollOffsetLoaded() async {
+    if (_savedScrollOffsetByChatId.containsKey(widget.chat.id)) {
+      return;
+    }
+    try {
+      final stored = await _repo.loadChatScrollOffset(widget.chat.id);
+      if (stored != null && stored.isFinite) {
+        _savedScrollOffsetByChatId[widget.chat.id] = stored;
+      }
+    } catch (_) {
+      // ignore local cache read errors
+    }
   }
 
   void _onTextChanged() {
@@ -658,6 +1031,7 @@ class _ChatPageState extends State<ChatPage>
   Future<void> _init() async {
     final chatId = int.tryParse(widget.chat.id) ?? 0;
     final repo = context.read<ChatsRepository>();
+    await _ensurePersistedScrollOffsetLoaded();
 
     final cached = await repo.getCachedMessages(chatId);
     if (mounted && cached.isNotEmpty) {
@@ -669,7 +1043,8 @@ class _ChatPageState extends State<ChatPage>
         _loading = false;
         _hasMore = true;
       });
-      _scheduleScrollToBottom(animated: false);
+      _applyInitialScrollPosition();
+      _scheduleInitialReadAndDelivered();
     }
 
     try {
@@ -680,18 +1055,22 @@ class _ChatPageState extends State<ChatPage>
           ..clear()
           ..addAll(list);
         _reindexMessages();
+        _initUnreadDividerAnchorOnce();
         _loading = false;
         _hasMore = true;
       });
-      _scheduleScrollToBottom(animated: false);
+      _applyInitialScrollPosition();
+      _scheduleInitialReadAndDelivered();
     } catch (_) {
       if (!mounted) return;
       setState(() {
+        _initUnreadDividerAnchorOnce();
         _loading = false;
       });
     }
 
     await _ensureRealtime();
+    await _refreshMyChatRole();
   }
 
   Future<void> _resyncAfterReconnect() async {
@@ -707,7 +1086,8 @@ class _ChatPageState extends State<ChatPage>
           ..addAll(list);
         _reindexMessages();
       });
-      _scheduleScrollToBottom(animated: false);
+      _scheduleMarkRead();
+      _scheduleMarkDelivered();
     } catch (_) {
       // ignore transient reconnect sync errors
     }
@@ -727,7 +1107,7 @@ class _ChatPageState extends State<ChatPage>
       await rt.connect();
     }
 
-    if (peerId > 0) {
+    if (_isPrivateChat && peerId > 0) {
       rt.addContacts([peerId]);
     }
 
@@ -735,6 +1115,7 @@ class _ChatPageState extends State<ChatPage>
 
     _rtSub ??= rt.events.listen((evt) async {
       if (evt.type == 'presence') {
+        if (!_isPrivateChat) return;
         final peerId = widget.chat.peerId ?? 0;
         final userId =
             evt.data['user_id'] ?? evt.data['userId'] ?? evt.data['id'];
@@ -763,11 +1144,13 @@ class _ChatPageState extends State<ChatPage>
         final reconnected = evt.data['reconnected'] == true;
         if (reconnected) {
           unawaited(_resyncAfterReconnect());
+          unawaited(_refreshMyChatRole());
         }
         return;
       }
 
       if (evt.type == 'profile_updated') {
+        if (!_isPrivateChat) return;
         final userDyn = evt.data['user'];
         if (userDyn is! Map) return;
         final u = (userDyn is Map<String, dynamic>)
@@ -791,6 +1174,118 @@ class _ChatPageState extends State<ChatPage>
           }
           _peerAvatarUrl = avatar;
         });
+        return;
+      }
+
+      if (evt.type == 'member_added' ||
+          evt.type == 'member_removed' ||
+          evt.type == 'member_role_changed') {
+        final evtChatId = _asInt(evt.data['chat_id'] ?? evt.data['chatId']);
+        if (evtChatId != chatId) return;
+
+        final targetUserId = _asInt(evt.data['user_id'] ?? evt.data['userId']);
+        final myId = _myUserId ?? 0;
+        if (evt.type == 'member_removed' &&
+            myId > 0 &&
+            targetUserId > 0 &&
+            targetUserId == myId) {
+          if (!mounted) return;
+          showGlassSnack(
+            context,
+            'Вы были удалены из этого чата',
+            kind: GlassSnackKind.info,
+          );
+          Navigator.of(context).maybePop();
+          return;
+        }
+
+        unawaited(_refreshMyChatRole());
+        return;
+      }
+
+      if (evt.type == 'message_delivered') {
+        final evtChatId = _asInt(evt.data['chat_id'] ?? evt.data['chatId']);
+        if (evtChatId != chatId) return;
+        final userId = _asInt(evt.data['user_id'] ?? evt.data['userId']);
+        final lastDelivered = _asInt(
+          evt.data['last_delivered_message_id'] ??
+              evt.data['lastDeliveredMessageId'],
+        );
+        final myId = _myUserId ?? 0;
+        if (userId == myId && lastDelivered > _lastDeliveredMarkedMessageId) {
+          _lastDeliveredMarkedMessageId = lastDelivered;
+          return;
+        }
+
+        if (_isPrivateChat && userId != myId && lastDelivered > 0 && mounted) {
+          setState(() {
+            for (var i = 0; i < _messages.length; i++) {
+              final msg = _messages[i];
+              if (!msg.isMe || msg.isDelivered) continue;
+              final mid = int.tryParse(msg.id) ?? 0;
+              if (mid <= 0 || mid > lastDelivered) continue;
+              final updated = ChatMessage(
+                id: msg.id,
+                chatId: msg.chatId,
+                isMe: msg.isMe,
+                text: msg.text,
+                attachments: msg.attachments,
+                sentAt: msg.sentAt,
+                replyToMessageId: msg.replyToMessageId,
+                isDelivered: true,
+                isRead: msg.isRead,
+              );
+              _messages[i] = updated;
+              _messageById[msg.id] = updated;
+            }
+          });
+        }
+        return;
+      }
+
+      if (evt.type == 'message_read') {
+        final evtChatId = _asInt(evt.data['chat_id'] ?? evt.data['chatId']);
+        if (evtChatId != chatId) return;
+        final userId = _asInt(evt.data['user_id'] ?? evt.data['userId']);
+        final lastRead = _asInt(
+          evt.data['last_read_message_id'] ?? evt.data['lastReadMessageId'],
+        );
+        final myId = _myUserId ?? 0;
+        if (userId == myId && lastRead > _lastReadMarkedMessageId) {
+          _lastReadMarkedMessageId = lastRead;
+          if (mounted) {
+            setState(() {
+              _clearUnreadDividerIfCoveredByReadCursor(lastRead);
+            });
+          } else {
+            _clearUnreadDividerIfCoveredByReadCursor(lastRead);
+          }
+          return;
+        }
+
+        if (_isPrivateChat && userId != myId && lastRead > 0 && mounted) {
+          setState(() {
+            for (var i = 0; i < _messages.length; i++) {
+              final msg = _messages[i];
+              if (!msg.isMe || msg.isRead) continue;
+              final mid = int.tryParse(msg.id) ?? 0;
+              if (mid <= 0 || mid > lastRead) continue;
+              final updated = ChatMessage(
+                id: msg.id,
+                chatId: msg.chatId,
+                isMe: msg.isMe,
+                text: msg.text,
+                attachments: msg.attachments,
+                sentAt: msg.sentAt,
+                replyToMessageId: msg.replyToMessageId,
+                isDelivered: true,
+                isRead: true,
+              );
+              _messages[i] = updated;
+              _messageById[msg.id] = updated;
+            }
+          });
+        }
         return;
       }
 
@@ -830,6 +1325,8 @@ class _ChatPageState extends State<ChatPage>
             attachments: old.attachments,
             sentAt: old.sentAt,
             replyToMessageId: old.replyToMessageId,
+            isDelivered: old.isDelivered,
+            isRead: old.isRead,
           );
 
           _messages[idx] = updated;
@@ -921,7 +1418,7 @@ class _ChatPageState extends State<ChatPage>
           : int.tryParse('${replyDyn ?? ''}');
 
       final myId = _myUserId ?? 0;
-      final isMe = (myId > 0) ? senderId == myId : senderId != peerId;
+      final isMe = (myId > 0) ? senderId == myId : false;
 
       if (kDebugMode) {
         debugPrint('WS message_new routing resolved (isMe=$isMe)');
@@ -953,6 +1450,8 @@ class _ChatPageState extends State<ChatPage>
           replyToMessageId: (replyId != null && replyId > 0)
               ? replyId.toString()
               : null,
+          isDelivered: m['is_delivered'] == true || m['isDelivered'] == true,
+          isRead: m['is_read'] == true || m['isRead'] == true,
         );
         _messages.add(created);
         _messageById[created.id] = created;
@@ -960,6 +1459,18 @@ class _ChatPageState extends State<ChatPage>
 
       if (isMe || _isAtBottom) {
         _scheduleScrollToBottom(animated: true);
+      }
+      if (!isMe) {
+        if (!_isAtBottom) {
+          setState(() {
+            _newMessagesWhileAway += 1;
+          });
+          _jumpBadgePulse
+            ..stop()
+            ..forward(from: 0);
+        }
+        _scheduleMarkDelivered();
+        _scheduleMarkRead();
       }
     });
   }
@@ -970,6 +1481,14 @@ class _ChatPageState extends State<ChatPage>
   }
 
   Future<void> _send() async {
+    if (!_canSendInCurrentChat) {
+      showGlassSnack(
+        context,
+        'У вас нет прав на отправку сообщений в этом канале',
+        kind: GlassSnackKind.info,
+      );
+      return;
+    }
     if (_isSendingMessage) return;
     final chatId = int.tryParse(widget.chat.id) ?? 0;
     final peerId = widget.chat.peerId ?? 0;
@@ -978,7 +1497,7 @@ class _ChatPageState extends State<ChatPage>
     final pendingIds = pendingToSend.map((p) => p.clientId).toSet();
     final hasAttachments = pendingToSend.isNotEmpty;
     if (text.isEmpty && !hasAttachments) return;
-    if (peerId <= 0) return;
+    if (_isPrivateChat && peerId <= 0) return;
 
     final repo = context.read<ChatsRepository>();
     _rt ??= context.read<RealtimeClient>();
@@ -1019,15 +1538,18 @@ class _ChatPageState extends State<ChatPage>
               attachments: old.attachments,
               sentAt: old.sentAt,
               replyToMessageId: old.replyToMessageId,
+              isDelivered: old.isDelivered,
+              isRead: old.isRead,
             );
 
             _reindexMessages();
           }
         });
 
-        final payload = await repo.buildEncryptedWsMessage(
+        final payload = await repo.buildOutgoingWsTextMessage(
           chatId: chatId,
-          peerId: peerId,
+          chatKind: widget.chat.kind,
+          peerId: peerId > 0 ? peerId : null,
           plaintext: text,
         );
 
@@ -1071,6 +1593,8 @@ class _ChatPageState extends State<ChatPage>
             attachments: optimisticAtt,
             sentAt: DateTime.now(),
             replyToMessageId: replyTo?.id,
+            isDelivered: false,
+            isRead: false,
           ),
         );
 
@@ -1094,15 +1618,17 @@ class _ChatPageState extends State<ChatPage>
       }
 
       final payload = hasAttachments
-          ? await repo.buildEncryptedWsMediaMessage(
+          ? await repo.buildOutgoingWsMediaMessage(
               chatId: chatId,
-              peerId: peerId,
+              chatKind: widget.chat.kind,
+              peerId: peerId > 0 ? peerId : null,
               caption: text,
               attachments: outgoingAttachments,
             )
-          : await repo.buildEncryptedWsMessage(
+          : await repo.buildOutgoingWsTextMessage(
               chatId: chatId,
-              peerId: peerId,
+              chatKind: widget.chat.kind,
+              peerId: peerId > 0 ? peerId : null,
               plaintext: text,
             );
 
@@ -1174,9 +1700,18 @@ class _ChatPageState extends State<ChatPage>
   }
 
   Future<void> _sendRecordedVoice(PendingChatAttachment attachment) async {
+    if (!_canSendInCurrentChat) {
+      showGlassSnack(
+        context,
+        'У вас нет прав на отправку сообщений в этом канале',
+        kind: GlassSnackKind.info,
+      );
+      return;
+    }
     final chatId = int.tryParse(widget.chat.id) ?? 0;
     final peerId = widget.chat.peerId ?? 0;
-    if (chatId <= 0 || peerId <= 0) return;
+    if (chatId <= 0) return;
+    if (_isPrivateChat && peerId <= 0) return;
     if (!_canAttachFileSize(attachment.sizeBytes)) return;
 
     final repo = context.read<ChatsRepository>();
@@ -1208,6 +1743,8 @@ class _ChatPageState extends State<ChatPage>
             ],
             sentAt: DateTime.now(),
             replyToMessageId: replyTo?.id,
+            isDelivered: false,
+            isRead: false,
           ),
         );
         _reindexMessages();
@@ -1216,9 +1753,10 @@ class _ChatPageState extends State<ChatPage>
     _scheduleScrollToBottom(animated: true);
 
     try {
-      final payload = await repo.buildEncryptedWsMediaMessage(
+      final payload = await repo.buildOutgoingWsMediaMessage(
         chatId: chatId,
-        peerId: peerId,
+        chatKind: widget.chat.kind,
+        peerId: _isPrivateChat ? peerId : null,
         caption: '',
         attachments: [
           OutgoingAttachment(
@@ -1256,9 +1794,18 @@ class _ChatPageState extends State<ChatPage>
   }
 
   Future<void> _sendRecordedVideo(PendingChatAttachment attachment) async {
+    if (!_canSendInCurrentChat) {
+      showGlassSnack(
+        context,
+        'У вас нет прав на отправку сообщений в этом канале',
+        kind: GlassSnackKind.info,
+      );
+      return;
+    }
     final chatId = int.tryParse(widget.chat.id) ?? 0;
     final peerId = widget.chat.peerId ?? 0;
-    if (chatId <= 0 || peerId <= 0) return;
+    if (chatId <= 0) return;
+    if (_isPrivateChat && peerId <= 0) return;
     if (!_canAttachFileSize(attachment.sizeBytes)) return;
 
     final repo = context.read<ChatsRepository>();
@@ -1290,6 +1837,8 @@ class _ChatPageState extends State<ChatPage>
             ],
             sentAt: DateTime.now(),
             replyToMessageId: replyTo?.id,
+            isDelivered: false,
+            isRead: false,
           ),
         );
         _reindexMessages();
@@ -1298,9 +1847,10 @@ class _ChatPageState extends State<ChatPage>
     _scheduleScrollToBottom(animated: true);
 
     try {
-      final payload = await repo.buildEncryptedWsMediaMessage(
+      final payload = await repo.buildOutgoingWsMediaMessage(
         chatId: chatId,
-        peerId: peerId,
+        chatKind: widget.chat.kind,
+        peerId: _isPrivateChat ? peerId : null,
         caption: '',
         attachments: [
           OutgoingAttachment(
@@ -1454,17 +2004,27 @@ class _ChatPageState extends State<ChatPage>
   @override
   void dispose() {
     final chatId = int.tryParse(widget.chat.id) ?? 0;
+    if (_scrollController.hasClients) {
+      final offset = _scrollController.offset;
+      _savedScrollOffsetByChatId[widget.chat.id] = offset;
+      unawaited(_repo.saveChatScrollOffset(widget.chat.id, offset));
+    }
     final snapshot = List<ChatMessage>.from(_messages);
     unawaited(_repo.saveMessagesSnapshot(chatId, snapshot));
     WidgetsBinding.instance.removeObserver(this);
     _videoProgressController.dispose();
     _videoLockedTransition.dispose();
     _videoPulse.dispose();
+    _jumpBadgePulse.dispose();
     _pressedMessageIdN.dispose();
     _selectionModeN.dispose();
     _selectedMessageIdsN.dispose();
     _typingDebounce?.cancel();
     _typingDebounce = null;
+    _markReadDebounce?.cancel();
+    _markReadDebounce = null;
+    _markDeliveredDebounce?.cancel();
+    _markDeliveredDebounce = null;
     _loadOlderDebounce?.cancel();
     _loadOlderDebounce = null;
     _rt?.typing(chatId, false);
@@ -1478,6 +2038,40 @@ class _ChatPageState extends State<ChatPage>
     _focusNode.dispose();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  Widget _buildUnreadDivider(ThemeData theme) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        children: [
+          Expanded(
+            child: Divider(
+              height: 1,
+              thickness: 1,
+              color: theme.colorScheme.primary.withOpacity(0.30),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            child: Text(
+              'Новые сообщения',
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: theme.colorScheme.primary.withOpacity(0.92),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Divider(
+              height: 1,
+              thickness: 1,
+              color: theme.colorScheme.primary.withOpacity(0.30),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildMessagesPane({
@@ -1510,7 +2104,7 @@ class _ChatPageState extends State<ChatPage>
                 );
               },
             )
-          : ListView.separated(
+          : ListView.builder(
               controller: _scrollController,
               padding: EdgeInsets.fromLTRB(
                 horizontalPadding,
@@ -1519,7 +2113,6 @@ class _ChatPageState extends State<ChatPage>
                 listBottomPadding,
               ),
               itemCount: _messages.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 10),
               itemBuilder: (context, index) {
                 final msg = _messages[index];
                 final replyToId = msg.replyToMessageId;
@@ -1530,193 +2123,233 @@ class _ChatPageState extends State<ChatPage>
                     ? null
                     : _messageSummary(replied);
                 final selected = selectionMode && selectedIds.contains(msg.id);
-                return Align(
-                  alignment: msg.isMe
-                      ? Alignment.centerRight
-                      : Alignment.centerLeft,
-                  child: Dismissible(
-                    key: ValueKey('reply_${msg.id}'),
-                    direction: selectionMode
-                        ? DismissDirection.none
-                        : (msg.isMe
-                              ? DismissDirection.endToStart
-                              : DismissDirection.startToEnd),
-                    movementDuration: const Duration(milliseconds: 260),
-                    dismissThresholds: {
-                      DismissDirection.startToEnd: 0.22,
-                      DismissDirection.endToStart: 0.22,
-                    },
-                    confirmDismiss: (_) async {
-                      if (selectionMode) return false;
-                      HapticFeedback.selectionClick();
-                      if (!mounted) return false;
-                      setState(() {
-                        _replyTo = msg;
-                        _editing = null;
-                      });
-                      _focusNode.requestFocus();
-                      return false;
-                    },
-                    background: Align(
+                final showUnreadDivider = _firstUnreadMessageId == msg.id;
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (showUnreadDivider) _buildUnreadDivider(theme),
+                    Align(
                       alignment: msg.isMe
                           ? Alignment.centerRight
                           : Alignment.centerLeft,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        child: Icon(
-                          Icons.reply,
-                          size: 18,
-                          color: theme.colorScheme.onSurface.withOpacity(0.55),
+                      child: Dismissible(
+                        key: ValueKey('reply_${msg.id}'),
+                        direction: selectionMode
+                            ? DismissDirection.none
+                            : (msg.isMe
+                                  ? DismissDirection.endToStart
+                                  : DismissDirection.startToEnd),
+                        movementDuration: const Duration(milliseconds: 260),
+                        dismissThresholds: {
+                          DismissDirection.startToEnd: 0.22,
+                          DismissDirection.endToStart: 0.22,
+                        },
+                        confirmDismiss: (_) async {
+                          if (selectionMode) return false;
+                          HapticFeedback.selectionClick();
+                          if (!mounted) return false;
+                          setState(() {
+                            _replyTo = msg;
+                            _editing = null;
+                          });
+                          _focusNode.requestFocus();
+                          return false;
+                        },
+                        background: Align(
+                          alignment: msg.isMe
+                              ? Alignment.centerRight
+                              : Alignment.centerLeft,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            child: Icon(
+                              Icons.reply,
+                              size: 18,
+                              color: theme.colorScheme.onSurface.withOpacity(
+                                0.55,
+                              ),
+                            ),
+                          ),
                         ),
-                      ),
-                    ),
-                    secondaryBackground: Align(
-                      alignment: msg.isMe
-                          ? Alignment.centerRight
-                          : Alignment.centerLeft,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        child: Icon(
-                          Icons.reply,
-                          size: 18,
-                          color: theme.colorScheme.onSurface.withOpacity(0.55),
+                        secondaryBackground: Align(
+                          alignment: msg.isMe
+                              ? Alignment.centerRight
+                              : Alignment.centerLeft,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            child: Icon(
+                              Icons.reply,
+                              size: 18,
+                              color: theme.colorScheme.onSurface.withOpacity(
+                                0.55,
+                              ),
+                            ),
+                          ),
                         ),
-                      ),
-                    ),
-                    child: GestureDetector(
-                      onTapDown: (_) {
-                        if (!mounted) return;
-                        if (_pressedMessageIdN.value == msg.id) {
-                          return;
-                        }
-                        _pressedMessageIdN.value = msg.id;
-                      },
-                      onTapCancel: () {
-                        if (!mounted) return;
-                        if (_pressedMessageIdN.value != msg.id) {
-                          return;
-                        }
-                        _pressedMessageIdN.value = null;
-                      },
-                      onTapUp: (_) {
-                        if (!mounted) return;
-                        if (_pressedMessageIdN.value != msg.id) {
-                          return;
-                        }
-                        _pressedMessageIdN.value = null;
-                      },
-                      onTap: () {
-                        if (selectionMode) {
-                          _toggleSelected(msg);
-                        }
-                      },
-                      onLongPressStart: (d) async {
-                        HapticFeedback.selectionClick();
-                        if (mounted && _pressedMessageIdN.value != msg.id) {
-                          _pressedMessageIdN.value = msg.id;
-                        }
-                        if (selectionMode) {
-                          _toggleSelected(msg);
-                        } else {
-                          await _showMessageContextMenu(msg, d.globalPosition);
-                        }
+                        child: Container(
+                          key: _messageKey(msg.id),
+                          child: GestureDetector(
+                            onTapDown: (_) {
+                              if (!mounted) return;
+                              if (_pressedMessageIdN.value == msg.id) {
+                                return;
+                              }
+                              _pressedMessageIdN.value = msg.id;
+                            },
+                            onTapCancel: () {
+                              if (!mounted) return;
+                              if (_pressedMessageIdN.value != msg.id) {
+                                return;
+                              }
+                              _pressedMessageIdN.value = null;
+                            },
+                            onTapUp: (_) {
+                              if (!mounted) return;
+                              if (_pressedMessageIdN.value != msg.id) {
+                                return;
+                              }
+                              _pressedMessageIdN.value = null;
+                            },
+                            onTap: () {
+                              if (selectionMode) {
+                                _toggleSelected(msg);
+                              }
+                            },
+                            onLongPressStart: (d) async {
+                              HapticFeedback.selectionClick();
+                              if (mounted &&
+                                  _pressedMessageIdN.value != msg.id) {
+                                _pressedMessageIdN.value = msg.id;
+                              }
+                              if (selectionMode) {
+                                _toggleSelected(msg);
+                              } else {
+                                await _showMessageContextMenu(
+                                  msg,
+                                  d.globalPosition,
+                                );
+                              }
 
-                        if (mounted && _pressedMessageIdN.value == msg.id) {
-                          _pressedMessageIdN.value = null;
-                        }
-                      },
-                      onLongPressEnd: (_) {
-                        if (!mounted) return;
-                        if (_pressedMessageIdN.value != msg.id) {
-                          return;
-                        }
-                        _pressedMessageIdN.value = null;
-                      },
-                      child: ValueListenableBuilder<String?>(
-                        valueListenable: _pressedMessageIdN,
-                        builder: (context, pressedId, child) {
-                          final pressed = pressedId == msg.id;
-                          return AnimatedScale(
-                            scale: pressed ? 0.985 : (selected ? 1.05 : 1.0),
-                            duration: const Duration(milliseconds: 110),
-                            curve: Curves.easeOut,
-                            child: Stack(
-                              clipBehavior: Clip.none,
-                              children: [
-                                AnimatedContainer(
+                              if (mounted &&
+                                  _pressedMessageIdN.value == msg.id) {
+                                _pressedMessageIdN.value = null;
+                              }
+                            },
+                            onLongPressEnd: (_) {
+                              if (!mounted) return;
+                              if (_pressedMessageIdN.value != msg.id) {
+                                return;
+                              }
+                              _pressedMessageIdN.value = null;
+                            },
+                            child: ValueListenableBuilder<String?>(
+                              valueListenable: _pressedMessageIdN,
+                              builder: (context, pressedId, child) {
+                                final pressed = pressedId == msg.id;
+                                return AnimatedScale(
+                                  scale: pressed
+                                      ? 0.985
+                                      : (selected ? 1.05 : 1.0),
                                   duration: const Duration(milliseconds: 110),
                                   curve: Curves.easeOut,
-                                  decoration: BoxDecoration(
-                                    borderRadius: BorderRadius.circular(16),
-                                    color: pressed
-                                        ? theme.colorScheme.onSurface
-                                              .withOpacity(isDark ? 0.10 : 0.06)
-                                        : (selected
-                                              ? theme.colorScheme.primary
-                                                    .withOpacity(
-                                                      isDark ? 0.12 : 0.10,
-                                                    )
-                                              : Colors.transparent),
-                                    border: selected
-                                        ? Border.all(
-                                            color: theme.colorScheme.primary
-                                                .withOpacity(0.8),
-                                            width: 1.2,
-                                          )
-                                        : null,
-                                  ),
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(2),
-                                    child: RepaintBoundary(
-                                      child: _buildMessageBubble(
-                                        msg: msg,
-                                        replyPreview: replyPreview,
-                                        isDark: isDark,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                Positioned(
-                                  right: -6,
-                                  top: -6,
-                                  child: AnimatedOpacity(
-                                    opacity: selected ? 1 : 0,
-                                    duration: const Duration(milliseconds: 120),
-                                    curve: Curves.easeOut,
-                                    child: AnimatedScale(
-                                      scale: selected ? 1 : 0.9,
-                                      duration: const Duration(
-                                        milliseconds: 120,
-                                      ),
-                                      curve: Curves.easeOut,
-                                      child: Container(
-                                        width: 20,
-                                        height: 20,
+                                  child: Stack(
+                                    clipBehavior: Clip.none,
+                                    children: [
+                                      AnimatedContainer(
+                                        duration: const Duration(
+                                          milliseconds: 110,
+                                        ),
+                                        curve: Curves.easeOut,
                                         decoration: BoxDecoration(
-                                          color: theme.colorScheme.primary,
-                                          shape: BoxShape.circle,
-                                          border: Border.all(
-                                            color: theme.colorScheme.surface
-                                                .withOpacity(0.9),
-                                            width: 1,
+                                          borderRadius: BorderRadius.circular(
+                                            16,
+                                          ),
+                                          color: pressed
+                                              ? theme.colorScheme.onSurface
+                                                    .withOpacity(
+                                                      isDark ? 0.10 : 0.06,
+                                                    )
+                                              : (selected
+                                                    ? theme.colorScheme.primary
+                                                          .withOpacity(
+                                                            isDark
+                                                                ? 0.12
+                                                                : 0.10,
+                                                          )
+                                                    : Colors.transparent),
+                                          border: selected
+                                              ? Border.all(
+                                                  color: theme
+                                                      .colorScheme
+                                                      .primary
+                                                      .withOpacity(0.8),
+                                                  width: 1.2,
+                                                )
+                                              : null,
+                                        ),
+                                        child: Padding(
+                                          padding: const EdgeInsets.all(2),
+                                          child: RepaintBoundary(
+                                            child: _buildMessageBubble(
+                                              msg: msg,
+                                              replyPreview: replyPreview,
+                                              isDark: isDark,
+                                            ),
                                           ),
                                         ),
-                                        child: Icon(
-                                          Icons.check,
-                                          size: 14,
-                                          color: theme.colorScheme.onPrimary,
+                                      ),
+                                      Positioned(
+                                        right: -6,
+                                        top: -6,
+                                        child: AnimatedOpacity(
+                                          opacity: selected ? 1 : 0,
+                                          duration: const Duration(
+                                            milliseconds: 120,
+                                          ),
+                                          curve: Curves.easeOut,
+                                          child: AnimatedScale(
+                                            scale: selected ? 1 : 0.9,
+                                            duration: const Duration(
+                                              milliseconds: 120,
+                                            ),
+                                            curve: Curves.easeOut,
+                                            child: Container(
+                                              width: 20,
+                                              height: 20,
+                                              decoration: BoxDecoration(
+                                                color:
+                                                    theme.colorScheme.primary,
+                                                shape: BoxShape.circle,
+                                                border: Border.all(
+                                                  color: theme
+                                                      .colorScheme
+                                                      .surface
+                                                      .withOpacity(0.9),
+                                                  width: 1,
+                                                ),
+                                              ),
+                                              child: Icon(
+                                                Icons.check,
+                                                size: 14,
+                                                color:
+                                                    theme.colorScheme.onPrimary,
+                                              ),
+                                            ),
+                                          ),
                                         ),
                                       ),
-                                    ),
+                                    ],
                                   ),
-                                ),
-                              ],
+                                );
+                              },
                             ),
-                          );
-                        },
+                          ),
+                        ),
                       ),
                     ),
-                  ),
+                    if (index != _messages.length - 1)
+                      const SizedBox(height: 10),
+                  ],
                 );
               },
             ),
@@ -1738,81 +2371,181 @@ class _ChatPageState extends State<ChatPage>
         padding: EdgeInsets.only(bottom: media.viewInsets.bottom),
         child: SafeArea(
           top: false,
-          child: ChatInputBar(
-            controller: _controller,
-            focusNode: _focusNode,
-            isDark: isDark,
-            isEditing: _editing != null,
-            onCancelEditing: () {
-              if (_editing == null) return;
-              setState(() {
-                _editing = null;
-              });
-              _controller.clear();
-            },
-            hasReply: _replyTo != null,
-            replyText: replyText,
-            onCancelReply: () {
-              if (_replyTo == null) return;
-              setState(() {
-                _replyTo = null;
-              });
-            },
-            pending: _pending,
-            onRemovePending: (index) {
-              if (index < 0 || index >= _pending.length) return;
-              if (!_pending[index].canRemove) return;
-              setState(() {
-                _pending.removeAt(index);
-              });
-            },
-            onRetryPending: (index) {
-              if (index < 0 || index >= _pending.length) return;
-              if (!_pending[index].canRetry) return;
-              setState(() {
-                _pending[index] = _pending[index].markQueued();
-              });
-            },
-            onPickPhotos: _pickPhotos,
-            onPickFiles: _pickFiles,
-            onTakePhoto: _takePhoto,
-            onSend: _send,
-            onRecordingChanged: (mode, isRecording) {
-              if (mode == RecorderMode.video) {
-                _setVideoRecordingOverlay(show: isRecording);
-              }
-            },
-            onRecordingDurationChanged: _onVideoRecordingDurationChanged,
-            onRecordingLockedChanged: (mode, locked) {
-              if (mode != RecorderMode.video) return;
-              _onVideoRecordingLockedChanged(locked);
-            },
-            onRecorderController: (cancel, stop) {
-              _cancelVideoRecording = cancel;
-              _stopVideoRecording = stop;
-            },
-            onVideoControllerChanged: _onVideoControllerChanged,
-            onVideoActionsController: (setTorch, setUseFrontCamera) {
-              _setVideoTorch = setTorch;
-              _setVideoUseFrontCamera = setUseFrontCamera;
-            },
-            onAddRecordedFile: (attachment) async {
-              if (!mounted) return;
-              if ((attachment.mimetype).toLowerCase().startsWith('audio/')) {
-                await _sendRecordedVoice(attachment);
-                return;
-              }
-              if ((attachment.mimetype).toLowerCase().startsWith('video/')) {
-                await _sendRecordedVideo(attachment);
-                return;
-              }
-              if (!_canAttachFileSize(attachment.sizeBytes)) {
-                return;
-              }
-              setState(() {
-                _pending.add(attachment.markQueued());
-              });
-            },
+          child: _canSendInCurrentChat
+              ? ChatInputBar(
+                  controller: _controller,
+                  focusNode: _focusNode,
+                  isDark: isDark,
+                  isEditing: _editing != null,
+                  onCancelEditing: () {
+                    if (_editing == null) return;
+                    setState(() {
+                      _editing = null;
+                    });
+                    _controller.clear();
+                  },
+                  hasReply: _replyTo != null,
+                  replyText: replyText,
+                  onCancelReply: () {
+                    if (_replyTo == null) return;
+                    setState(() {
+                      _replyTo = null;
+                    });
+                  },
+                  pending: _pending,
+                  onRemovePending: (index) {
+                    if (index < 0 || index >= _pending.length) return;
+                    if (!_pending[index].canRemove) return;
+                    setState(() {
+                      _pending.removeAt(index);
+                    });
+                  },
+                  onRetryPending: (index) {
+                    if (index < 0 || index >= _pending.length) return;
+                    if (!_pending[index].canRetry) return;
+                    setState(() {
+                      _pending[index] = _pending[index].markQueued();
+                    });
+                  },
+                  onPickPhotos: _pickPhotos,
+                  onPickFiles: _pickFiles,
+                  onTakePhoto: _takePhoto,
+                  onSend: _send,
+                  onRecordingChanged: (mode, isRecording) {
+                    if (mode == RecorderMode.video) {
+                      _setVideoRecordingOverlay(show: isRecording);
+                    }
+                  },
+                  onRecordingDurationChanged: _onVideoRecordingDurationChanged,
+                  onRecordingLockedChanged: (mode, locked) {
+                    if (mode != RecorderMode.video) return;
+                    _onVideoRecordingLockedChanged(locked);
+                  },
+                  onRecorderController: (cancel, stop) {
+                    _cancelVideoRecording = cancel;
+                    _stopVideoRecording = stop;
+                  },
+                  onVideoControllerChanged: _onVideoControllerChanged,
+                  onVideoActionsController: (setTorch, setUseFrontCamera) {
+                    _setVideoTorch = setTorch;
+                    _setVideoUseFrontCamera = setUseFrontCamera;
+                  },
+                  onAddRecordedFile: (attachment) async {
+                    if (!mounted) return;
+                    if ((attachment.mimetype).toLowerCase().startsWith(
+                      'audio/',
+                    )) {
+                      await _sendRecordedVoice(attachment);
+                      return;
+                    }
+                    if ((attachment.mimetype).toLowerCase().startsWith(
+                      'video/',
+                    )) {
+                      await _sendRecordedVideo(attachment);
+                      return;
+                    }
+                    if (!_canAttachFileSize(attachment.sizeBytes)) {
+                      return;
+                    }
+                    setState(() {
+                      _pending.add(attachment.markQueued());
+                    });
+                  },
+                )
+              : const SizedBox.shrink(),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildJumpToBottomButton({
+    required MediaQueryData media,
+    required ThemeData theme,
+  }) {
+    final show = !_isAtBottom && media.viewInsets.bottom <= 0;
+    const double inputHeight = 44;
+    const double verticalPadding = 14;
+    final bottomOffset =
+        media.padding.bottom +
+        media.viewInsets.bottom +
+        inputHeight +
+        verticalPadding +
+        10;
+
+    return Positioned(
+      right: 14,
+      bottom: bottomOffset,
+      child: AnimatedSlide(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOut,
+        offset: show ? Offset.zero : const Offset(0, 0.35),
+        child: AnimatedOpacity(
+          duration: const Duration(milliseconds: 180),
+          opacity: show ? 1 : 0,
+          child: IgnorePointer(
+            ignoring: !show,
+            child: GestureDetector(
+              onTap: () {
+                _scheduleScrollToBottom(animated: true);
+                _scheduleMarkDelivered();
+                _scheduleMarkRead();
+              },
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  GlassSurface(
+                    borderRadius: 999,
+                    blurSigma: 12,
+                    padding: const EdgeInsets.all(10),
+                    child: HugeIcon(
+                      icon: HugeIcons.strokeRoundedArrowDown01,
+                      size: 22,
+                      color: theme.colorScheme.onSurface.withOpacity(0.88),
+                    ),
+                  ),
+                  if (_newMessagesWhileAway > 0)
+                    Positioned(
+                      right: -4,
+                      top: -4,
+                      child: AnimatedBuilder(
+                        animation: _jumpBadgePulse,
+                        builder: (context, child) {
+                          final t = Curves.easeOutBack.transform(
+                            _jumpBadgePulse.value,
+                          );
+                          final scale = 1 + (0.16 * (1 - (t - 1).abs()));
+                          return Transform.scale(
+                            scale: scale.clamp(1.0, 1.16),
+                            child: child,
+                          );
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.primary.withOpacity(0.96),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          constraints: const BoxConstraints(minWidth: 18),
+                          alignment: Alignment.center,
+                          child: Text(
+                            _newMessagesWhileAway > 99
+                                ? '99+'
+                                : '$_newMessagesWhileAway',
+                            style: TextStyle(
+                              color: theme.colorScheme.onPrimary,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
           ),
         ),
       ),
@@ -1849,6 +2582,9 @@ class _ChatPageState extends State<ChatPage>
                   peerOnline: _peerOnline,
                   peerTyping: _peerTyping,
                   isSyncing: isSyncing,
+                  chatKind: widget.chat.kind,
+                  myRole: _myRoleInChat,
+                  canSend: _canSendInCurrentChat,
                   onBack: () {
                     if (selectionMode) {
                       _exitSelectionMode();
@@ -1864,7 +2600,7 @@ class _ChatPageState extends State<ChatPage>
                     _deleteByIds(ids);
                     _deleteRemote(ids);
                   },
-                  onMenu: () {},
+                  onMenu: _openMembersSheet,
                 ),
                 body: Builder(
                   builder: (context) {
@@ -1904,6 +2640,7 @@ class _ChatPageState extends State<ChatPage>
                           isDark: isDark,
                           replyText: replyText,
                         ),
+                        _buildJumpToBottomButton(media: media, theme: theme),
 
                         if (_showVideoRecordingOverlay)
                           Positioned.fill(
@@ -2579,12 +3316,7 @@ class _ChatPageState extends State<ChatPage>
 
     final toChatId = int.tryParse(selectedChat.id) ?? 0;
     final toPeerId = selectedChat.peerId ?? 0;
-    if (toChatId <= 0 || toPeerId <= 0) {
-      showGlassSnack(
-        context,
-        'Пересылка поддерживается только для private чатов',
-        kind: GlassSnackKind.info,
-      );
+    if (toChatId <= 0) {
       return;
     }
 
@@ -2603,9 +3335,10 @@ class _ChatPageState extends State<ChatPage>
           .firstWhere((m) => m != null, orElse: () => null);
       if (msg == null) continue;
       if (msg.attachments.isNotEmpty) continue;
-      final payload = await repo.buildEncryptedWsMessage(
+      final payload = await repo.buildOutgoingWsTextMessage(
         chatId: toChatId,
-        peerId: toPeerId,
+        chatKind: selectedChat.kind,
+        peerId: toPeerId > 0 ? toPeerId : null,
         plaintext: msg.text,
       );
       rt.forwardMessage(
@@ -2732,5 +3465,637 @@ class _ChatPageState extends State<ChatPage>
       default:
         break;
     }
+  }
+}
+
+class _ChatMembersSheetBody extends StatefulWidget {
+  final int chatId;
+  final String chatKind;
+  final int myUserId;
+  final ChatsRepository repo;
+
+  const _ChatMembersSheetBody({
+    required this.chatId,
+    required this.chatKind,
+    required this.myUserId,
+    required this.repo,
+  });
+
+  @override
+  State<_ChatMembersSheetBody> createState() => _ChatMembersSheetBodyState();
+}
+
+class _ChatMembersSheetBodyState extends State<_ChatMembersSheetBody> {
+  bool _loading = true;
+  bool _busy = false;
+  String? _error;
+  List<ChatMember> _members = const [];
+  RealtimeClient? _rt;
+  StreamSubscription? _rtSub;
+  Timer? _realtimeReloadDebounce;
+
+  final TextEditingController _memberIdCtrl = TextEditingController();
+  final TextEditingController _memberSearchCtrl = TextEditingController();
+  String _newMemberRole = 'member';
+  Timer? _memberSearchDebounce;
+  int _memberSearchSeq = 0;
+  bool _memberSearching = false;
+  String? _memberSearchError;
+  List<ChatUser> _memberSearchResults = const [];
+
+  int _asInt(dynamic value) {
+    if (value is int) return value;
+    return int.tryParse('$value') ?? 0;
+  }
+
+  bool get _canManage {
+    final me = _members
+        .where((m) => m.userId == widget.myUserId)
+        .cast<ChatMember?>()
+        .firstWhere((m) => m != null, orElse: () => null);
+    if (me == null) return false;
+    final role = me.role.trim().toLowerCase();
+    return role == 'owner' || role == 'admin';
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _reload();
+    _ensureRealtime();
+  }
+
+  @override
+  void dispose() {
+    _rtSub?.cancel();
+    _realtimeReloadDebounce?.cancel();
+    _memberSearchDebounce?.cancel();
+    _memberSearchCtrl.dispose();
+    _memberIdCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _reload({bool withLoading = true}) async {
+    if (!mounted) return;
+    if (withLoading) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
+    try {
+      final members = await widget.repo.listMembers(widget.chatId);
+      if (!mounted) return;
+      setState(() {
+        _members = members;
+        if (withLoading) {
+          _loading = false;
+        }
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        if (withLoading) {
+          _loading = false;
+        }
+        _error = '$e';
+      });
+    }
+  }
+
+  Future<void> _ensureRealtime() async {
+    _rt ??= context.read<RealtimeClient>();
+    final rt = _rt!;
+
+    if (!rt.isConnected) {
+      await rt.connect();
+    }
+
+    _rtSub ??= rt.events.listen((evt) {
+      final t = evt.type;
+      if (t != 'member_added' &&
+          t != 'member_removed' &&
+          t != 'member_role_changed') {
+        return;
+      }
+
+      final evtChatId = _asInt(evt.data['chat_id'] ?? evt.data['chatId']);
+      if (evtChatId != widget.chatId) return;
+
+      final removedUserId = _asInt(evt.data['user_id'] ?? evt.data['userId']);
+      if (t == 'member_removed' && removedUserId == widget.myUserId) {
+        if (!mounted) return;
+        showGlassSnack(
+          context,
+          'Вы были удалены из этого чата',
+          kind: GlassSnackKind.info,
+        );
+        Navigator.of(context).maybePop();
+        return;
+      }
+
+      _realtimeReloadDebounce?.cancel();
+      _realtimeReloadDebounce = Timer(const Duration(milliseconds: 120), () {
+        if (!mounted) return;
+        _reload(withLoading: false);
+      });
+    });
+  }
+
+  Set<int> _existingMemberIds() {
+    return _members.map((m) => m.userId).toSet();
+  }
+
+  void _runMemberSearch(String query) {
+    final q = query.trim();
+    final seq = ++_memberSearchSeq;
+    if (q.isEmpty) {
+      setState(() {
+        _memberSearching = false;
+        _memberSearchError = null;
+        _memberSearchResults = const [];
+      });
+      return;
+    }
+
+    setState(() {
+      _memberSearching = true;
+      _memberSearchError = null;
+    });
+
+    widget.repo
+        .searchUsers(q)
+        .then((users) {
+          if (!mounted || seq != _memberSearchSeq) return;
+          final existing = _existingMemberIds();
+          final filtered = users
+              .where((u) => !existing.contains(int.tryParse(u.id) ?? 0))
+              .toList(growable: false);
+          setState(() {
+            _memberSearching = false;
+            _memberSearchError = null;
+            _memberSearchResults = filtered;
+          });
+        })
+        .catchError((e) {
+          if (!mounted || seq != _memberSearchSeq) return;
+          setState(() {
+            _memberSearching = false;
+            _memberSearchError = e.toString();
+            _memberSearchResults = const [];
+          });
+        });
+  }
+
+  void _scheduleMemberSearch(String query) {
+    _memberSearchDebounce?.cancel();
+    _memberSearchDebounce = Timer(const Duration(milliseconds: 260), () {
+      if (!mounted) return;
+      _runMemberSearch(query);
+    });
+  }
+
+  Future<void> _addMember() async {
+    if (!_canManage || _busy) return;
+    final userId = int.tryParse(_memberIdCtrl.text.trim()) ?? 0;
+    if (userId <= 0) {
+      showGlassSnack(
+        context,
+        'Укажите корректный ID пользователя',
+        kind: GlassSnackKind.error,
+      );
+      return;
+    }
+
+    setState(() {
+      _busy = true;
+    });
+    try {
+      await widget.repo.addMember(
+        widget.chatId,
+        userId: userId,
+        role: _newMemberRole,
+      );
+      _memberIdCtrl.clear();
+      _memberSearchCtrl.clear();
+      _memberSearchResults = const [];
+      _memberSearchError = null;
+      await _reload();
+      if (!mounted) return;
+      showGlassSnack(
+        context,
+        'Участник добавлен',
+        kind: GlassSnackKind.success,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      showGlassSnack(context, '$e', kind: GlassSnackKind.error);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _setRole(ChatMember member, String role) async {
+    if (!_canManage || _busy) return;
+    setState(() {
+      _busy = true;
+    });
+    try {
+      await widget.repo.updateMemberRole(
+        widget.chatId,
+        userId: member.userId,
+        role: role,
+      );
+      await _reload();
+      if (!mounted) return;
+      showGlassSnack(
+        context,
+        'Роль обновлена (${member.username})',
+        kind: GlassSnackKind.success,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      showGlassSnack(context, '$e', kind: GlassSnackKind.error);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _removeMember(ChatMember member) async {
+    if (!_canManage || _busy) return;
+    if (member.userId == widget.myUserId) {
+      showGlassSnack(
+        context,
+        'Себя через этот sheet удалить нельзя',
+        kind: GlassSnackKind.info,
+      );
+      return;
+    }
+
+    setState(() {
+      _busy = true;
+    });
+    try {
+      await widget.repo.removeMember(widget.chatId, userId: member.userId);
+      await _reload();
+      if (!mounted) return;
+      showGlassSnack(
+        context,
+        'Участник удалён (${member.username})',
+        kind: GlassSnackKind.success,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      showGlassSnack(context, '$e', kind: GlassSnackKind.error);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+        });
+      }
+    }
+  }
+
+  String _roleLabel(String role) {
+    switch (role.trim().toLowerCase()) {
+      case 'owner':
+        return 'Owner';
+      case 'admin':
+        return 'Admin';
+      default:
+        return 'Member';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final baseInk = isDark ? Colors.white : Colors.black;
+
+    return DraggableScrollableSheet(
+      initialChildSize: 0.74,
+      minChildSize: 0.45,
+      maxChildSize: 0.95,
+      builder: (context, scrollController) {
+        return GlassSurface(
+          blurSigma: 16,
+          borderRadiusGeometry: const BorderRadius.only(
+            topLeft: Radius.circular(26),
+            topRight: Radius.circular(26),
+          ),
+          borderColor: baseInk.withOpacity(isDark ? 0.22 : 0.12),
+          child: ListView(
+            controller: scrollController,
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 18),
+            children: [
+              Center(
+                child: Container(
+                  width: 44,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.onSurface.withOpacity(0.25),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                widget.chatKind == 'channel'
+                    ? 'Участники канала'
+                    : 'Участники группы',
+                style: theme.textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Всего: ${_members.length} • '
+                '${_canManage ? "у вас есть права управления" : "только просмотр"}',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurface.withOpacity(0.72),
+                ),
+              ),
+              const SizedBox(height: 12),
+              if (_canManage) ...[
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _memberIdCtrl,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: 'ID участника',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    DropdownButton<String>(
+                      value: _newMemberRole,
+                      items: const [
+                        DropdownMenuItem(
+                          value: 'member',
+                          child: Text('member'),
+                        ),
+                        DropdownMenuItem(value: 'admin', child: Text('admin')),
+                      ],
+                      onChanged: _busy
+                          ? null
+                          : (v) {
+                              if (v == null) return;
+                              setState(() {
+                                _newMemberRole = v;
+                              });
+                            },
+                    ),
+                    const SizedBox(width: 8),
+                    FilledButton(
+                      onPressed: _busy ? null : _addMember,
+                      child: const Text('Добавить'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _memberSearchCtrl,
+                  onChanged: _scheduleMemberSearch,
+                  decoration: InputDecoration(
+                    labelText: 'Поиск пользователя (username / ID)',
+                    suffixIcon: _memberSearchCtrl.text.trim().isEmpty
+                        ? null
+                        : IconButton(
+                            onPressed: _busy
+                                ? null
+                                : () {
+                                    _memberSearchCtrl.clear();
+                                    _memberSearchDebounce?.cancel();
+                                    setState(() {
+                                      _memberSearching = false;
+                                      _memberSearchError = null;
+                                      _memberSearchResults = const [];
+                                    });
+                                  },
+                            icon: const Icon(Icons.close_rounded),
+                          ),
+                  ),
+                ),
+                if (_memberSearching)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 8),
+                    child: LinearProgressIndicator(minHeight: 2),
+                  )
+                else if (_memberSearchError != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      _memberSearchError!.replaceFirst('Exception: ', ''),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.error,
+                      ),
+                    ),
+                  )
+                else if (_memberSearchResults.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Column(
+                      children: _memberSearchResults
+                          .map((u) {
+                            final uid = int.tryParse(u.id) ?? 0;
+                            if (uid <= 0) return const SizedBox.shrink();
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: GlassSurface(
+                                borderRadius: 14,
+                                blurSigma: 8,
+                                borderColor: baseInk.withOpacity(
+                                  isDark ? 0.14 : 0.08,
+                                ),
+                                padding: const EdgeInsets.fromLTRB(
+                                  10,
+                                  8,
+                                  10,
+                                  8,
+                                ),
+                                child: Row(
+                                  children: [
+                                    RenAvatar(
+                                      url: u.avatarUrl,
+                                      name: u.name,
+                                      isOnline: false,
+                                      size: 34,
+                                      onlineDotSize: 0,
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            u.name,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: theme.textTheme.titleSmall
+                                                ?.copyWith(
+                                                  fontWeight: FontWeight.w700,
+                                                ),
+                                          ),
+                                          Text(
+                                            'ID: $uid',
+                                            style: theme.textTheme.bodySmall
+                                                ?.copyWith(
+                                                  color: theme
+                                                      .colorScheme
+                                                      .onSurface
+                                                      .withOpacity(0.7),
+                                                ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    FilledButton(
+                                      onPressed: _busy
+                                          ? null
+                                          : () async {
+                                              _memberIdCtrl.text = '$uid';
+                                              await _addMember();
+                                            },
+                                      child: const Text('Add'),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          })
+                          .toList(growable: false),
+                    ),
+                  ),
+                const SizedBox(height: 12),
+              ],
+              if (_loading)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 30),
+                  child: Center(
+                    child: SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  ),
+                )
+              else if (_error != null)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  child: Text(
+                    _error!.replaceFirst('Exception: ', ''),
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.error,
+                    ),
+                  ),
+                )
+              else if (_members.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  child: Text(
+                    'Список участников пуст',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurface.withOpacity(0.7),
+                    ),
+                  ),
+                )
+              else
+                ..._members.map((member) {
+                  final role = member.role.trim().toLowerCase();
+                  final canChangeRole =
+                      _canManage &&
+                      member.userId != widget.myUserId &&
+                      role != 'owner';
+                  final canRemove = canChangeRole;
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: GlassSurface(
+                      borderRadius: 16,
+                      blurSigma: 10,
+                      borderColor: baseInk.withOpacity(isDark ? 0.16 : 0.09),
+                      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                      child: Row(
+                        children: [
+                          RenAvatar(
+                            url: member.avatarUrl,
+                            name: member.username,
+                            isOnline: false,
+                            size: 38,
+                            onlineDotSize: 0,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  member.username,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: theme.textTheme.titleSmall?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  'ID: ${member.userId} • ${_roleLabel(member.role)}',
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: theme.colorScheme.onSurface
+                                        .withOpacity(0.72),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          if (canChangeRole)
+                            PopupMenuButton<String>(
+                              icon: const Icon(Icons.more_vert_rounded),
+                              onSelected: (value) async {
+                                if (value == 'remove') {
+                                  await _removeMember(member);
+                                  return;
+                                }
+                                await _setRole(member, value);
+                              },
+                              itemBuilder: (_) => [
+                                if (role != 'admin')
+                                  const PopupMenuItem<String>(
+                                    value: 'admin',
+                                    child: Text('Сделать admin'),
+                                  ),
+                                if (role != 'member')
+                                  const PopupMenuItem<String>(
+                                    value: 'member',
+                                    child: Text('Сделать member'),
+                                  ),
+                                if (canRemove)
+                                  const PopupMenuItem<String>(
+                                    value: 'remove',
+                                    child: Text('Удалить из чата'),
+                                  ),
+                              ],
+                            ),
+                        ],
+                      ),
+                    ),
+                  );
+                }),
+            ],
+          ),
+        );
+      },
+    );
   }
 }
