@@ -22,6 +22,8 @@ class ChatMessage {
   final String? replyToMessageId;
   final bool isDelivered;
   final bool isRead;
+  final String? senderName;
+  final String? senderAvatarUrl;
 
   const ChatMessage({
     required this.id,
@@ -33,6 +35,8 @@ class ChatMessage {
     this.replyToMessageId,
     this.isDelivered = false,
     this.isRead = false,
+    this.senderName,
+    this.senderAvatarUrl,
   });
 }
 

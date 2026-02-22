@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 
 import 'package:ren/features/chats/domain/chat_models.dart';
+import 'package:ren/shared/widgets/avatar.dart';
 import 'package:ren/shared/widgets/glass_surface.dart';
 
 class ChatMessageBubble extends StatelessWidget {
@@ -17,6 +18,8 @@ class ChatMessageBubble extends StatelessWidget {
   final bool isPending;
   final bool isDark;
   final void Function(ChatAttachment a)? onOpenAttachment;
+  final String? senderName;
+  final String? senderAvatarUrl;
 
   const ChatMessageBubble({
     super.key,
@@ -30,6 +33,8 @@ class ChatMessageBubble extends StatelessWidget {
     this.isPending = false,
     required this.isDark,
     this.onOpenAttachment,
+    this.senderName,
+    this.senderAvatarUrl,
   });
 
   @override
@@ -69,6 +74,32 @@ class ChatMessageBubble extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
+              if (!isMe && senderName != null && senderName!.isNotEmpty) ...[
+                Row(
+                  children: [
+                    RenAvatar(
+                      url: senderAvatarUrl ?? '',
+                      name: senderName ?? '',
+                      isOnline: false,
+                      size: 24,
+                      onlineDotSize: 0,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        senderName ?? '',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          color: theme.colorScheme.primary,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+              ],
               if (replyPreview != null && replyPreview!.trim().isNotEmpty) ...[
                 Container(
                   width: double.infinity,

@@ -967,6 +967,14 @@ class ChatsRepository {
     await api.removeMember(chatId, userId: userId);
   }
 
+  Future<void> updateChatInfo(
+    int chatId, {
+    String? title,
+    String? avatarPath,
+  }) async {
+    await api.updateChatInfo(chatId, title: title, avatarPath: avatarPath);
+  }
+
   Future<void> deleteChat(int chatId, {bool forAll = false}) async {
     await api.deleteChat(chatId, forAll: forAll);
   }

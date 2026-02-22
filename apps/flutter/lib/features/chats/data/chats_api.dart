@@ -293,6 +293,32 @@ class ChatsApi {
     }
   }
 
+  Future<void> updateChatInfo(
+    int chatId, {
+    String? title,
+    String? avatarPath,
+  }) async {
+    final token = await _requireToken();
+    try {
+      final data = <String, dynamic>{};
+      if (title != null) data['title'] = title;
+      if (avatarPath != null) data['avatar'] = avatarPath;
+
+      await dio.patch(
+        '${Apiurl.api}/chats/$chatId',
+        data: data,
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+    } on DioException catch (e) {
+      throw ApiException(
+        (e.response?.data is String)
+            ? e.response?.data as String
+            : 'Ошибка обновления информации о чате',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
   Future<String> getPublicKey(int userId) async {
     try {
       final token = await _requireToken();

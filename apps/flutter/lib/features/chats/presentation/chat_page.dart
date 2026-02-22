@@ -477,6 +477,8 @@ class _ChatPageState extends State<ChatPage>
       isPending: msg.id.startsWith('local_'),
       isDark: isDark,
       onOpenAttachment: (a) => _openAttachmentSheet(a),
+      senderName: msg.senderName,
+      senderAvatarUrl: msg.senderAvatarUrl,
     );
   }
 
@@ -1454,6 +1456,12 @@ class _ChatPageState extends State<ChatPage>
           }
         }
 
+        final senderNameStr = (m['sender_name'] as String?) ?? '';
+        final senderAvatarStr = (m['sender_avatar'] as String?) ?? '';
+        final senderAvatarUrl = senderAvatarStr.isNotEmpty
+            ? _avatarUrl(senderAvatarStr)
+            : '';
+
         final created = ChatMessage(
           id: '${m['id'] ?? DateTime.now().millisecondsSinceEpoch}',
           chatId: chatId.toString(),
@@ -1466,6 +1474,8 @@ class _ChatPageState extends State<ChatPage>
               : null,
           isDelivered: m['is_delivered'] == true || m['isDelivered'] == true,
           isRead: m['is_read'] == true || m['isRead'] == true,
+          senderName: senderNameStr.isNotEmpty ? senderNameStr : null,
+          senderAvatarUrl: senderAvatarUrl.isNotEmpty ? senderAvatarUrl : null,
         );
         _messages.add(created);
         _messageById[created.id] = created;
@@ -3568,6 +3578,26 @@ class _ChatMembersSheetBodyState extends State<_ChatMembersSheetBody> {
     return role == 'owner' || role == 'admin';
   }
 
+  bool get _isOwner {
+    final me = _members
+        .where((m) => m.userId == widget.myUserId)
+        .cast<ChatMember?>()
+        .firstWhere((m) => m != null, orElse: () => null);
+    if (me == null) return false;
+    return me.role.trim().toLowerCase() == 'owner';
+  }
+
+  String _roleLabel(String role) {
+    switch (role.trim().toLowerCase()) {
+      case 'owner':
+        return 'Владелец';
+      case 'admin':
+        return 'Админ';
+      default:
+        return 'Участник';
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -3749,6 +3779,79 @@ class _ChatMembersSheetBodyState extends State<_ChatMembersSheetBody> {
     }
   }
 
+  Future<void> _editChatInfo() async {
+    if (!_isOwner || _busy) return;
+
+    final titleCtrl = TextEditingController(text: widget.chatKind == 'channel' ? 'Название канала' : 'Название группы');
+    final submitted = await GlassOverlays.showGlassDialog<bool>(
+      context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Text('Редактировать чат'),
+          content: TextField(
+            controller: titleCtrl,
+            decoration: const InputDecoration(labelText: 'Название'),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Отмена'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Сохранить'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (submitted != true || !mounted) return;
+    final title = titleCtrl.text.trim();
+    if (title.isEmpty) {
+      showGlassSnack(context, 'Укажите название', kind: GlassSnackKind.error);
+      return;
+    }
+
+    setState(() {
+      _busy = true;
+    });
+    try {
+      await widget.repo.updateChatInfo(widget.chatId, title: title);
+      if (!mounted) return;
+      showGlassSnack(
+        context,
+        'Информация обновлена',
+        kind: GlassSnackKind.success,
+      );
+      Navigator.of(context).maybePop();
+    } catch (e) {
+      if (!mounted) return;
+      showGlassSnack(context, '$e', kind: GlassSnackKind.error);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _changeAvatar() async {
+    if (!_isOwner || _busy) return;
+
+    final picker = ImagePicker();
+    final picked = await picker.pickImage(source: ImageSource.gallery);
+    if (picked == null || !mounted) return;
+
+    // Временная заглушка — в реальности нужно загрузить аватар на сервер
+    showGlassSnack(
+      context,
+      'Смена аватарки будет реализована в следующем обновлении',
+      kind: GlassSnackKind.info,
+    );
+  }
+
   Future<void> _setRole(ChatMember member, String role) async {
     if (!_canManage || _busy) return;
     setState(() {
@@ -3814,17 +3917,6 @@ class _ChatMembersSheetBodyState extends State<_ChatMembersSheetBody> {
     }
   }
 
-  String _roleLabel(String role) {
-    switch (role.trim().toLowerCase()) {
-      case 'owner':
-        return 'Owner';
-      case 'admin':
-        return 'Admin';
-      default:
-        return 'Member';
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -3858,13 +3950,25 @@ class _ChatMembersSheetBodyState extends State<_ChatMembersSheetBody> {
                 ),
               ),
               const SizedBox(height: 12),
-              Text(
-                widget.chatKind == 'channel'
-                    ? 'Участники канала'
-                    : 'Участники группы',
-                style: theme.textTheme.titleLarge?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      widget.chatKind == 'channel'
+                          ? 'Участники канала'
+                          : 'Участники группы',
+                      style: theme.textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  if (_isOwner)
+                    IconButton(
+                      icon: const Icon(Icons.edit_rounded),
+                      onPressed: _busy ? null : _editChatInfo,
+                      tooltip: 'Редактировать',
+                    ),
+                ],
               ),
               const SizedBox(height: 6),
               Text(
@@ -3876,65 +3980,55 @@ class _ChatMembersSheetBodyState extends State<_ChatMembersSheetBody> {
               ),
               const SizedBox(height: 12),
               if (_canManage) ...[
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _memberIdCtrl,
-                        keyboardType: TextInputType.number,
-                        decoration: const InputDecoration(
-                          labelText: 'ID участника',
+                Text(
+                  'Поиск и добавление участников',
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                GlassSurface(
+                  borderRadius: 14,
+                  blurSigma: 8,
+                  borderColor: baseInk.withOpacity(isDark ? 0.14 : 0.08),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 4,
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _memberSearchCtrl,
+                          onChanged: _scheduleMemberSearch,
+                          decoration: InputDecoration(
+                            hintText: 'Поиск пользователей',
+                            border: InputBorder.none,
+                            filled: false,
+                            isDense: true,
+                            suffixIcon: _memberSearchCtrl.text.trim().isEmpty
+                                ? null
+                                : IconButton(
+                                    onPressed: _busy
+                                        ? null
+                                        : () {
+                                            _memberSearchCtrl.clear();
+                                            _memberSearchDebounce?.cancel();
+                                            setState(() {
+                                              _memberSearching = false;
+                                              _memberSearchError = null;
+                                              _memberSearchResults = const [];
+                                            });
+                                          },
+                                    icon: const Icon(Icons.close_rounded),
+                                  ),
+                          ),
+                          style: TextStyle(
+                            color: theme.colorScheme.onSurface,
+                          ),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 10),
-                    DropdownButton<String>(
-                      value: _newMemberRole,
-                      items: const [
-                        DropdownMenuItem(
-                          value: 'member',
-                          child: Text('member'),
-                        ),
-                        DropdownMenuItem(value: 'admin', child: Text('admin')),
-                      ],
-                      onChanged: _busy
-                          ? null
-                          : (v) {
-                              if (v == null) return;
-                              setState(() {
-                                _newMemberRole = v;
-                              });
-                            },
-                    ),
-                    const SizedBox(width: 8),
-                    FilledButton(
-                      onPressed: _busy ? null : _addMember,
-                      child: const Text('Добавить'),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: _memberSearchCtrl,
-                  onChanged: _scheduleMemberSearch,
-                  decoration: InputDecoration(
-                    labelText: 'Поиск пользователя (username / ID)',
-                    suffixIcon: _memberSearchCtrl.text.trim().isEmpty
-                        ? null
-                        : IconButton(
-                            onPressed: _busy
-                                ? null
-                                : () {
-                                    _memberSearchCtrl.clear();
-                                    _memberSearchDebounce?.cancel();
-                                    setState(() {
-                                      _memberSearching = false;
-                                      _memberSearchError = null;
-                                      _memberSearchResults = const [];
-                                    });
-                                  },
-                            icon: const Icon(Icons.close_rounded),
-                          ),
+                    ],
                   ),
                 ),
                 if (_memberSearching)
@@ -4011,6 +4105,15 @@ class _ChatMembersSheetBodyState extends State<_ChatMembersSheetBody> {
                                         ],
                                       ),
                                     ),
+                                    _RoleSelectorDropdown(
+                                      selectedRole: _newMemberRole,
+                                      onRoleSelected: (role) {
+                                        setState(() {
+                                          _newMemberRole = role;
+                                        });
+                                      },
+                                    ),
+                                    const SizedBox(width: 8),
                                     FilledButton(
                                       onPressed: _busy
                                           ? null
@@ -4018,7 +4121,7 @@ class _ChatMembersSheetBodyState extends State<_ChatMembersSheetBody> {
                                               _memberIdCtrl.text = '$uid';
                                               await _addMember();
                                             },
-                                      child: const Text('Add'),
+                                      child: const Text('Добавить'),
                                     ),
                                   ],
                                 ),
@@ -4068,7 +4171,6 @@ class _ChatMembersSheetBodyState extends State<_ChatMembersSheetBody> {
                       _canManage &&
                       member.userId != widget.myUserId &&
                       role != 'owner';
-                  final canRemove = canChangeRole;
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 8),
                     child: GlassSurface(
@@ -4110,32 +4212,11 @@ class _ChatMembersSheetBodyState extends State<_ChatMembersSheetBody> {
                             ),
                           ),
                           if (canChangeRole)
-                            PopupMenuButton<String>(
-                              icon: const Icon(Icons.more_vert_rounded),
-                              onSelected: (value) async {
-                                if (value == 'remove') {
-                                  await _removeMember(member);
-                                  return;
-                                }
-                                await _setRole(member, value);
-                              },
-                              itemBuilder: (_) => [
-                                if (role != 'admin')
-                                  const PopupMenuItem<String>(
-                                    value: 'admin',
-                                    child: Text('Сделать admin'),
-                                  ),
-                                if (role != 'member')
-                                  const PopupMenuItem<String>(
-                                    value: 'member',
-                                    child: Text('Сделать member'),
-                                  ),
-                                if (canRemove)
-                                  const PopupMenuItem<String>(
-                                    value: 'remove',
-                                    child: Text('Удалить из чата'),
-                                  ),
-                              ],
+                            _MemberActionDropdown(
+                              member: member,
+                              onRemove: () async => await _removeMember(member),
+                              onSetRole: (role) async => await _setRole(member, role),
+                              currentRole: role,
                             ),
                         ],
                       ),
@@ -4146,6 +4227,244 @@ class _ChatMembersSheetBodyState extends State<_ChatMembersSheetBody> {
           ),
         );
       },
+    );
+  }
+}
+
+class _RoleSelectorDropdown extends StatefulWidget {
+  final String selectedRole;
+  final ValueChanged<String> onRoleSelected;
+
+  const _RoleSelectorDropdown({
+    required this.selectedRole,
+    required this.onRoleSelected,
+  });
+
+  @override
+  State<_RoleSelectorDropdown> createState() => _RoleSelectorDropdownState();
+}
+
+class _RoleSelectorDropdownState extends State<_RoleSelectorDropdown> {
+  bool _isOpen = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final baseInk = isDark ? Colors.white : Colors.black;
+
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          _isOpen = !_isOpen;
+        });
+      },
+      child: GlassSurface(
+        borderRadius: 10,
+        blurSigma: 8,
+        borderColor: baseInk.withOpacity(isDark ? 0.14 : 0.08),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  widget.selectedRole,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Icon(
+                  _isOpen ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+                  size: 16,
+                ),
+              ],
+            ),
+            if (_isOpen) ...[
+              const SizedBox(height: 6),
+              Divider(
+                height: 1,
+                color: baseInk.withOpacity(isDark ? 0.14 : 0.08),
+              ),
+              const SizedBox(height: 4),
+              InkWell(
+                onTap: () {
+                  widget.onRoleSelected('member');
+                  setState(() {
+                    _isOpen = false;
+                  });
+                },
+                borderRadius: BorderRadius.circular(8),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Text(
+                    'member',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurface.withOpacity(0.8),
+                    ),
+                  ),
+                ),
+              ),
+              InkWell(
+                onTap: () {
+                  widget.onRoleSelected('admin');
+                  setState(() {
+                    _isOpen = false;
+                  });
+                },
+                borderRadius: BorderRadius.circular(8),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Text(
+                    'admin',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurface.withOpacity(0.8),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _MemberActionDropdown extends StatefulWidget {
+  final ChatMember member;
+  final VoidCallback onRemove;
+  final ValueChanged<String> onSetRole;
+  final String currentRole;
+
+  const _MemberActionDropdown({
+    required this.member,
+    required this.onRemove,
+    required this.onSetRole,
+    required this.currentRole,
+  });
+
+  @override
+  State<_MemberActionDropdown> createState() => _MemberActionDropdownState();
+}
+
+class _MemberActionDropdownState extends State<_MemberActionDropdown> {
+  bool _isOpen = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final baseInk = isDark ? Colors.white : Colors.black;
+
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          _isOpen = !_isOpen;
+        });
+      },
+      child: GlassSurface(
+        borderRadius: 10,
+        blurSigma: 8,
+        borderColor: baseInk.withOpacity(isDark ? 0.14 : 0.08),
+        padding: const EdgeInsets.all(8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.more_vert_rounded,
+                  size: 18,
+                  color: theme.colorScheme.onSurface.withOpacity(0.7),
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  'Действия',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Icon(
+                  _isOpen ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+                  size: 16,
+                ),
+              ],
+            ),
+            if (_isOpen) ...[
+              const SizedBox(height: 6),
+              Divider(
+                height: 1,
+                color: baseInk.withOpacity(isDark ? 0.14 : 0.08),
+              ),
+              const SizedBox(height: 4),
+              if (widget.currentRole != 'admin')
+                InkWell(
+                  onTap: () {
+                    widget.onSetRole('admin');
+                    setState(() {
+                      _isOpen = false;
+                    });
+                  },
+                  borderRadius: BorderRadius.circular(8),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Text(
+                      'Сделать admin',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurface.withOpacity(0.8),
+                      ),
+                    ),
+                  ),
+                ),
+              if (widget.currentRole != 'member')
+                InkWell(
+                  onTap: () {
+                    widget.onSetRole('member');
+                    setState(() {
+                      _isOpen = false;
+                    });
+                  },
+                  borderRadius: BorderRadius.circular(8),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Text(
+                      'Сделать member',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurface.withOpacity(0.8),
+                      ),
+                    ),
+                  ),
+                ),
+              InkWell(
+                onTap: () {
+                  widget.onRemove();
+                  setState(() {
+                    _isOpen = false;
+                  });
+                },
+                borderRadius: BorderRadius.circular(8),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Text(
+                    'Удалить из чата',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.error,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 }

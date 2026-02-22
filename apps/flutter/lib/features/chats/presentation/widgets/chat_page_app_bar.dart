@@ -64,11 +64,11 @@ class ChatPageAppBar extends StatelessWidget implements PreferredSizeWidget {
     String roleLabel() {
       switch (role) {
         case 'owner':
-          return 'OWNER';
+          return 'ВЛАДЕЛЕЦ';
         case 'admin':
-          return 'ADMIN';
+          return 'АДМИН';
         default:
-          return 'MEMBER';
+          return 'УЧАСТНИК';
       }
     }
 

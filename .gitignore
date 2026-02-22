@@ -108,3 +108,4 @@ postgres_data/
 apps/flutter/ios/Runner.xcodeproj/project.pbxproj
 apps/flutter/coverage/lcov.info
 backend/sdk-verification
+apps/flutter/pubspec.lock

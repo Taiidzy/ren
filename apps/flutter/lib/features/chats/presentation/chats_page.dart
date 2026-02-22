@@ -127,6 +127,7 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
   int _myUserId = 0;
 
   bool _isForeground = true;
+  int? _currentOpenChatId;
 
   OverlayEntry? _topBanner;
   Timer? _topBannerTimer;
@@ -217,6 +218,7 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
     final chatId = int.tryParse(chat.id) ?? 0;
     if (chatId > 0 && mounted) {
       setState(() {
+        _currentOpenChatId = chatId;
         _chats = _chats
             .map(
               (c) => c.id == chat.id
@@ -244,6 +246,9 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
       context,
     ).push(adaptivePageRoute((_) => ChatPage(chat: chat)));
     if (!mounted) return;
+    setState(() {
+      _currentOpenChatId = null;
+    });
     await _syncChats();
   }
 
@@ -946,6 +951,11 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
           return;
         }
 
+        // Не показываем уведомление если пользователь находится в этом чате
+        if (_currentOpenChatId == chatId) {
+          return;
+        }
+
         final decoded = await repo.decryptIncomingWsMessageFull(message: m);
         final hasAttachments = decoded.attachments.isNotEmpty;
         final chat = _chatIndex[chatId];
@@ -1306,6 +1316,98 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                                 : ListView(
                                     padding: const EdgeInsets.only(bottom: 16),
                                     children: [
+                                      Row(
+                                        children: [
+                                          Expanded(
+                                            child: GlassSurface(
+                                              borderRadius: 12,
+                                              blurSigma: 8,
+                                              borderColor: baseInk.withOpacity(
+                                                isDark ? 0.14 : 0.08,
+                                              ),
+                                              padding: const EdgeInsets.symmetric(
+                                                horizontal: 12,
+                                                vertical: 8,
+                                              ),
+                                              child: InkWell(
+                                                borderRadius: BorderRadius.circular(12),
+                                                onTap: () {
+                                                  GlassOverlays.showGlassBottomSheet(
+                                                    context,
+                                                    builder: (_) =>
+                                                        _CreateGroupChannelSheet(
+                                                          kind: 'group',
+                                                          initialTitle: _query,
+                                                        ),
+                                                  );
+                                                },
+                                                child: Row(
+                                                  mainAxisSize: MainAxisSize.min,
+                                                  children: [
+                                                    Icon(
+                                                      Icons.group_add_rounded,
+                                                      size: 18,
+                                                      color: theme.colorScheme.onSurface,
+                                                    ),
+                                                    const SizedBox(width: 6),
+                                                    Text(
+                                                      'Создать группу',
+                                                      style: theme.textTheme.bodySmall?.copyWith(
+                                                        fontWeight: FontWeight.w600,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Expanded(
+                                            child: GlassSurface(
+                                              borderRadius: 12,
+                                              blurSigma: 8,
+                                              borderColor: baseInk.withOpacity(
+                                                isDark ? 0.14 : 0.08,
+                                              ),
+                                              padding: const EdgeInsets.symmetric(
+                                                horizontal: 12,
+                                                vertical: 8,
+                                              ),
+                                              child: InkWell(
+                                                borderRadius: BorderRadius.circular(12),
+                                                onTap: () {
+                                                  GlassOverlays.showGlassBottomSheet(
+                                                    context,
+                                                    builder: (_) =>
+                                                        _CreateGroupChannelSheet(
+                                                          kind: 'channel',
+                                                          initialTitle: _query,
+                                                        ),
+                                                  );
+                                                },
+                                                child: Row(
+                                                  mainAxisSize: MainAxisSize.min,
+                                                  children: [
+                                                    Icon(
+                                                      Icons.campaign_rounded,
+                                                      size: 18,
+                                                      color: theme.colorScheme.onSurface,
+                                                    ),
+                                                    const SizedBox(width: 6),
+                                                    Text(
+                                                      'Создать канал',
+                                                      style: theme.textTheme.bodySmall?.copyWith(
+                                                        fontWeight: FontWeight.w600,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 14),
                                       Text(
                                         'Чаты',
                                         style: theme.textTheme.titleSmall
@@ -1756,6 +1858,471 @@ class _PressableState extends State<_Pressable> {
           child: widget.child,
         ),
       ),
+    );
+  }
+}
+
+class _CreateGroupChannelSheet extends StatefulWidget {
+  final String kind;
+  final String initialTitle;
+
+  const _CreateGroupChannelSheet({
+    required this.kind,
+    this.initialTitle = '',
+  });
+
+  @override
+  State<_CreateGroupChannelSheet> createState() =>
+      _CreateGroupChannelSheetState();
+}
+
+class _CreateGroupChannelSheetState
+    extends State<_CreateGroupChannelSheet> {
+  final _titleCtrl = TextEditingController();
+  final _searchCtrl = TextEditingController();
+  final Set<int> _selectedUserIds = <int>{};
+  final Map<int, ChatUser> _selectedUsers = <int, ChatUser>{};
+  bool _isSearching = false;
+  String? _searchError;
+  List<ChatUser> _searchResults = const [];
+  int _searchSeq = 0;
+  Timer? _searchDebounce;
+  bool _isCreating = false;
+
+  ChatsRepository get _repo => context.read<ChatsRepository>();
+
+  @override
+  void initState() {
+    super.initState();
+    _titleCtrl.text = widget.initialTitle;
+  }
+
+  @override
+  void dispose() {
+    _searchDebounce?.cancel();
+    _titleCtrl.dispose();
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  void _runSearch(String query) {
+    final q = query.trim();
+    final seq = ++_searchSeq;
+
+    if (q.isEmpty) {
+      setState(() {
+        _isSearching = false;
+        _searchError = null;
+        _searchResults = const [];
+      });
+      return;
+    }
+
+    setState(() {
+      _isSearching = true;
+      _searchError = null;
+    });
+
+    _repo
+        .searchUsers(q)
+        .then((users) {
+          if (!mounted || seq != _searchSeq) return;
+          final existing = _selectedUserIds;
+          final filtered = users
+              .where((u) => !existing.contains(int.tryParse(u.id) ?? 0))
+              .toList(growable: false);
+          setState(() {
+            _isSearching = false;
+            _searchError = null;
+            _searchResults = filtered;
+          });
+        })
+        .catchError((e) {
+          if (!mounted || seq != _searchSeq) return;
+          setState(() {
+            _isSearching = false;
+            _searchError = e.toString();
+            _searchResults = const [];
+          });
+        });
+  }
+
+  void _scheduleSearch(String query) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 250), () {
+      if (!mounted) return;
+      _runSearch(query);
+    });
+  }
+
+  void _toggleUser(ChatUser user) {
+    final userId = int.tryParse(user.id) ?? 0;
+    if (userId <= 0) return;
+
+    setState(() {
+      if (_selectedUserIds.contains(userId)) {
+        _selectedUserIds.remove(userId);
+        _selectedUsers.remove(userId);
+      } else {
+        _selectedUserIds.add(userId);
+        _selectedUsers[userId] = user;
+      }
+    });
+  }
+
+  Future<void> _create() async {
+    if (_isCreating) return;
+
+    final title = _titleCtrl.text.trim();
+    if (title.isEmpty) {
+      showGlassSnack(
+        context,
+        'Укажите название',
+        kind: GlassSnackKind.error,
+      );
+      return;
+    }
+
+    final memberIds = _selectedUserIds.toList(growable: false);
+
+    setState(() {
+      _isCreating = true;
+    });
+
+    try {
+      final chat = widget.kind == 'group'
+          ? await _repo.createGroupChat(
+              title: title,
+              memberUserIds: memberIds,
+            )
+          : await _repo.createChannel(
+              title: title,
+              memberUserIds: memberIds,
+            );
+
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+
+      // Открываем созданный чат
+      final state = context.findAncestorStateOfType<_HomePageState>();
+      if (state != null && state.mounted) {
+        await state._reloadChats();
+        if (state.mounted) {
+          state._openChat(chat);
+        }
+      }
+    } catch (e) {
+      if (!mounted) return;
+      showGlassSnack(context, e.toString(), kind: GlassSnackKind.error);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isCreating = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final baseInk = isDark ? Colors.white : Colors.black;
+
+    return DraggableScrollableSheet(
+      initialChildSize: 0.85,
+      minChildSize: 0.5,
+      maxChildSize: 0.95,
+      builder: (ctx, scrollController) {
+        return GlassSurface(
+          blurSigma: 16,
+          borderRadiusGeometry: const BorderRadius.only(
+            topLeft: Radius.circular(26),
+            topRight: Radius.circular(26),
+          ),
+          borderColor: baseInk.withOpacity(isDark ? 0.22 : 0.12),
+          child: ListView(
+            controller: scrollController,
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 18),
+            children: [
+              Center(
+                child: Container(
+                  width: 44,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.onSurface.withOpacity(0.25),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                widget.kind == 'group'
+                    ? 'Новая группа'
+                    : 'Новый канал',
+                style: theme.textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 16),
+              GlassSurface(
+                borderRadius: 14,
+                blurSigma: 8,
+                borderColor: baseInk.withOpacity(isDark ? 0.14 : 0.08),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
+                child: TextField(
+                  controller: _titleCtrl,
+                  decoration: InputDecoration(
+                    labelText: 'Название',
+                    border: InputBorder.none,
+                    filled: false,
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(
+                      vertical: 8,
+                    ),
+                  ),
+                  style: TextStyle(
+                    color: theme.colorScheme.onSurface,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Участники',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 8),
+              GlassSurface(
+                borderRadius: 14,
+                blurSigma: 8,
+                borderColor: baseInk.withOpacity(isDark ? 0.14 : 0.08),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 4,
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _searchCtrl,
+                        onChanged: _scheduleSearch,
+                        decoration: InputDecoration(
+                          hintText: 'Поиск пользователей',
+                          border: InputBorder.none,
+                          filled: false,
+                          isDense: true,
+                          suffixIcon: _searchCtrl.text.trim().isEmpty
+                              ? null
+                              : IconButton(
+                                  icon: const Icon(Icons.close_rounded),
+                                  onPressed: () {
+                                    _searchCtrl.clear();
+                                    _searchDebounce?.cancel();
+                                    setState(() {
+                                      _isSearching = false;
+                                      _searchError = null;
+                                      _searchResults = const [];
+                                    });
+                                  },
+                                ),
+                        ),
+                        style: TextStyle(
+                          color: theme.colorScheme.onSurface,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (_isSearching)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 8),
+                  child: LinearProgressIndicator(minHeight: 2),
+                )
+              else if (_searchError != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    _searchError!.replaceFirst('Exception: ', ''),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.error,
+                    ),
+                  ),
+                )
+              else if (_searchResults.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Column(
+                    children: _searchResults
+                        .map((user) {
+                          final uid = int.tryParse(user.id) ?? 0;
+                          if (uid <= 0) return const SizedBox.shrink();
+                          final isSelected = _selectedUserIds.contains(uid);
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: GlassSurface(
+                              borderRadius: 14,
+                              blurSigma: 8,
+                              borderColor: isSelected
+                                  ? theme.colorScheme.primary.withOpacity(0.5)
+                                  : baseInk.withOpacity(isDark ? 0.14 : 0.08),
+                              padding: const EdgeInsets.fromLTRB(
+                                10,
+                                8,
+                                10,
+                                8,
+                              ),
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(14),
+                                onTap: () => _toggleUser(user),
+                                child: Row(
+                                  children: [
+                                    RenAvatar(
+                                      url: user.avatarUrl,
+                                      name: user.name,
+                                      isOnline: false,
+                                      size: 34,
+                                      onlineDotSize: 0,
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            user.name,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: theme.textTheme.titleSmall
+                                                ?.copyWith(
+                                                  fontWeight: FontWeight.w700,
+                                                ),
+                                          ),
+                                          Text(
+                                            'ID: $uid',
+                                            style: theme.textTheme.bodySmall
+                                                ?.copyWith(
+                                                  color: theme
+                                                      .colorScheme
+                                                      .onSurface
+                                                      .withOpacity(0.7),
+                                                ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    if (isSelected)
+                                      CircleAvatar(
+                                        radius: 12,
+                                        backgroundColor:
+                                            theme.colorScheme.primary,
+                                        child: const Icon(
+                                          Icons.check_rounded,
+                                          size: 16,
+                                          color: Colors.white,
+                                        ),
+                                      )
+                                    else
+                                      CircleAvatar(
+                                        radius: 12,
+                                        backgroundColor:
+                                            theme.colorScheme.onSurface
+                                                .withOpacity(0.12),
+                                        child: const Icon(
+                                          Icons.add_rounded,
+                                          size: 16,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          );
+                        })
+                        .toList(growable: false),
+                  ),
+                ),
+              if (_selectedUsers.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                Text(
+                  'Выбрано: ${_selectedUsers.length}',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurface.withOpacity(0.7),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: _selectedUsers.values.map((user) {
+                    return GlassSurface(
+                      borderRadius: 20,
+                      blurSigma: 8,
+                      borderColor: theme.colorScheme.primary.withOpacity(0.3),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 6,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          RenAvatar(
+                            url: user.avatarUrl,
+                            name: user.name,
+                            isOnline: false,
+                            size: 24,
+                            onlineDotSize: 0,
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            user.name,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          InkWell(
+                            onTap: () => _toggleUser(user),
+                            borderRadius: BorderRadius.circular(12),
+                            child: const Padding(
+                              padding: EdgeInsets.all(2),
+                              child: Icon(
+                                Icons.close_rounded,
+                                size: 14,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ],
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: _isCreating ? null : _create,
+                  child: _isCreating
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('Создать'),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }
