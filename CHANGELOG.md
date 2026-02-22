@@ -278,3 +278,58 @@
 - Практический эффект:
   - согласованные права в UI и backend;
   - корректное отображение owner-only операций в списке чатов.
+
+---
+
+### Flutter App (`apps/flutter`) — Layout & Adaptive pass (HIG-aligned, style-preserving)
+
+#### Full UI proportion/adaptive audit and fixes
+- Проведен полный layout-pass с минимально инвазивными правками:
+  - выровнены пропорции и отступы между экранами;
+  - убраны ключевые fixed-size ограничения в критичных контейнерах;
+  - добавлены adaptive размеры/паддинги для compact экранов;
+  - снижены риски overflow при узкой ширине и увеличенном text scale;
+  - улучшены touch-target зоны без изменения визуального языка.
+
+#### Key improvements by area
+- Auth:
+  - адаптивные размеры hero/logo/card spacing и внутренних отступов;
+  - выровнена высота loading-состояний с кнопками.
+- Chats:
+  - адаптивные отступы app bar/search/content;
+  - chat tile переведен с fixed height на min height;
+  - стабилизированы узкие action rows и поисковые CTA.
+- Chat page:
+  - адаптированы размеры video-recording overlay и control capsule;
+  - ограничена высота forward bottom sheet через безопасный clamp.
+- Profile:
+  - добавлен scroll-safe layout для profile menu;
+  - адаптированы avatar/paddings/spacing в profile edit;
+  - адаптированы header-decor размеры в security sheet;
+  - адаптивные отступы и min-height CTA в storage/personalization/notifications.
+- Shared/chat widgets:
+  - attach menu и attachment viewer адаптированы под узкие экраны;
+  - bubble/media widths переведены на constraints-based поведение;
+  - context menu и confirm dialog получили adaptive width/inset + min-height actions.
+
+#### Files
+- `apps/flutter/lib/features/auth/presentation/auth_page.dart`
+- `apps/flutter/lib/features/auth/presentation/components/signin.dart`
+- `apps/flutter/lib/features/auth/presentation/components/recovery.dart`
+- `apps/flutter/lib/features/chats/presentation/chats_page.dart`
+- `apps/flutter/lib/features/chats/presentation/chat_page.dart`
+- `apps/flutter/lib/features/chats/presentation/widgets/chat_input_bar.dart`
+- `apps/flutter/lib/features/chats/presentation/widgets/chat_attach_menu.dart`
+- `apps/flutter/lib/features/chats/presentation/widgets/chat_attachment_viewer_sheet.dart`
+- `apps/flutter/lib/features/chats/presentation/widgets/chat_message_bubble.dart`
+- `apps/flutter/lib/features/chats/presentation/widgets/square_video_bubble.dart`
+- `apps/flutter/lib/features/chats/presentation/widgets/voice_message_bubble.dart`
+- `apps/flutter/lib/features/profile/presentation/profile_menu_page.dart`
+- `apps/flutter/lib/features/profile/presentation/widgets/profile_edit_sheet.dart`
+- `apps/flutter/lib/features/profile/presentation/widgets/security_sheet.dart`
+- `apps/flutter/lib/features/profile/presentation/widgets/storage_sheet.dart`
+- `apps/flutter/lib/features/profile/presentation/widgets/personalization_sheet.dart`
+- `apps/flutter/lib/features/profile/presentation/widgets/notifications_sheet.dart`
+- `apps/flutter/lib/shared/widgets/context_menu.dart`
+- `apps/flutter/lib/shared/widgets/glass_confirm_dialog.dart`
+- `apps/flutter/lib/shared/widgets/matte_toggle.dart`

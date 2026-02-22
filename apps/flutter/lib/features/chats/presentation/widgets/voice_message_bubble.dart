@@ -150,6 +150,8 @@ class _VoiceMessageBubbleState extends State<VoiceMessageBubble> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final baseInk = widget.isDark ? Colors.white : Colors.black;
+    final mediaW = MediaQuery.sizeOf(context).width;
+    final bubbleMaxWidth = (mediaW * 0.68).clamp(220.0, 280.0).toDouble();
     final isMeColor = widget.isMe
         ? (widget.isDark
               ? theme.colorScheme.primary.withOpacity(0.35)
@@ -166,7 +168,7 @@ class _VoiceMessageBubbleState extends State<VoiceMessageBubble> {
       color: isMeColor,
       borderColor: baseInk.withOpacity(widget.isDark ? 0.20 : 0.10),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 260),
+        constraints: BoxConstraints(maxWidth: bubbleMaxWidth),
         child: Padding(
           padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
           child: Column(

@@ -110,6 +110,9 @@ class _SheetBody extends StatelessWidget {
       minChildSize: 0.45,
       maxChildSize: 0.92,
       builder: (context, scrollController) {
+        final sheetWidth = MediaQuery.sizeOf(context).width;
+        final contentHorizontal = sheetWidth < 360 ? 12.0 : 16.0;
+        final wallpaperTileSize = sheetWidth < 360 ? 80.0 : 92.0;
         return GlassSurface(
           blurSigma: 16,
           borderRadiusGeometry: const BorderRadius.only(
@@ -119,7 +122,12 @@ class _SheetBody extends StatelessWidget {
           borderColor: baseInk.withOpacity(isDark ? 0.22 : 0.12),
           child: ListView(
             controller: scrollController,
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 22),
+            padding: EdgeInsets.fromLTRB(
+              contentHorizontal,
+              10,
+              contentHorizontal,
+              22,
+            ),
             children: [
               Center(
                 child: Container(
@@ -207,7 +215,7 @@ class _SheetBody extends StatelessWidget {
               _SectionTitle(title: 'Фон'),
               const SizedBox(height: 10),
               SizedBox(
-                height: 92,
+                height: wallpaperTileSize,
                 child: ListView.separated(
                   scrollDirection: Axis.horizontal,
                   itemCount:
@@ -221,6 +229,7 @@ class _SheetBody extends StatelessWidget {
                       return _WallpaperTile(
                         label: 'Градиент',
                         isSelected: isSelected,
+                        tileSize: wallpaperTileSize,
                         onTap: () => settings.setBackgroundImage(null),
                         child: Container(
                           decoration: BoxDecoration(
@@ -240,6 +249,7 @@ class _SheetBody extends StatelessWidget {
                       return _WallpaperTile(
                         label: 'Галерея',
                         isSelected: isSelected,
+                        tileSize: wallpaperTileSize,
                         onTap: () async {
                           final picker = ImagePicker();
                           final file = await picker.pickImage(
@@ -281,6 +291,7 @@ class _SheetBody extends StatelessWidget {
                       return _WallpaperTile(
                         label: ' ',
                         isSelected: isSelected,
+                        tileSize: wallpaperTileSize,
                         onTap: () => settings.setBackgroundFromFilePath(path),
                         child: Image.file(File(path), fit: BoxFit.cover),
                       );
@@ -295,6 +306,7 @@ class _SheetBody extends StatelessWidget {
                     return _WallpaperTile(
                       label: ' ',
                       isSelected: isSelected,
+                      tileSize: wallpaperTileSize,
                       onTap: () => settings.setBackgroundFromUrl(url),
                       child: Image.network(url, fit: BoxFit.cover),
                     );
@@ -312,8 +324,8 @@ class _SheetBody extends StatelessWidget {
                 labelFormatter: (v) => v.toStringAsFixed(0),
               ),
               const SizedBox(height: 18),
-              SizedBox(
-                height: 52,
+              ConstrainedBox(
+                constraints: const BoxConstraints(minHeight: 52),
                 child: ElevatedButton(
                   onPressed: () => Navigator.of(context).maybePop(),
                   style: ElevatedButton.styleFrom(
@@ -357,12 +369,14 @@ class _WallpaperTile extends StatelessWidget {
   final String label;
   final VoidCallback onTap;
   final bool isSelected;
+  final double tileSize;
 
   const _WallpaperTile({
     required this.child,
     required this.label,
     required this.onTap,
     required this.isSelected,
+    required this.tileSize,
   });
 
   @override
@@ -374,8 +388,8 @@ class _WallpaperTile extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        width: 92,
-        height: 92,
+        width: tileSize,
+        height: tileSize,
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(18),
           border: Border.all(

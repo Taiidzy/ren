@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:hugeicons/hugeicons.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter/material.dart';
@@ -163,23 +165,21 @@ class _SignInFormState extends State<SignInForm> with TickerProviderStateMixin {
   }
 
   Widget _buildLoadingAnimation(bool isDark) {
-    // Контейнер-обертка, чтобы анимация занимала место кнопки
     return SizedBox(
-      height: 50, // Высота, как у вашей кнопки
+      height: 56,
       width: double.infinity,
       child: AnimatedBuilder(
         animation: _animation,
         builder: (context, child) {
-          // Чтобы анимация шла по всей ширине, рассчитаем максимальное смещение
-          // Ширина контейнера (предположим 200) - ширина полоски (60) = 140
-          // Лучше использовать LayoutBuilder для точных размеров, но для примера сойдет
           return LayoutBuilder(
             builder: (context, constraints) {
-              final double travelDistance = constraints.maxWidth - 60;
+              final double travelDistance = math.max(
+                0,
+                constraints.maxWidth - 60,
+              );
               return Stack(
                 alignment: Alignment.centerLeft,
                 children: [
-                  // Ваш код анимации, адаптированный
                   Positioned(
                     left: _animation.value * travelDistance,
                     child: Container(

@@ -768,7 +768,9 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                   kind: c.kind,
                   user: ChatUser(
                     id: c.user.id,
-                    name: nickname.isNotEmpty ? nickname : (username.isNotEmpty ? username : c.user.name),
+                    name: nickname.isNotEmpty
+                        ? nickname
+                        : (username.isNotEmpty ? username : c.user.name),
                     nickname: nickname.isNotEmpty ? nickname : null,
                     avatarUrl: avatarUrl.isNotEmpty
                         ? avatarUrl
@@ -871,6 +873,11 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final theme = Theme.of(context);
     final baseInk = isDark ? Colors.white : Colors.black;
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final appBarSearchHorizontalInset = (screenWidth * 0.16)
+        .clamp(16.0, 96.0)
+        .toDouble();
+    final pageHorizontalPadding = screenWidth < 360 ? 12.0 : 16.0;
     return AppBackground(
       // Опционально: передайте картинку, чтобы она была задним фоном
       // backgroundImage: AssetImage('assets/wallpapers/my_bg.jpg'),
@@ -886,43 +893,43 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
           title: ValueListenableBuilder<bool>(
             valueListenable: context.read<ChatsRepository>().chatsSyncing,
             builder: (context, isSyncing, _) {
-              return SizedBox(
-                width: 124,
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    Text(
-                      'Чаты',
-                      style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                        color: theme.colorScheme.onSurface,
-                      ),
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Чаты',
+                    style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                      color: theme.colorScheme.onSurface,
                     ),
-                    Positioned(
-                      right: 0,
-                      child: AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 180),
-                        child: isSyncing
-                            ? SizedBox(
-                                key: const ValueKey('syncing'),
-                                width: 14,
-                                height: 14,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: theme.colorScheme.onSurface
-                                      .withOpacity(0.8),
+                  ),
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 180),
+                      child: isSyncing
+                          ? SizedBox(
+                              key: const ValueKey('syncing'),
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: theme.colorScheme.onSurface.withOpacity(
+                                  0.8,
                                 ),
-                              )
-                            : const SizedBox(
-                                key: ValueKey('idle'),
-                                width: 14,
-                                height: 14,
                               ),
-                      ),
+                            )
+                          : const SizedBox(
+                              key: ValueKey('idle'),
+                              width: 14,
+                              height: 14,
+                            ),
                     ),
-                  ],
-                ),
+                  ),
+                ],
               );
             },
           ),
@@ -947,7 +954,12 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
           bottom: PreferredSize(
             preferredSize: const Size.fromHeight(36),
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(64, 0, 64, 4),
+              padding: EdgeInsets.fromLTRB(
+                appBarSearchHorizontalInset,
+                0,
+                appBarSearchHorizontalInset,
+                4,
+              ),
               child: GlassSurface(
                 blurSigma: 12,
                 borderColor: baseInk.withOpacity(0),
@@ -1060,7 +1072,12 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
               final favorites = favoriteChats.map((c) => c.user).toList();
 
               return Padding(
-                padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+                padding: EdgeInsets.fromLTRB(
+                  pageHorizontalPadding,
+                  14,
+                  pageHorizontalPadding,
+                  0,
+                ),
                 child: Column(
                   children: [
                     favoriteChats.isEmpty
@@ -1213,15 +1230,21 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                                                           .onSurface,
                                                     ),
                                                     const SizedBox(width: 6),
-                                                    Text(
-                                                      'Создать группу',
-                                                      style: theme
-                                                          .textTheme
-                                                          .bodySmall
-                                                          ?.copyWith(
-                                                            fontWeight:
-                                                                FontWeight.w600,
-                                                          ),
+                                                    Flexible(
+                                                      child: Text(
+                                                        'Создать группу',
+                                                        maxLines: 1,
+                                                        overflow: TextOverflow
+                                                            .ellipsis,
+                                                        style: theme
+                                                            .textTheme
+                                                            .bodySmall
+                                                            ?.copyWith(
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w600,
+                                                            ),
+                                                      ),
                                                     ),
                                                   ],
                                                 ),
@@ -1266,15 +1289,21 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                                                           .onSurface,
                                                     ),
                                                     const SizedBox(width: 6),
-                                                    Text(
-                                                      'Создать канал',
-                                                      style: theme
-                                                          .textTheme
-                                                          .bodySmall
-                                                          ?.copyWith(
-                                                            fontWeight:
-                                                                FontWeight.w600,
-                                                          ),
+                                                    Flexible(
+                                                      child: Text(
+                                                        'Создать канал',
+                                                        maxLines: 1,
+                                                        overflow: TextOverflow
+                                                            .ellipsis,
+                                                        style: theme
+                                                            .textTheme
+                                                            .bodySmall
+                                                            ?.copyWith(
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w600,
+                                                            ),
+                                                      ),
                                                     ),
                                                   ],
                                                 ),
@@ -1554,127 +1583,133 @@ class _ChatTile extends StatelessWidget {
     return _Pressable(
       onTap: onTap,
       onLongPressStart: (d) => onLongPressAt(d.globalPosition),
-      child: GlassSurface(
-        borderRadius: 18,
-        blurSigma: 14,
-        height: 72,
-        padding: const EdgeInsets.symmetric(horizontal: 14),
-        borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.12),
-        child: Row(
-          children: [
-            RenAvatar(
-              url: chat.user.avatarUrl,
-              name: chat.user.name,
-              isOnline: chat.user.isOnline,
-              size: 44,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    chat.user.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: theme.colorScheme.onSurface,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 72),
+        child: GlassSurface(
+          borderRadius: 18,
+          blurSigma: 14,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+          borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.12),
+          child: Row(
+            children: [
+              RenAvatar(
+                url: chat.user.avatarUrl,
+                name: chat.user.name,
+                isOnline: chat.user.isOnline,
+                size: 44,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      chat.user.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: theme.colorScheme.onSurface,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 2),
-                  Row(
-                    children: [
-                      if (chat.lastMessageIsMine || chat.lastMessageIsPending)
-                        Padding(
-                          padding: const EdgeInsets.only(right: 4),
-                          child: Icon(
-                            chat.lastMessageIsPending
-                                ? Icons.schedule_rounded
-                                : (chat.lastMessageIsRead ||
-                                          chat.lastMessageIsDelivered
-                                      ? Icons.done_all_rounded
-                                      : Icons.done_rounded),
-                            size: 13,
-                            color: chat.lastMessageIsPending
-                                ? theme.colorScheme.onSurface.withOpacity(0.55)
-                                : (chat.lastMessageIsRead
-                                      ? theme.colorScheme.primary.withOpacity(
-                                          0.92,
-                                        )
-                                      : (chat.lastMessageIsDelivered
-                                            ? theme.colorScheme.onSurface
-                                                  .withOpacity(0.65)
-                                            : theme.colorScheme.onSurface
-                                                  .withOpacity(0.55))),
+                    const SizedBox(height: 2),
+                    Row(
+                      children: [
+                        if (chat.lastMessageIsMine || chat.lastMessageIsPending)
+                          Padding(
+                            padding: const EdgeInsets.only(right: 4),
+                            child: Icon(
+                              chat.lastMessageIsPending
+                                  ? Icons.schedule_rounded
+                                  : (chat.lastMessageIsRead ||
+                                            chat.lastMessageIsDelivered
+                                        ? Icons.done_all_rounded
+                                        : Icons.done_rounded),
+                              size: 13,
+                              color: chat.lastMessageIsPending
+                                  ? theme.colorScheme.onSurface.withOpacity(
+                                      0.55,
+                                    )
+                                  : (chat.lastMessageIsRead
+                                        ? theme.colorScheme.primary.withOpacity(
+                                            0.92,
+                                          )
+                                        : (chat.lastMessageIsDelivered
+                                              ? theme.colorScheme.onSurface
+                                                    .withOpacity(0.65)
+                                              : theme.colorScheme.onSurface
+                                                    .withOpacity(0.55))),
+                            ),
                           ),
-                        ),
-                      Expanded(
-                        child: Text(
-                          chat.lastMessage,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: theme.colorScheme.onSurface.withOpacity(
-                              0.70,
+                        Expanded(
+                          child: Text(
+                            chat.lastMessage,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: theme.colorScheme.onSurface.withOpacity(
+                                0.70,
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    _formatTime(chat.lastMessageAt),
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: theme.colorScheme.onSurface.withOpacity(0.60),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 180),
+                    child: unreadCount > 0
+                        ? Container(
+                            key: ValueKey<int>(unreadCount),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 7,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.primary.withOpacity(
+                                0.92,
+                              ),
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            constraints: const BoxConstraints(minWidth: 22),
+                            alignment: Alignment.center,
+                            child: Text(
+                              unreadCount > 99 ? '99+' : '$unreadCount',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w800,
+                                color: theme.colorScheme.onPrimary,
+                              ),
+                            ),
+                          )
+                        : const SizedBox(
+                            key: ValueKey('no_unread'),
+                            width: 22,
+                            height: 16,
+                          ),
                   ),
                 ],
               ),
-            ),
-            const SizedBox(width: 10),
-            Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(
-                  _formatTime(chat.lastMessageAt),
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: theme.colorScheme.onSurface.withOpacity(0.60),
-                  ),
-                ),
-                const SizedBox(height: 6),
-                AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 180),
-                  child: unreadCount > 0
-                      ? Container(
-                          key: ValueKey<int>(unreadCount),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 7,
-                            vertical: 2,
-                          ),
-                          decoration: BoxDecoration(
-                            color: theme.colorScheme.primary.withOpacity(0.92),
-                            borderRadius: BorderRadius.circular(999),
-                          ),
-                          constraints: const BoxConstraints(minWidth: 22),
-                          alignment: Alignment.center,
-                          child: Text(
-                            unreadCount > 99 ? '99+' : '$unreadCount',
-                            style: TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w800,
-                              color: theme.colorScheme.onPrimary,
-                            ),
-                          ),
-                        )
-                      : const SizedBox(
-                          key: ValueKey('no_unread'),
-                          width: 22,
-                          height: 16,
-                        ),
-                ),
-              ],
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

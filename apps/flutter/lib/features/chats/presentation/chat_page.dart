@@ -2620,6 +2620,20 @@ class _ChatPageState extends State<ChatPage>
                         inputHeight +
                         verticalPadding +
                         12;
+                    final overlayBaseSize = math.min(
+                      media.size.width,
+                      media.size.height,
+                    );
+                    final videoOverlaySize = overlayBaseSize
+                        .clamp(220.0, 320.0)
+                        .toDouble();
+                    final videoOverlayRadius = (videoOverlaySize * 0.10)
+                        .clamp(24.0, 32.0)
+                        .toDouble();
+                    final videoCapsuleWidth = math.min(
+                      320.0,
+                      math.max(220.0, media.size.width - 24),
+                    );
 
                     final replyText = _replyTo == null
                         ? ''
@@ -2699,10 +2713,12 @@ class _ChatPageState extends State<ChatPage>
                                               scale: scale,
                                               child: ClipRRect(
                                                 borderRadius:
-                                                    BorderRadius.circular(32),
+                                                    BorderRadius.circular(
+                                                      videoOverlayRadius,
+                                                    ),
                                                 child: Container(
-                                                  width: 320,
-                                                  height: 320,
+                                                  width: videoOverlaySize,
+                                                  height: videoOverlaySize,
                                                   color: theme
                                                       .colorScheme
                                                       .surface
@@ -2720,7 +2736,7 @@ class _ChatPageState extends State<ChatPage>
                                                           child: ClipRRect(
                                                             borderRadius:
                                                                 BorderRadius.circular(
-                                                                  32,
+                                                                  videoOverlayRadius,
                                                                 ),
                                                             child: FittedBox(
                                                               fit: BoxFit.cover,
@@ -2730,13 +2746,13 @@ class _ChatPageState extends State<ChatPage>
                                                                         .value
                                                                         .previewSize
                                                                         ?.height ??
-                                                                    320,
+                                                                    videoOverlaySize,
                                                                 height:
                                                                     _videoCameraController!
                                                                         .value
                                                                         .previewSize
                                                                         ?.width ??
-                                                                    320,
+                                                                    videoOverlaySize,
                                                                 child: CameraPreview(
                                                                   _videoCameraController!,
                                                                 ),
@@ -2749,7 +2765,13 @@ class _ChatPageState extends State<ChatPage>
                                                           child: HugeIcon(
                                                             icon: HugeIcons
                                                                 .strokeRoundedVideo01,
-                                                            size: 92,
+                                                            size:
+                                                                (videoOverlaySize *
+                                                                        0.29)
+                                                                    .clamp(
+                                                                      68.0,
+                                                                      92.0,
+                                                                    ),
                                                             color: theme
                                                                 .colorScheme
                                                                 .onSurface
@@ -2790,7 +2812,7 @@ class _ChatPageState extends State<ChatPage>
                                                       10,
                                                     ),
                                                 child: SizedBox(
-                                                  width: 320,
+                                                  width: videoCapsuleWidth,
                                                   child: Row(
                                                     children: [
                                                       AnimatedSwitcher(
@@ -3289,11 +3311,14 @@ class _ChatPageState extends State<ChatPage>
     final selectedChat = await GlassOverlays.showGlassBottomSheet<ChatPreview>(
       context,
       builder: (ctx) {
+        final sheetHeight = (MediaQuery.of(ctx).size.height * 0.55)
+            .clamp(280.0, 560.0)
+            .toDouble();
         return GlassSurface(
           child: SafeArea(
             top: false,
             child: SizedBox(
-              height: MediaQuery.of(ctx).size.height * 0.55,
+              height: sheetHeight,
               child: ListView.builder(
                 itemCount: chats.length,
                 itemBuilder: (c, i) {

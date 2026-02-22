@@ -29,6 +29,8 @@ class _NotificationsSheetBody extends StatelessWidget {
       minChildSize: 0.36,
       maxChildSize: 0.86,
       builder: (context, scrollController) {
+        final sheetWidth = MediaQuery.sizeOf(context).width;
+        final contentHorizontal = sheetWidth < 360 ? 12.0 : 16.0;
         return GlassSurface(
           blurSigma: 16,
           borderRadiusGeometry: const BorderRadius.only(
@@ -38,7 +40,12 @@ class _NotificationsSheetBody extends StatelessWidget {
           borderColor: baseInk.withOpacity(isDark ? 0.22 : 0.12),
           child: ListView(
             controller: scrollController,
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 22),
+            padding: EdgeInsets.fromLTRB(
+              contentHorizontal,
+              10,
+              contentHorizontal,
+              22,
+            ),
             children: [
               Center(
                 child: Container(

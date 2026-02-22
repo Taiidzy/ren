@@ -380,98 +380,116 @@ class _ShieldHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact = constraints.maxWidth < 360;
+        final shieldSize = (constraints.maxWidth * 0.33)
+            .clamp(92.0, 112.0)
+            .toDouble();
+        final rotatedSize = (shieldSize * 0.39).clamp(36.0, 44.0).toDouble();
+        final iconSize = (shieldSize * 0.43).clamp(40.0, 48.0).toDouble();
+        final stackHeight = shieldSize + (compact ? 26.0 : 33.0);
 
-    return GlassSurface(
-      borderRadius: 18,
-      blurSigma: 14,
-      borderColor: baseInk.withOpacity(isDark ? 0.2 : 0.12),
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-      child: Column(
-        children: [
-          SizedBox(
-            height: 145,
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                Positioned(
-                  bottom: 8,
-                  child: Transform.rotate(
-                    angle: math.pi / 4,
-                    child: GlassSurface(
-                      borderRadius: 10,
-                      blurSigma: 12,
-                      width: 44,
-                      height: 44,
-                      borderColor: baseInk.withOpacity(isDark ? 0.22 : 0.12),
-                      child: const SizedBox.shrink(),
-                    ),
-                  ),
-                ),
-                Positioned(
-                  top: 6,
-                  child: GlassSurface(
-                    borderRadius: 24,
-                    blurSigma: 14,
-                    width: 112,
-                    height: 112,
-                    borderColor: baseInk.withOpacity(isDark ? 0.24 : 0.14),
-                    child: Center(
-                      child: HugeIcon(
-                        icon: HugeIcons.strokeRoundedShield01,
-                        color: theme.colorScheme.onSurface.withOpacity(0.94),
-                        size: 48,
+        return GlassSurface(
+          borderRadius: 18,
+          blurSigma: 14,
+          borderColor: baseInk.withOpacity(isDark ? 0.2 : 0.12),
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+          child: Column(
+            children: [
+              SizedBox(
+                height: stackHeight,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    Positioned(
+                      bottom: compact ? 6 : 8,
+                      child: Transform.rotate(
+                        angle: math.pi / 4,
+                        child: GlassSurface(
+                          borderRadius: 10,
+                          blurSigma: 12,
+                          width: rotatedSize,
+                          height: rotatedSize,
+                          borderColor: baseInk.withOpacity(
+                            isDark ? 0.22 : 0.12,
+                          ),
+                          child: const SizedBox.shrink(),
+                        ),
                       ),
                     ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Text(
-            'Щит аккаунта',
-            style: theme.textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.w800,
-              color: theme.colorScheme.onSurface,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Управляй активными входами и закрывай лишние устройства',
-            textAlign: TextAlign.center,
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.colorScheme.onSurface.withOpacity(0.74),
-            ),
-          ),
-          const SizedBox(height: 12),
-          GlassSurface(
-            borderRadius: 14,
-            blurSigma: 12,
-            width: double.infinity,
-            borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.12),
-            onTap: onTap,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            child: Row(
-              children: [
-                HugeIcon(
-                  icon: HugeIcons.strokeRoundedShieldKey,
-                  color: theme.colorScheme.onSurface.withOpacity(0.9),
-                  size: 20,
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    'Выйти из всех других устройств',
-                    style: theme.textTheme.titleSmall?.copyWith(
-                      color: theme.colorScheme.onSurface,
-                      fontWeight: FontWeight.w700,
+                    Positioned(
+                      top: compact ? 2 : 6,
+                      child: GlassSurface(
+                        borderRadius: shieldSize * 0.21,
+                        blurSigma: 14,
+                        width: shieldSize,
+                        height: shieldSize,
+                        borderColor: baseInk.withOpacity(isDark ? 0.24 : 0.14),
+                        child: Center(
+                          child: HugeIcon(
+                            icon: HugeIcons.strokeRoundedShield01,
+                            color: theme.colorScheme.onSurface.withOpacity(
+                              0.94,
+                            ),
+                            size: iconSize,
+                          ),
+                        ),
+                      ),
                     ),
-                  ),
+                  ],
                 ),
-              ],
-            ),
+              ),
+              Text(
+                'Щит аккаунта',
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w800,
+                  color: theme.colorScheme.onSurface,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Управляй активными входами и закрывай лишние устройства',
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurface.withOpacity(0.74),
+                ),
+              ),
+              const SizedBox(height: 12),
+              GlassSurface(
+                borderRadius: 14,
+                blurSigma: 12,
+                width: double.infinity,
+                borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.12),
+                onTap: onTap,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
+                child: Row(
+                  children: [
+                    HugeIcon(
+                      icon: HugeIcons.strokeRoundedShieldKey,
+                      color: theme.colorScheme.onSurface.withOpacity(0.9),
+                      size: 20,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Выйти из всех других устройств',
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          color: theme.colorScheme.onSurface,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 }

@@ -16,11 +16,17 @@ Future<void> showChatAttachMenu(
   await GlassOverlays.showGlassBottomSheet<void>(
     context,
     builder: (ctx) {
+      final compact = MediaQuery.sizeOf(ctx).width < 360;
+      final horizontalPadding = compact ? 12.0 : 16.0;
+      final optionSpacing = compact ? 8.0 : 12.0;
       return GlassSurface(
         child: Padding(
           padding: const EdgeInsets.all(12),
           child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
+            padding: EdgeInsets.symmetric(
+              vertical: 16,
+              horizontal: horizontalPadding,
+            ),
             decoration: BoxDecoration(
               color: Colors.transparent,
               borderRadius: BorderRadius.circular(16),
@@ -57,47 +63,58 @@ Future<void> showChatAttachMenu(
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
-                    ChatAttachOption(
-                      icon: HugeIcon(
-                        icon: HugeIcons.strokeRoundedAlbum01,
-                        color: theme.colorScheme.primary,
-                        size: 28,
+                    Expanded(
+                      child: ChatAttachOption(
+                        compact: compact,
+                        icon: HugeIcon(
+                          icon: HugeIcons.strokeRoundedAlbum01,
+                          color: theme.colorScheme.primary,
+                          size: compact ? 24 : 28,
+                        ),
+                        label: 'Фото',
+                        onTap: () async {
+                          Navigator.of(ctx).pop();
+                          HapticFeedback.selectionClick();
+                          if (onPickPhotos != null) await onPickPhotos();
+                        },
                       ),
-                      label: 'Фото',
-                      onTap: () async {
-                        Navigator.of(ctx).pop();
-                        HapticFeedback.selectionClick();
-                        if (onPickPhotos != null) await onPickPhotos();
-                      },
                     ),
+                    SizedBox(width: optionSpacing),
 
-                    ChatAttachOption(
-                      icon: HugeIcon(
-                        icon: HugeIcons.strokeRoundedFileEmpty02,
-                        color: theme.colorScheme.primary,
-                        size: 28,
+                    Expanded(
+                      child: ChatAttachOption(
+                        compact: compact,
+                        icon: HugeIcon(
+                          icon: HugeIcons.strokeRoundedFileEmpty02,
+                          color: theme.colorScheme.primary,
+                          size: compact ? 24 : 28,
+                        ),
+                        label: 'Файл',
+                        onTap: () async {
+                          Navigator.of(ctx).pop();
+                          HapticFeedback.selectionClick();
+                          if (onPickFiles != null) await onPickFiles();
+                        },
                       ),
-                      label: 'Файл',
-                      onTap: () async {
-                        Navigator.of(ctx).pop();
-                        HapticFeedback.selectionClick();
-                        if (onPickFiles != null) await onPickFiles();
-                      },
                     ),
+                    SizedBox(width: optionSpacing),
 
                     // Example: add a third quick action (camera)
-                    ChatAttachOption(
-                      icon: HugeIcon(
-                        icon: HugeIcons.strokeRoundedCamera01,
-                        color: theme.colorScheme.primary,
-                        size: 28,
+                    Expanded(
+                      child: ChatAttachOption(
+                        compact: compact,
+                        icon: HugeIcon(
+                          icon: HugeIcons.strokeRoundedCamera01,
+                          color: theme.colorScheme.primary,
+                          size: compact ? 24 : 28,
+                        ),
+                        label: 'Камера',
+                        onTap: () async {
+                          Navigator.of(ctx).pop();
+                          HapticFeedback.selectionClick();
+                          if (onTakePhoto != null) await onTakePhoto();
+                        },
                       ),
-                      label: 'Камера',
-                      onTap: () async {
-                        Navigator.of(ctx).pop();
-                        HapticFeedback.selectionClick();
-                        if (onTakePhoto != null) await onTakePhoto();
-                      },
                     ),
                   ],
                 ),
@@ -140,12 +157,14 @@ class ChatAttachOption extends StatelessWidget {
   final HugeIcon icon;
   final String label;
   final VoidCallback onTap;
+  final bool compact;
 
   const ChatAttachOption({
     super.key,
     required this.icon,
     required this.label,
     required this.onTap,
+    this.compact = false,
   });
 
   @override
@@ -161,15 +180,22 @@ class ChatAttachOption extends StatelessWidget {
           borderRadius: BorderRadius.circular(12),
           onTap: onTap,
           child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
-            width: 96,
+            padding: EdgeInsets.symmetric(
+              vertical: compact ? 6 : 8,
+              horizontal: compact ? 4 : 6,
+            ),
+            constraints: BoxConstraints(minHeight: compact ? 88 : 96),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 CircleAvatar(
-                  radius: 28,
+                  radius: compact ? 24 : 28,
                   backgroundColor: theme.colorScheme.primary.withOpacity(0.12),
-                  child: HugeIcon(icon: icon.icon, color: icon.color, size: 28),
+                  child: HugeIcon(
+                    icon: icon.icon,
+                    color: icon.color,
+                    size: compact ? 24 : 28,
+                  ),
                 ),
                 const SizedBox(height: 8),
                 Text(

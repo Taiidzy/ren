@@ -191,13 +191,14 @@ class _SquareVideoBubbleState extends State<SquareVideoBubble> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final baseInk = widget.isDark ? Colors.white : Colors.black;
+    final mediaW = MediaQuery.sizeOf(context).width;
     final isMeColor = widget.isMe
         ? (widget.isDark
               ? theme.colorScheme.primary.withOpacity(0.35)
               : theme.colorScheme.primary.withOpacity(0.22))
         : null;
 
-    const size = 220.0;
+    final size = (mediaW * 0.56).clamp(180.0, 220.0).toDouble();
 
     return GlassSurface(
       borderRadius: 16,
@@ -205,7 +206,7 @@ class _SquareVideoBubbleState extends State<SquareVideoBubble> {
       color: isMeColor,
       borderColor: baseInk.withOpacity(widget.isDark ? 0.20 : 0.10),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: size),
+        constraints: BoxConstraints(maxWidth: size),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.end,
           mainAxisSize: MainAxisSize.min,

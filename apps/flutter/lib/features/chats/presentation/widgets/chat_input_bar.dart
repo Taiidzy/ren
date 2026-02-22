@@ -618,11 +618,14 @@ class _ChatInputBarState extends State<ChatInputBar> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final compact = MediaQuery.sizeOf(context).width < 360;
 
     const double inputHeight = 44;
+    final outerHorizontal = compact ? 10.0 : 14.0;
+    final pendingTileSize = compact ? 56.0 : 64.0;
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+      padding: EdgeInsets.fromLTRB(outerHorizontal, 10, outerHorizontal, 10),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -730,7 +733,7 @@ class _ChatInputBarState extends State<ChatInputBar> {
               Padding(
                 padding: const EdgeInsets.only(bottom: 10),
                 child: SizedBox(
-                  height: 64,
+                  height: pendingTileSize,
                   child: ListView.separated(
                     scrollDirection: Axis.horizontal,
                     itemCount: widget.pending.length,
@@ -746,8 +749,8 @@ class _ChatInputBarState extends State<ChatInputBar> {
                           ClipRRect(
                             borderRadius: BorderRadius.circular(12),
                             child: Container(
-                              width: 64,
-                              height: 64,
+                              width: pendingTileSize,
+                              height: pendingTileSize,
                               color: theme.colorScheme.surface,
                               child: isImg
                                   ? (() {

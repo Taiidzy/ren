@@ -189,6 +189,9 @@ class _StorageSheetBodyState extends State<_StorageSheetBody> {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final baseInk = isDark ? Colors.white : Colors.black;
+    final sheetWidth = MediaQuery.sizeOf(context).width;
+    final horizontalPadding = sheetWidth < 360 ? 12.0 : 16.0;
+    final bottomPadding = sheetWidth < 360 ? 14.0 : 16.0;
 
     final total = _usage.totalBytes;
     final cap = _limitBytes <= 0
@@ -216,7 +219,12 @@ class _StorageSheetBodyState extends State<_StorageSheetBody> {
       child: SafeArea(
         top: false,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+          padding: EdgeInsets.fromLTRB(
+            horizontalPadding,
+            12,
+            horizontalPadding,
+            bottomPadding,
+          ),
           child: _loading
               ? const Center(
                   child: Padding(
@@ -330,26 +338,30 @@ class _StorageSheetBodyState extends State<_StorageSheetBody> {
                                 });
                               },
                       ),
-                      GlassSurface(
-                        borderRadius: 12,
-                        blurSigma: 10,
-                        height: 42,
-                        onTap: (_savingLimit || _clearing) ? null : _saveLimit,
-                        child: Center(
-                          child: _savingLimit
-                              ? const SizedBox(
-                                  width: 16,
-                                  height: 16,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(minHeight: 42),
+                        child: GlassSurface(
+                          borderRadius: 12,
+                          blurSigma: 10,
+                          onTap: (_savingLimit || _clearing)
+                              ? null
+                              : _saveLimit,
+                          child: Center(
+                            child: _savingLimit
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : Text(
+                                    'Применить лимит',
+                                    style: theme.textTheme.titleSmall?.copyWith(
+                                      fontWeight: FontWeight.w700,
+                                    ),
                                   ),
-                                )
-                              : Text(
-                                  'Применить лимит',
-                                  style: theme.textTheme.titleSmall?.copyWith(
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
+                          ),
                         ),
                       ),
                       const SizedBox(height: 10),
@@ -390,29 +402,31 @@ class _StorageSheetBodyState extends State<_StorageSheetBody> {
                               },
                       ),
                       const SizedBox(height: 8),
-                      GlassSurface(
-                        borderRadius: 14,
-                        blurSigma: 12,
-                        height: 46,
-                        color: const Color(0xFF991B1B).withOpacity(0.55),
-                        onTap: _clearing ? null : _clearSelected,
-                        child: Center(
-                          child: _clearing
-                              ? const SizedBox(
-                                  width: 18,
-                                  height: 18,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    color: Colors.white,
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(minHeight: 46),
+                        child: GlassSurface(
+                          borderRadius: 14,
+                          blurSigma: 12,
+                          color: const Color(0xFF991B1B).withOpacity(0.55),
+                          onTap: _clearing ? null : _clearSelected,
+                          child: Center(
+                            child: _clearing
+                                ? const SizedBox(
+                                    width: 18,
+                                    height: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white,
+                                    ),
+                                  )
+                                : Text(
+                                    'Очистить выбранное',
+                                    style: theme.textTheme.titleSmall?.copyWith(
+                                      fontWeight: FontWeight.w700,
+                                      color: theme.colorScheme.onSurface,
+                                    ),
                                   ),
-                                )
-                              : Text(
-                                  'Очистить выбранное',
-                                  style: theme.textTheme.titleSmall?.copyWith(
-                                    fontWeight: FontWeight.w700,
-                                    color: theme.colorScheme.onSurface,
-                                  ),
-                                ),
+                          ),
                         ),
                       ),
                       if (_showPostClearHint) ...[
