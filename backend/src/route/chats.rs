@@ -347,6 +347,7 @@ async fn create_chat(
                 peer_username: None,
                 peer_avatar: None,
                 unread_count: Some(0),
+                my_role: Some("member".to_string()),
                 last_message_id: None,
                 last_message: None,
                 last_message_type: None,
@@ -440,6 +441,7 @@ async fn create_chat(
                 peer_username: None,
                 peer_avatar: None,
                 unread_count: Some(0),
+                my_role: Some("member".to_string()),
                 last_message_id: None,
                 last_message: None,
                 last_message_type: None,
@@ -512,7 +514,7 @@ async fn create_chat(
             .bind(uid)
             .bind(if uid == current_user_id {
                 if body.kind == "group" {
-                    "admin"
+                    "owner"
                 } else if body.kind == "channel" {
                     "owner"
                 } else {
@@ -535,7 +537,7 @@ async fn create_chat(
         .bind(chat_id)
         .bind(current_user_id)
         .bind(if body.kind == "group" {
-            "admin"
+            "owner"
         } else if body.kind == "channel" {
             "owner"
         } else {
@@ -553,9 +555,16 @@ async fn create_chat(
         )
     })?;
 
+    let chat_kind = row.try_get::<String, _>("kind").unwrap_or_default();
+    let my_role = if chat_kind == "channel" || chat_kind == "group" {
+        "owner".to_string()
+    } else {
+        "member".to_string()
+    };
+
     let chat = Chat {
         id: chat_id,
-        kind: row.try_get::<String, _>("kind").unwrap_or_default(),
+        kind: chat_kind,
         title: row.try_get("title").ok(),
         created_at: row
             .try_get::<chrono::DateTime<chrono::Utc>, _>("created_at")
@@ -571,6 +580,7 @@ async fn create_chat(
         peer_username: None,
         peer_avatar: None,
         unread_count: Some(0),
+        my_role: Some(my_role),
         last_message_id: None,
         last_message: None,
         last_message_type: None,
@@ -612,6 +622,7 @@ async fn list_chats(
             c.created_at,
             c.updated_at,
             c.is_archived,
+            COALESCE(p.role, 'member') AS my_role,
             EXISTS(
                 SELECT 1
                 FROM chat_favorites cf
@@ -725,6 +736,7 @@ async fn list_chats(
             peer_username: row.try_get("peer_username").ok(),
             peer_avatar: row.try_get("peer_avatar").ok(),
             unread_count: row.try_get("unread_count").ok().or(Some(0)),
+            my_role: row.try_get("my_role").ok(),
             last_message_id: row.try_get("last_message_id").ok(),
             last_message: row.try_get("last_message").ok(),
             last_message_type: row.try_get("last_message_type").ok(),
@@ -952,13 +964,7 @@ async fn mark_chat_read(
     }
 
     let recipients = load_chat_recipients(&state, id).await?;
-    publish_message_read(
-        &state,
-        &recipients,
-        id,
-        current_user_id,
-        effective_target,
-    );
+    publish_message_read(&state, &recipients, id, current_user_id, effective_target);
 
     Ok(Json(MarkReadResponse {
         last_read_message_id: effective_target,
@@ -1467,21 +1473,64 @@ async fn delete_or_leave_chat(
         return Err((StatusCode::NOT_FOUND, "Чат не найден".into()));
     };
     let kind: String = row.try_get("kind").unwrap_or_default();
-    let _role: String = row.try_get("role").unwrap_or_else(|_| "member".to_string());
+    let role: String = row.try_get("role").unwrap_or_else(|_| "member".to_string());
 
     if kind == "group" || kind == "channel" {
-        // Удалять весь group/channel может только admin/owner.
-        crate::middleware::ensure_admin(&state, id, current_user_id).await?;
-        sqlx::query("DELETE FROM chats WHERE id = $1")
+        // group/channel:
+        // - for_all=true => удаление всего чата (только admin/owner)
+        // - иначе => выход текущего пользователя из чата
+        if opts.for_all.unwrap_or(false) {
+            if role.trim().to_lowercase() != "owner" {
+                return Err((
+                    StatusCode::FORBIDDEN,
+                    "Только owner может удалить группу/канал для всех".into(),
+                ));
+            }
+            sqlx::query("DELETE FROM chats WHERE id = $1")
+                .bind(id)
+                .execute(&state.pool)
+                .await
+                .map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Ошибка удаления чата: {}", e),
+                    )
+                })?;
+            return Ok(StatusCode::NO_CONTENT);
+        }
+
+        ensure_member(&state, id, current_user_id).await?;
+        let _ = sqlx::query("DELETE FROM chat_participants WHERE chat_id = $1 AND user_id = $2")
             .bind(id)
+            .bind(current_user_id)
             .execute(&state.pool)
             .await
             .map_err(|e| {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Ошибка удаления чата: {}", e),
+                    format!("Ошибка выхода из чата: {}", e),
                 )
             })?;
+
+        // Если участников больше нет — удаляем сам чат.
+        let participants_left: Option<i64> =
+            sqlx::query_scalar("SELECT COUNT(*) FROM chat_participants WHERE chat_id = $1")
+                .bind(id)
+                .fetch_optional(&state.pool)
+                .await
+                .map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Ошибка БД: {}", e),
+                    )
+                })?;
+
+        if participants_left.unwrap_or(0) == 0 {
+            let _ = sqlx::query("DELETE FROM chats WHERE id = $1")
+                .bind(id)
+                .execute(&state.pool)
+                .await;
+        }
         return Ok(StatusCode::NO_CONTENT);
     } else {
         // private: если for_all=true — удаляем чат полностью

@@ -231,6 +231,8 @@ class ChatsRepository {
       final unreadCount = (m['unread_count'] is int)
           ? m['unread_count'] as int
           : int.tryParse('${m['unread_count'] ?? ''}') ?? 0;
+      final myRoleRaw = ((m['my_role'] as String?) ?? 'member').trim();
+      final myRole = myRoleRaw.isEmpty ? 'member' : myRoleRaw.toLowerCase();
       final updatedAtStr = (m['updated_at'] as String?) ?? '';
       final lastMessageId = (m['last_message_id'] is int)
           ? m['last_message_id'] as int
@@ -272,6 +274,7 @@ class ChatsRepository {
           ),
           lastMessageAt: lastMessageAt,
           unreadCount: unreadCount < 0 ? 0 : unreadCount,
+          myRole: myRole,
           lastMessageIsMine: lastMessageOutgoing,
           lastMessageIsPending: false,
           lastMessageIsDelivered: lastMessageDelivered,
@@ -340,6 +343,7 @@ class ChatsRepository {
         lastMessage: _localPendingPreview(latest),
         lastMessageAt: latest.sentAt,
         unreadCount: chat.unreadCount,
+        myRole: chat.myRole,
         lastMessageIsMine: true,
         lastMessageIsPending: true,
         lastMessageIsDelivered: false,
@@ -829,6 +833,9 @@ class ChatsRepository {
       lastMessage: '',
       lastMessageAt: DateTime.now(),
       unreadCount: 0,
+      myRole: ((json['my_role'] as String?) ?? 'member').trim().isEmpty
+          ? 'member'
+          : ((json['my_role'] as String?) ?? 'member').trim().toLowerCase(),
       lastMessageIsMine: false,
       lastMessageIsPending: false,
       lastMessageIsDelivered: false,
@@ -869,6 +876,9 @@ class ChatsRepository {
       lastMessage: '',
       lastMessageAt: DateTime.now(),
       unreadCount: 0,
+      myRole: ((json['my_role'] as String?) ?? 'member').trim().isEmpty
+          ? 'member'
+          : ((json['my_role'] as String?) ?? 'member').trim().toLowerCase(),
       lastMessageIsMine: false,
       lastMessageIsPending: false,
       lastMessageIsDelivered: false,

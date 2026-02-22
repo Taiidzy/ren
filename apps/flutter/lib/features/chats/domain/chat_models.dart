@@ -66,6 +66,7 @@ class ChatPreview {
   final String lastMessage;
   final DateTime lastMessageAt;
   final int unreadCount;
+  final String myRole;
   final bool lastMessageIsMine;
   final bool lastMessageIsPending;
   final bool lastMessageIsDelivered;
@@ -80,6 +81,7 @@ class ChatPreview {
     required this.lastMessage,
     required this.lastMessageAt,
     this.unreadCount = 0,
+    this.myRole = 'member',
     this.lastMessageIsMine = false,
     this.lastMessageIsPending = false,
     this.lastMessageIsDelivered = false,

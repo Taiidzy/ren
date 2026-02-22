@@ -182,6 +182,7 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
       lastMessage: '',
       lastMessageAt: DateTime.now(),
       unreadCount: 0,
+      myRole: 'member',
       lastMessageIsMine: false,
       lastMessageIsPending: false,
       lastMessageIsDelivered: false,
@@ -202,6 +203,7 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
           x.lastMessage != y.lastMessage ||
           x.isFavorite != y.isFavorite ||
           x.unreadCount != y.unreadCount ||
+          x.myRole != y.myRole ||
           x.lastMessageIsMine != y.lastMessageIsMine ||
           x.lastMessageIsPending != y.lastMessageIsPending ||
           x.lastMessageIsDelivered != y.lastMessageIsDelivered ||
@@ -231,6 +233,7 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                       lastMessage: c.lastMessage,
                       lastMessageAt: c.lastMessageAt,
                       unreadCount: 0,
+                      myRole: c.myRole,
                       lastMessageIsMine: c.lastMessageIsMine,
                       lastMessageIsPending: c.lastMessageIsPending,
                       lastMessageIsDelivered: c.lastMessageIsDelivered,
@@ -498,174 +501,15 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
         });
   }
 
-  Future<void> _createChatFlow() async {
-    final kind = await GlassOverlays.showGlassDialog<String>(
-      context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('Создать чат'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Отмена'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(context).pop('private'),
-              child: const Text('Private'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(context).pop('group'),
-              child: const Text('Group'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(context).pop('channel'),
-              child: const Text('Channel'),
-            ),
-          ],
-        );
-      },
-    );
-
-    if (!mounted) return;
-    if (kind == null || kind.isEmpty) {
-      return;
-    }
-
-    if (kind == 'private') {
-      final controller = TextEditingController();
-      final peerId = await GlassOverlays.showGlassDialog<int>(
-        context,
-        builder: (context) {
-          return AlertDialog(
-            title: const Text('Новый private чат'),
-            content: TextField(
-              controller: controller,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: 'ID пользователя'),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: const Text('Отмена'),
-              ),
-              FilledButton(
-                onPressed: () {
-                  final id = int.tryParse(controller.text.trim());
-                  if (id == null || id <= 0) {
-                    Navigator.of(context).pop(null);
-                    return;
-                  }
-                  Navigator.of(context).pop(id);
-                },
-                child: const Text('Создать'),
-              ),
-            ],
-          );
-        },
-      );
-
-      if (!mounted) return;
-      if (peerId == null) {
-        if (controller.text.trim().isNotEmpty) {
-          showGlassSnack(
-            context,
-            'Укажите корректный ID пользователя',
-            kind: GlassSnackKind.error,
-          );
-        }
-        return;
-      }
-
-      try {
-        final repo = context.read<ChatsRepository>();
-        final chat = await repo.createPrivateChat(peerId);
-        if (!mounted) return;
-        await _reloadChats();
-        if (!mounted) return;
-        _openChat(chat);
-      } catch (e) {
-        if (!mounted) return;
-        showGlassSnack(context, e.toString(), kind: GlassSnackKind.error);
-      }
-      return;
-    }
-
-    final titleCtrl = TextEditingController();
-    final idsCtrl = TextEditingController();
-    final submitted = await GlassOverlays.showGlassDialog<bool>(
-      context,
-      builder: (context) {
-        return AlertDialog(
-          title: Text(kind == 'group' ? 'Новая группа' : 'Новый канал'),
-          content: SizedBox(
-            width: 360,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: titleCtrl,
-                  decoration: const InputDecoration(labelText: 'Название'),
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: idsCtrl,
-                  keyboardType: TextInputType.text,
-                  decoration: const InputDecoration(
-                    labelText: 'ID участников через запятую',
-                  ),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('Отмена'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('Создать'),
-            ),
-          ],
-        );
-      },
-    );
-
-    if (!mounted || submitted != true) return;
-    final title = titleCtrl.text.trim();
-    if (title.isEmpty) {
-      showGlassSnack(context, 'Укажите название', kind: GlassSnackKind.error);
-      return;
-    }
-
-    final memberIds = idsCtrl.text
-        .split(',')
-        .map((e) => int.tryParse(e.trim()) ?? 0)
-        .where((e) => e > 0)
-        .toSet()
-        .toList(growable: false);
-
-    try {
-      final repo = context.read<ChatsRepository>();
-      final chat = kind == 'group'
-          ? await repo.createGroupChat(title: title, memberUserIds: memberIds)
-          : await repo.createChannel(title: title, memberUserIds: memberIds);
-      if (!mounted) return;
-      await _reloadChats();
-      if (!mounted) return;
-      _openChat(chat);
-    } catch (e) {
-      if (!mounted) return;
-      showGlassSnack(context, e.toString(), kind: GlassSnackKind.error);
-    }
-  }
-
   Future<void> _showChatActionsAt(
     ChatPreview chat,
     Offset globalPosition,
   ) async {
     final chatId = int.tryParse(chat.id) ?? 0;
     if (chatId <= 0) return;
+    final kind = chat.kind.trim().toLowerCase();
+    final isGroupOrChannel = kind == 'group' || kind == 'channel';
+    final isOwner = chat.myRole.trim().toLowerCase() == 'owner';
 
     final action = await RenContextMenu.show<String>(
       context,
@@ -684,11 +528,20 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
         RenContextMenuEntry.action(
           RenContextMenuAction<String>(
             icon: HugeIcon(icon: HugeIcons.strokeRoundedDelete02, size: 20),
-            label: 'Удалить чат',
+            label: isGroupOrChannel ? 'Выйти' : 'Удалить чат',
             danger: true,
-            value: 'delete',
+            value: 'leave_or_delete',
           ),
         ),
+        if (isGroupOrChannel && isOwner)
+          RenContextMenuEntry.action(
+            RenContextMenuAction<String>(
+              icon: HugeIcon(icon: HugeIcons.strokeRoundedDelete02, size: 20),
+              label: 'Удалить чат для всех',
+              danger: true,
+              value: 'delete_for_all',
+            ),
+          ),
       ],
     );
 
@@ -707,13 +560,24 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
       return;
     }
 
-    if (action == 'delete') {
+    if (action == 'leave_or_delete' || action == 'delete_for_all') {
+      final isDeleteForAll = action == 'delete_for_all';
       final confirm = await GlassOverlays.showGlassDialog<bool>(
         context,
         builder: (dctx) {
           return AlertDialog(
-            title: const Text('Удалить чат?'),
-            content: const Text('Чат будет удалён из вашего списка.'),
+            title: Text(
+              isDeleteForAll
+                  ? 'Удалить чат для всех?'
+                  : (isGroupOrChannel ? 'Выйти из чата?' : 'Удалить чат?'),
+            ),
+            content: Text(
+              isDeleteForAll
+                  ? 'Чат/канал будет удалён для всех участников. Действие необратимо.'
+                  : (isGroupOrChannel
+                        ? 'Вы покинете этот чат/канал. Вернуться можно только после повторного добавления.'
+                        : 'Чат будет удалён из вашего списка.'),
+            ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.of(dctx).pop(false),
@@ -721,7 +585,11 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
               ),
               FilledButton(
                 onPressed: () => Navigator.of(dctx).pop(true),
-                child: const Text('Удалить'),
+                child: Text(
+                  isDeleteForAll
+                      ? 'Удалить для всех'
+                      : (isGroupOrChannel ? 'Выйти' : 'Удалить'),
+                ),
               ),
             ],
           );
@@ -732,7 +600,7 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
       if (!mounted) return;
       try {
         final repo = context.read<ChatsRepository>();
-        await repo.deleteChat(chatId);
+        await repo.deleteChat(chatId, forAll: isDeleteForAll);
         await _reloadChats();
       } catch (e) {
         if (!mounted) return;
@@ -916,6 +784,7 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                   lastMessage: c.lastMessage,
                   lastMessageAt: c.lastMessageAt,
                   unreadCount: c.unreadCount,
+                  myRole: c.myRole,
                   lastMessageIsMine: c.lastMessageIsMine,
                   lastMessageIsPending: c.lastMessageIsPending,
                   lastMessageIsDelivered: c.lastMessageIsDelivered,
@@ -1069,14 +938,6 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
           actions: [
             IconButton(
               icon: HugeIcon(
-                icon: HugeIcons.strokeRoundedAdd01,
-                color: theme.colorScheme.onSurface,
-                size: 24.0,
-              ),
-              onPressed: _createChatFlow,
-            ),
-            IconButton(
-              icon: HugeIcon(
                 icon: HugeIcons.strokeRoundedSettings01,
                 color: theme.colorScheme.onSurface,
                 size: 24.0,
@@ -1173,6 +1034,7 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                       lastMessage: c.lastMessage,
                       lastMessageAt: c.lastMessageAt,
                       unreadCount: c.unreadCount,
+                      myRole: c.myRole,
                       lastMessageIsMine: c.lastMessageIsMine,
                       lastMessageIsPending: c.lastMessageIsPending,
                       lastMessageIsDelivered: c.lastMessageIsDelivered,
@@ -1325,12 +1187,14 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                                               borderColor: baseInk.withOpacity(
                                                 isDark ? 0.14 : 0.08,
                                               ),
-                                              padding: const EdgeInsets.symmetric(
-                                                horizontal: 12,
-                                                vertical: 8,
-                                              ),
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 12,
+                                                    vertical: 8,
+                                                  ),
                                               child: InkWell(
-                                                borderRadius: BorderRadius.circular(12),
+                                                borderRadius:
+                                                    BorderRadius.circular(12),
                                                 onTap: () {
                                                   GlassOverlays.showGlassBottomSheet(
                                                     context,
@@ -1342,19 +1206,26 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                                                   );
                                                 },
                                                 child: Row(
-                                                  mainAxisSize: MainAxisSize.min,
+                                                  mainAxisSize:
+                                                      MainAxisSize.min,
                                                   children: [
                                                     Icon(
                                                       Icons.group_add_rounded,
                                                       size: 18,
-                                                      color: theme.colorScheme.onSurface,
+                                                      color: theme
+                                                          .colorScheme
+                                                          .onSurface,
                                                     ),
                                                     const SizedBox(width: 6),
                                                     Text(
                                                       'Создать группу',
-                                                      style: theme.textTheme.bodySmall?.copyWith(
-                                                        fontWeight: FontWeight.w600,
-                                                      ),
+                                                      style: theme
+                                                          .textTheme
+                                                          .bodySmall
+                                                          ?.copyWith(
+                                                            fontWeight:
+                                                                FontWeight.w600,
+                                                          ),
                                                     ),
                                                   ],
                                                 ),
@@ -1369,12 +1240,14 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                                               borderColor: baseInk.withOpacity(
                                                 isDark ? 0.14 : 0.08,
                                               ),
-                                              padding: const EdgeInsets.symmetric(
-                                                horizontal: 12,
-                                                vertical: 8,
-                                              ),
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 12,
+                                                    vertical: 8,
+                                                  ),
                                               child: InkWell(
-                                                borderRadius: BorderRadius.circular(12),
+                                                borderRadius:
+                                                    BorderRadius.circular(12),
                                                 onTap: () {
                                                   GlassOverlays.showGlassBottomSheet(
                                                     context,
@@ -1386,19 +1259,26 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                                                   );
                                                 },
                                                 child: Row(
-                                                  mainAxisSize: MainAxisSize.min,
+                                                  mainAxisSize:
+                                                      MainAxisSize.min,
                                                   children: [
                                                     Icon(
                                                       Icons.campaign_rounded,
                                                       size: 18,
-                                                      color: theme.colorScheme.onSurface,
+                                                      color: theme
+                                                          .colorScheme
+                                                          .onSurface,
                                                     ),
                                                     const SizedBox(width: 6),
                                                     Text(
                                                       'Создать канал',
-                                                      style: theme.textTheme.bodySmall?.copyWith(
-                                                        fontWeight: FontWeight.w600,
-                                                      ),
+                                                      style: theme
+                                                          .textTheme
+                                                          .bodySmall
+                                                          ?.copyWith(
+                                                            fontWeight:
+                                                                FontWeight.w600,
+                                                          ),
                                                     ),
                                                   ],
                                                 ),
@@ -1866,18 +1746,14 @@ class _CreateGroupChannelSheet extends StatefulWidget {
   final String kind;
   final String initialTitle;
 
-  const _CreateGroupChannelSheet({
-    required this.kind,
-    this.initialTitle = '',
-  });
+  const _CreateGroupChannelSheet({required this.kind, this.initialTitle = ''});
 
   @override
   State<_CreateGroupChannelSheet> createState() =>
       _CreateGroupChannelSheetState();
 }
 
-class _CreateGroupChannelSheetState
-    extends State<_CreateGroupChannelSheet> {
+class _CreateGroupChannelSheetState extends State<_CreateGroupChannelSheet> {
   final _titleCtrl = TextEditingController();
   final _searchCtrl = TextEditingController();
   final Set<int> _selectedUserIds = <int>{};
@@ -1975,11 +1851,7 @@ class _CreateGroupChannelSheetState
 
     final title = _titleCtrl.text.trim();
     if (title.isEmpty) {
-      showGlassSnack(
-        context,
-        'Укажите название',
-        kind: GlassSnackKind.error,
-      );
+      showGlassSnack(context, 'Укажите название', kind: GlassSnackKind.error);
       return;
     }
 
@@ -1991,14 +1863,8 @@ class _CreateGroupChannelSheetState
 
     try {
       final chat = widget.kind == 'group'
-          ? await _repo.createGroupChat(
-              title: title,
-              memberUserIds: memberIds,
-            )
-          : await _repo.createChannel(
-              title: title,
-              memberUserIds: memberIds,
-            );
+          ? await _repo.createGroupChat(title: title, memberUserIds: memberIds)
+          : await _repo.createChannel(title: title, memberUserIds: memberIds);
 
       if (!mounted) return;
       Navigator.of(context).pop(true);
@@ -2057,9 +1923,7 @@ class _CreateGroupChannelSheetState
               ),
               const SizedBox(height: 12),
               Text(
-                widget.kind == 'group'
-                    ? 'Новая группа'
-                    : 'Новый канал',
+                widget.kind == 'group' ? 'Новая группа' : 'Новый канал',
                 style: theme.textTheme.titleLarge?.copyWith(
                   fontWeight: FontWeight.w700,
                 ),
@@ -2080,13 +1944,9 @@ class _CreateGroupChannelSheetState
                     border: InputBorder.none,
                     filled: false,
                     isDense: true,
-                    contentPadding: const EdgeInsets.symmetric(
-                      vertical: 8,
-                    ),
+                    contentPadding: const EdgeInsets.symmetric(vertical: 8),
                   ),
-                  style: TextStyle(
-                    color: theme.colorScheme.onSurface,
-                  ),
+                  style: TextStyle(color: theme.colorScheme.onSurface),
                 ),
               ),
               const SizedBox(height: 16),
@@ -2131,9 +1991,7 @@ class _CreateGroupChannelSheetState
                                   },
                                 ),
                         ),
-                        style: TextStyle(
-                          color: theme.colorScheme.onSurface,
-                        ),
+                        style: TextStyle(color: theme.colorScheme.onSurface),
                       ),
                     ),
                   ],
@@ -2171,12 +2029,7 @@ class _CreateGroupChannelSheetState
                               borderColor: isSelected
                                   ? theme.colorScheme.primary.withOpacity(0.5)
                                   : baseInk.withOpacity(isDark ? 0.14 : 0.08),
-                              padding: const EdgeInsets.fromLTRB(
-                                10,
-                                8,
-                                10,
-                                8,
-                              ),
+                              padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
                               child: InkWell(
                                 borderRadius: BorderRadius.circular(14),
                                 onTap: () => _toggleUser(user),
@@ -2231,9 +2084,10 @@ class _CreateGroupChannelSheetState
                                     else
                                       CircleAvatar(
                                         radius: 12,
-                                        backgroundColor:
-                                            theme.colorScheme.onSurface
-                                                .withOpacity(0.12),
+                                        backgroundColor: theme
+                                            .colorScheme
+                                            .onSurface
+                                            .withOpacity(0.12),
                                         child: const Icon(
                                           Icons.add_rounded,
                                           size: 16,
@@ -2293,10 +2147,7 @@ class _CreateGroupChannelSheetState
                             borderRadius: BorderRadius.circular(12),
                             child: const Padding(
                               padding: EdgeInsets.all(2),
-                              child: Icon(
-                                Icons.close_rounded,
-                                size: 14,
-                              ),
+                              child: Icon(Icons.close_rounded, size: 14),
                             ),
                           ),
                         ],

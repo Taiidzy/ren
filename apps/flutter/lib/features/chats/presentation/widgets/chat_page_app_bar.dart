@@ -138,6 +138,7 @@ class ChatPageAppBar extends StatelessWidget implements PreferredSizeWidget {
                             Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
+                                if (kind != "private")
                                 Container(
                                   padding: const EdgeInsets.symmetric(
                                     horizontal: 6,
@@ -161,16 +162,8 @@ class ChatPageAppBar extends StatelessWidget implements PreferredSizeWidget {
                                   ),
                                 ),
                                 const SizedBox(width: 6),
-                                Text(
-                                  peerTyping
-                                      ? 'Печатает...'
-                                      : (kind == 'channel'
-                                            ? (canSend
-                                                  ? 'Можно писать'
-                                                  : 'Read-only')
-                                            : (peerOnline
-                                                  ? 'Online'
-                                                  : 'Offline')),
+                                if (kind == 'private')
+                                Text( peerTyping ? 'Печатает...' : (kind == 'channel' ? (canSend ? 'Можно писать' : 'Read-only') : (peerOnline ? 'Online' : 'Offline')),
                                   style: TextStyle(
                                     fontSize: 12,
                                     color: theme.colorScheme.onSurface

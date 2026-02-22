@@ -91,6 +91,7 @@ class ChatsLocalCache {
       'lastMessage': c.lastMessage,
       'lastMessageAt': c.lastMessageAt.toIso8601String(),
       'unreadCount': c.unreadCount,
+      'myRole': c.myRole,
       'lastMessageIsMine': c.lastMessageIsMine,
       'lastMessageIsPending': c.lastMessageIsPending,
       'lastMessageIsDelivered': c.lastMessageIsDelivered,
@@ -130,6 +131,9 @@ class ChatsLocalCache {
       unreadCount: (m['unreadCount'] is int)
           ? m['unreadCount'] as int
           : int.tryParse('${m['unreadCount'] ?? ''}') ?? 0,
+      myRole: ((m['myRole'] as String?) ?? 'member').trim().isEmpty
+          ? 'member'
+          : ((m['myRole'] as String?) ?? 'member').trim().toLowerCase(),
       lastMessageIsMine: m['lastMessageIsMine'] == true,
       lastMessageIsPending: m['lastMessageIsPending'] == true,
       lastMessageIsDelivered: m['lastMessageIsDelivered'] == true,
