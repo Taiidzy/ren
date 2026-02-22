@@ -4,6 +4,32 @@
 
 ### Flutter App (`apps/flutter`)
 
+#### Reconnect strategy for realtime (WebSocket)
+- Обновлена политика переподключения WS-клиента при недоступности сервера:
+  - 1-я повторная попытка через 10 секунд;
+  - 2-я через 30 секунд;
+  - 3-я и все следующие — каждые 60 секунд.
+- Убраны лишние внеплановые reconnect-попытки при очереди исходящих WS-сообщений.
+- Файл:
+  - `apps/flutter/lib/core/realtime/realtime_client.dart`
+
+#### HTTP retry policy (Dio + multipart upload)
+- Добавлен централизованный retry-interceptor для HTTP-запросов через Dio при сетевой недоступности:
+  - 10с → 30с → 60с (дальше каждые 60с).
+- Добавлен аналогичный retry для загрузки аватара через `http.MultipartRequest` (не Dio), чтобы поведение было единым.
+- Файлы:
+  - `apps/flutter/lib/core/network/server_retry_interceptor.dart`
+  - `apps/flutter/lib/main.dart`
+  - `apps/flutter/lib/features/profile/data/profile_api.dart`
+
+#### Profile edit username field styling
+- Поле ввода username в профиле обновлено:
+  - прозрачный фон инпута;
+  - более круглые края рамки;
+  - нейтральная рамка в обычном состоянии и акцентная рамка только в фокусе.
+- Файл:
+  - `apps/flutter/lib/features/profile/presentation/widgets/profile_edit_sheet.dart`
+
 #### Chat notifications fix
 - Исправлено внутреннее уведомление когда собеседник находится в чате с отправителем:
   - добавлено отслеживание текущего открытого чата (`_currentOpenChatId`) в `lib/features/chats/presentation/chats_page.dart`;

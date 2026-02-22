@@ -25,6 +25,7 @@ import 'package:ren/shared/widgets/skeleton.dart';
 import 'package:ren/shared/widgets/glass_overlays.dart';
 import 'package:ren/shared/widgets/glass_surface.dart';
 import 'package:ren/shared/widgets/glass_snackbar.dart';
+import 'package:ren/shared/widgets/glass_confirm_dialog.dart';
 import 'package:ren/shared/widgets/context_menu.dart';
 
 class ChatsPage extends StatefulWidget {
@@ -565,33 +566,19 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
       final confirm = await GlassOverlays.showGlassDialog<bool>(
         context,
         builder: (dctx) {
-          return AlertDialog(
-            title: Text(
-              isDeleteForAll
-                  ? 'Удалить чат для всех?'
-                  : (isGroupOrChannel ? 'Выйти из чата?' : 'Удалить чат?'),
-            ),
-            content: Text(
-              isDeleteForAll
-                  ? 'Чат/канал будет удалён для всех участников. Действие необратимо.'
-                  : (isGroupOrChannel
-                        ? 'Вы покинете этот чат/канал. Вернуться можно только после повторного добавления.'
-                        : 'Чат будет удалён из вашего списка.'),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(dctx).pop(false),
-                child: const Text('Отмена'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.of(dctx).pop(true),
-                child: Text(
-                  isDeleteForAll
-                      ? 'Удалить для всех'
-                      : (isGroupOrChannel ? 'Выйти' : 'Удалить'),
-                ),
-              ),
-            ],
+          return GlassConfirmDialog(
+            title: isDeleteForAll
+                ? 'Удалить чат для всех?'
+                : (isGroupOrChannel ? 'Выйти из чата?' : 'Удалить чат?'),
+            text: isDeleteForAll
+                ? 'Чат/канал будет удалён для всех участников. Действие необратимо.'
+                : (isGroupOrChannel
+                      ? 'Вы покинете этот чат/канал. Вернуться можно только после повторного добавления.'
+                      : 'Чат будет удалён из вашего списка.'),
+            confirmLabel: isDeleteForAll
+                ? 'Удалить для всех'
+                : (isGroupOrChannel ? 'Выйти' : 'Удалить'),
+            onConfirm: () => Navigator.of(dctx).pop(true),
           );
         },
       );

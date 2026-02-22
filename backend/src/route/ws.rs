@@ -1331,18 +1331,21 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
     }
 
     // Снимаем одно активное соединение; offline отправляем только когда сокетов больше не осталось.
+    // Важно: нельзя вызывать remove, пока удерживается guard от get_mut (DashMap может взаимно заблокироваться).
     let became_offline = match state.online_connections.get_mut(&user_id) {
         Some(mut cnt) => {
             if *cnt > 1 {
                 *cnt -= 1;
                 false
             } else {
-                state.online_connections.remove(&user_id);
                 true
             }
         }
         None => true,
     };
+    if became_offline {
+        state.online_connections.remove(&user_id);
+    }
 
     if became_offline {
         let presence_evt = match serde_json::to_string(&ServerEvent::Presence {

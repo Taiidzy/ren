@@ -33,8 +33,9 @@ class RealtimeEvent {
 }
 
 class RealtimeClient {
-  static const Duration _reconnectMinDelay = Duration(seconds: 1);
-  static const Duration _reconnectMaxDelay = Duration(seconds: 20);
+  static const Duration _reconnectFirstDelay = Duration(seconds: 10);
+  static const Duration _reconnectSecondDelay = Duration(seconds: 30);
+  static const Duration _reconnectSteadyDelay = Duration(minutes: 1);
 
   WebSocketChannel? _channel;
   StreamSubscription? _sub;
@@ -49,7 +50,7 @@ class RealtimeClient {
   bool _isConnecting = false;
   bool _manualDisconnect = false;
   bool _hasConnectedBefore = false;
-  Duration _currentReconnectDelay = _reconnectMinDelay;
+  int _reconnectAttempt = 0;
 
   bool get isConnected => _channel != null;
 
@@ -93,7 +94,7 @@ class RealtimeClient {
         return;
       }
 
-      _currentReconnectDelay = _reconnectMinDelay;
+      _reconnectAttempt = 0;
       _sub = ch.stream.listen(
         (event) async {
           if (event is! String) return;
@@ -171,13 +172,10 @@ class RealtimeClient {
 
   void _scheduleReconnect() {
     if (_manualDisconnect || _reconnectTimer != null) return;
-    _reconnectTimer = Timer(_currentReconnectDelay, () async {
+    _reconnectAttempt += 1;
+    final delay = _reconnectDelayForAttempt(_reconnectAttempt);
+    _reconnectTimer = Timer(delay, () async {
       _reconnectTimer = null;
-      final nextMs = (_currentReconnectDelay.inMilliseconds * 2).clamp(
-        _reconnectMinDelay.inMilliseconds,
-        _reconnectMaxDelay.inMilliseconds,
-      );
-      _currentReconnectDelay = Duration(milliseconds: nextMs);
       try {
         await connect();
       } catch (_) {
@@ -200,8 +198,16 @@ class RealtimeClient {
 
     if (queueIfDisconnected) {
       _pendingMessages.add(payload);
-      unawaited(connect());
+      if (!_isConnecting && _reconnectTimer == null) {
+        unawaited(connect());
+      }
     }
+  }
+
+  Duration _reconnectDelayForAttempt(int attempt) {
+    if (attempt <= 1) return _reconnectFirstDelay;
+    if (attempt == 2) return _reconnectSecondDelay;
+    return _reconnectSteadyDelay;
   }
 
   void _flushState() {
