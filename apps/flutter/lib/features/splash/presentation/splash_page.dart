@@ -179,6 +179,8 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
               gradient: AnimatedGradientUtils.buildAnimatedGradient(
                 _backgroundAnimation.value,
                 isDarkMode,
+                primaryColor: Theme.of(context).colorScheme.primary,
+                secondaryColor: Theme.of(context).colorScheme.secondary,
               ),
             ),
             child: FadeTransition(

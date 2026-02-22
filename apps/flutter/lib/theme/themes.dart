@@ -122,8 +122,15 @@ class AppTheme {
 
   static ThemeData darkTheme = darkThemeFor(AppColorSchemePreset.indigo);
 
-  static ThemeData lightThemeFor(AppColorSchemePreset preset) {
-    final palette = _paletteFor(preset);
+  static ThemeData lightThemeFor(
+    AppColorSchemePreset preset, {
+    Color? autoSeedColor,
+  }) {
+    final palette = _paletteFor(
+      preset,
+      autoSeedColor: autoSeedColor,
+      brightness: Brightness.light,
+    );
     return ThemeData(
       brightness: Brightness.light,
       useMaterial3: true,
@@ -147,143 +154,155 @@ class AppTheme {
 
       // Типографика
       textTheme: const TextTheme(
-      headlineLarge: TextStyle(
-        fontSize: 32,
-        fontWeight: FontWeight.w700,
-        color: AppColors.neutral900,
-        letterSpacing: -0.5,
-      ),
-      headlineMedium: TextStyle(
-        fontSize: 28,
-        fontWeight: FontWeight.w600,
-        color: AppColors.neutral900,
-        letterSpacing: -0.25,
-      ),
-      titleLarge: TextStyle(
-        fontSize: 22,
-        fontWeight: FontWeight.w600,
-        color: AppColors.neutral900,
-        letterSpacing: 0,
-      ),
-      titleMedium: TextStyle(
-        fontSize: 16,
-        fontWeight: FontWeight.w500,
-        color: AppColors.neutral900,
-        letterSpacing: 0.15,
-      ),
-      bodyLarge: TextStyle(
-        fontSize: 16,
-        fontWeight: FontWeight.w400,
-        color: AppColors.neutral900,
-        letterSpacing: 0.5,
-        height: 1.5,
-      ),
-      bodyMedium: TextStyle(
-        fontSize: 14,
-        fontWeight: FontWeight.w400,
-        color: AppColors.neutral700,
-        letterSpacing: 0.25,
-        height: 1.4,
-      ),
-      bodySmall: TextStyle(
-        fontSize: 12,
-        fontWeight: FontWeight.w400,
-        color: AppColors.neutral500,
-        letterSpacing: 0.4,
-        height: 1.3,
-      ),
-      labelLarge: TextStyle(
-        fontSize: 14,
-        fontWeight: FontWeight.w500,
-        color: AppColors.neutral700,
-        letterSpacing: 1.25,
-      ),
-    ),
-
-    // Карточки
-    cardTheme: CardThemeData(
-      elevation: 0,
-      color: AppColors.lightCard,
-      surfaceTintColor: Colors.transparent,
-      shadowColor: Colors.black.withOpacity(0.05),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: BorderSide(color: AppColors.neutral200, width: 1),
-      ),
-    ),
-
-    // AppBar
-    appBarTheme: AppBarTheme(
-      elevation: 0,
-      scrolledUnderElevation: 0,
-      backgroundColor: AppColors.lightBackground.withOpacity(0.8),
-      surfaceTintColor: Colors.transparent,
-      foregroundColor: AppColors.neutral900,
-      titleTextStyle: const TextStyle(
-        fontSize: 20,
-        fontWeight: FontWeight.w600,
-        color: AppColors.neutral900,
-        letterSpacing: -0.5,
-      ),
-      iconTheme: const IconThemeData(color: AppColors.neutral700, size: 24),
-    ),
-
-    // Кнопки
-    elevatedButtonTheme: ElevatedButtonThemeData(
-      style: ElevatedButton.styleFrom(
-        elevation: 0,
-        backgroundColor: AppColors.primary,
-        foregroundColor: Colors.white,
-        disabledBackgroundColor: AppColors.neutral200,
-        disabledForegroundColor: AppColors.neutral400,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-        textStyle: const TextStyle(
+        headlineLarge: TextStyle(
+          fontSize: 32,
+          fontWeight: FontWeight.w700,
+          color: AppColors.neutral900,
+          letterSpacing: -0.5,
+        ),
+        headlineMedium: TextStyle(
+          fontSize: 28,
+          fontWeight: FontWeight.w600,
+          color: AppColors.neutral900,
+          letterSpacing: -0.25,
+        ),
+        titleLarge: TextStyle(
+          fontSize: 22,
+          fontWeight: FontWeight.w600,
+          color: AppColors.neutral900,
+          letterSpacing: 0,
+        ),
+        titleMedium: TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.w500,
+          color: AppColors.neutral900,
+          letterSpacing: 0.15,
+        ),
+        bodyLarge: TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.w400,
+          color: AppColors.neutral900,
+          letterSpacing: 0.5,
+          height: 1.5,
+        ),
+        bodyMedium: TextStyle(
+          fontSize: 14,
+          fontWeight: FontWeight.w400,
+          color: AppColors.neutral700,
+          letterSpacing: 0.25,
+          height: 1.4,
+        ),
+        bodySmall: TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w400,
+          color: AppColors.neutral500,
+          letterSpacing: 0.4,
+          height: 1.3,
+        ),
+        labelLarge: TextStyle(
           fontSize: 14,
           fontWeight: FontWeight.w500,
-          letterSpacing: 0.25,
+          color: AppColors.neutral700,
+          letterSpacing: 1.25,
         ),
       ),
-    ),
 
-    // Поля ввода
-    inputDecorationTheme: InputDecorationTheme(
-      filled: true,
-      fillColor: AppColors.lightSurface,
-      hintStyle: TextStyle(
-        color: AppColors.neutral400,
-        fontSize: 14,
-        fontWeight: FontWeight.w400,
+      // Карточки
+      cardTheme: CardThemeData(
+        elevation: 0,
+        color: AppColors.lightCard,
+        surfaceTintColor: Colors.transparent,
+        shadowColor: Colors.black.withOpacity(0.05),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: AppColors.neutral200, width: 1),
+        ),
       ),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: AppColors.neutral200, width: 1),
-      ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: AppColors.neutral200, width: 1),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: AppColors.primary, width: 2),
-      ),
-      errorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: AppColors.error, width: 1),
-      ),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-    ),
 
-    dividerTheme: DividerThemeData(
-      color: AppColors.neutral200,
-      thickness: 1,
-      space: 1,
-    ),
+      // AppBar
+      appBarTheme: AppBarTheme(
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        backgroundColor: AppColors.lightBackground.withOpacity(0.8),
+        surfaceTintColor: Colors.transparent,
+        foregroundColor: AppColors.neutral900,
+        titleTextStyle: const TextStyle(
+          fontSize: 20,
+          fontWeight: FontWeight.w600,
+          color: AppColors.neutral900,
+          letterSpacing: -0.5,
+        ),
+        iconTheme: const IconThemeData(color: AppColors.neutral700, size: 24),
+      ),
+
+      // Кнопки
+      elevatedButtonTheme: ElevatedButtonThemeData(
+        style: ElevatedButton.styleFrom(
+          elevation: 0,
+          backgroundColor: palette.primary,
+          foregroundColor: Colors.white,
+          disabledBackgroundColor: AppColors.neutral200,
+          disabledForegroundColor: AppColors.neutral400,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+          textStyle: const TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w500,
+            letterSpacing: 0.25,
+          ),
+        ),
+      ),
+
+      // Поля ввода
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: AppColors.lightSurface,
+        hintStyle: TextStyle(
+          color: AppColors.neutral400,
+          fontSize: 14,
+          fontWeight: FontWeight.w400,
+        ),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: AppColors.neutral200, width: 1),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: AppColors.neutral200, width: 1),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: palette.primary, width: 2),
+        ),
+        errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: AppColors.error, width: 1),
+        ),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 16,
+        ),
+      ),
+
+      dividerTheme: DividerThemeData(
+        color: AppColors.neutral200,
+        thickness: 1,
+        space: 1,
+      ),
     );
   }
 
-  static ThemeData darkThemeFor(AppColorSchemePreset preset) {
-    final palette = _paletteFor(preset);
+  static ThemeData darkThemeFor(
+    AppColorSchemePreset preset, {
+    Color? autoSeedColor,
+  }) {
+    final palette = _paletteFor(
+      preset,
+      autoSeedColor: autoSeedColor,
+      brightness: Brightness.dark,
+    );
     return ThemeData(
       brightness: Brightness.dark,
       useMaterial3: true,
@@ -307,143 +326,157 @@ class AppTheme {
 
       // Типографика для темной темы
       textTheme: const TextTheme(
-      headlineLarge: TextStyle(
-        fontSize: 32,
-        fontWeight: FontWeight.w700,
-        color: AppColors.neutral100,
-        letterSpacing: -0.5,
-      ),
-      headlineMedium: TextStyle(
-        fontSize: 28,
-        fontWeight: FontWeight.w600,
-        color: AppColors.neutral100,
-        letterSpacing: -0.25,
-      ),
-      titleLarge: TextStyle(
-        fontSize: 22,
-        fontWeight: FontWeight.w600,
-        color: AppColors.neutral100,
-        letterSpacing: 0,
-      ),
-      titleMedium: TextStyle(
-        fontSize: 16,
-        fontWeight: FontWeight.w500,
-        color: AppColors.neutral200,
-        letterSpacing: 0.15,
-      ),
-      bodyLarge: TextStyle(
-        fontSize: 16,
-        fontWeight: FontWeight.w400,
-        color: AppColors.neutral100,
-        letterSpacing: 0.5,
-        height: 1.5,
-      ),
-      bodyMedium: TextStyle(
-        fontSize: 14,
-        fontWeight: FontWeight.w400,
-        color: AppColors.neutral300,
-        letterSpacing: 0.25,
-        height: 1.4,
-      ),
-      bodySmall: TextStyle(
-        fontSize: 12,
-        fontWeight: FontWeight.w400,
-        color: AppColors.neutral400,
-        letterSpacing: 0.4,
-        height: 1.3,
-      ),
-      labelLarge: TextStyle(
-        fontSize: 14,
-        fontWeight: FontWeight.w500,
-        color: AppColors.neutral300,
-        letterSpacing: 1.25,
-      ),
-    ),
-
-    // Карточки для темной темы
-    cardTheme: CardThemeData(
-      elevation: 0,
-      color: AppColors.darkCard,
-      surfaceTintColor: Colors.transparent,
-      shadowColor: Colors.black.withOpacity(0.3),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: BorderSide(color: AppColors.neutral800, width: 1),
-      ),
-    ),
-
-    // AppBar для темной темы
-    appBarTheme: AppBarTheme(
-      elevation: 0,
-      scrolledUnderElevation: 0,
-      backgroundColor: AppColors.darkBackground.withOpacity(0.8),
-      surfaceTintColor: Colors.transparent,
-      foregroundColor: AppColors.neutral100,
-      titleTextStyle: const TextStyle(
-        fontSize: 20,
-        fontWeight: FontWeight.w600,
-        color: AppColors.neutral100,
-        letterSpacing: -0.5,
-      ),
-      iconTheme: const IconThemeData(color: AppColors.neutral300, size: 24),
-    ),
-
-    // Кнопки для темной темы
-    elevatedButtonTheme: ElevatedButtonThemeData(
-      style: ElevatedButton.styleFrom(
-        elevation: 0,
-        backgroundColor: AppColors.primary,
-        foregroundColor: Colors.white,
-        disabledBackgroundColor: AppColors.neutral800,
-        disabledForegroundColor: AppColors.neutral600,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-        textStyle: const TextStyle(
+        headlineLarge: TextStyle(
+          fontSize: 32,
+          fontWeight: FontWeight.w700,
+          color: AppColors.neutral100,
+          letterSpacing: -0.5,
+        ),
+        headlineMedium: TextStyle(
+          fontSize: 28,
+          fontWeight: FontWeight.w600,
+          color: AppColors.neutral100,
+          letterSpacing: -0.25,
+        ),
+        titleLarge: TextStyle(
+          fontSize: 22,
+          fontWeight: FontWeight.w600,
+          color: AppColors.neutral100,
+          letterSpacing: 0,
+        ),
+        titleMedium: TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.w500,
+          color: AppColors.neutral200,
+          letterSpacing: 0.15,
+        ),
+        bodyLarge: TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.w400,
+          color: AppColors.neutral100,
+          letterSpacing: 0.5,
+          height: 1.5,
+        ),
+        bodyMedium: TextStyle(
+          fontSize: 14,
+          fontWeight: FontWeight.w400,
+          color: AppColors.neutral300,
+          letterSpacing: 0.25,
+          height: 1.4,
+        ),
+        bodySmall: TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w400,
+          color: AppColors.neutral400,
+          letterSpacing: 0.4,
+          height: 1.3,
+        ),
+        labelLarge: TextStyle(
           fontSize: 14,
           fontWeight: FontWeight.w500,
-          letterSpacing: 0.25,
+          color: AppColors.neutral300,
+          letterSpacing: 1.25,
         ),
       ),
-    ),
 
-    // Поля ввода для темной темы
-    inputDecorationTheme: InputDecorationTheme(
-      filled: true,
-      fillColor: AppColors.darkSurface,
-      hintStyle: TextStyle(
-        color: AppColors.neutral500,
-        fontSize: 14,
-        fontWeight: FontWeight.w400,
+      // Карточки для темной темы
+      cardTheme: CardThemeData(
+        elevation: 0,
+        color: AppColors.darkCard,
+        surfaceTintColor: Colors.transparent,
+        shadowColor: Colors.black.withOpacity(0.3),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: AppColors.neutral800, width: 1),
+        ),
       ),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: AppColors.neutral700, width: 1),
-      ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: AppColors.neutral700, width: 1),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: AppColors.primary, width: 2),
-      ),
-      errorBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: AppColors.error, width: 1),
-      ),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-    ),
 
-    dividerTheme: DividerThemeData(
-      color: AppColors.neutral700,
-      thickness: 1,
-      space: 1,
-    ),
+      // AppBar для темной темы
+      appBarTheme: AppBarTheme(
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        backgroundColor: AppColors.darkBackground.withOpacity(0.8),
+        surfaceTintColor: Colors.transparent,
+        foregroundColor: AppColors.neutral100,
+        titleTextStyle: const TextStyle(
+          fontSize: 20,
+          fontWeight: FontWeight.w600,
+          color: AppColors.neutral100,
+          letterSpacing: -0.5,
+        ),
+        iconTheme: const IconThemeData(color: AppColors.neutral300, size: 24),
+      ),
+
+      // Кнопки для темной темы
+      elevatedButtonTheme: ElevatedButtonThemeData(
+        style: ElevatedButton.styleFrom(
+          elevation: 0,
+          backgroundColor: palette.primary,
+          foregroundColor: Colors.white,
+          disabledBackgroundColor: AppColors.neutral800,
+          disabledForegroundColor: AppColors.neutral600,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+          textStyle: const TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w500,
+            letterSpacing: 0.25,
+          ),
+        ),
+      ),
+
+      // Поля ввода для темной темы
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: AppColors.darkSurface,
+        hintStyle: TextStyle(
+          color: AppColors.neutral500,
+          fontSize: 14,
+          fontWeight: FontWeight.w400,
+        ),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: AppColors.neutral700, width: 1),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: AppColors.neutral700, width: 1),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: palette.primary, width: 2),
+        ),
+        errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: AppColors.error, width: 1),
+        ),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 16,
+        ),
+      ),
+
+      dividerTheme: DividerThemeData(
+        color: AppColors.neutral700,
+        thickness: 1,
+        space: 1,
+      ),
     );
   }
 
-  static _Palette _paletteFor(AppColorSchemePreset preset) {
+  static _Palette _paletteFor(
+    AppColorSchemePreset preset, {
+    Color? autoSeedColor,
+    required Brightness brightness,
+  }) {
     switch (preset) {
+      case AppColorSchemePreset.auto:
+        return _paletteFromSeed(
+          autoSeedColor ?? const Color(0xFF6366F1),
+          brightness: brightness,
+        );
       case AppColorSchemePreset.indigo:
         return const _Palette(
           primary: Color(0xFF6366F1),
@@ -475,6 +508,37 @@ class AppTheme {
           tertiary: Color(0xFF22C55E),
         );
     }
+  }
+
+  static _Palette _paletteFromSeed(
+    Color seed, {
+    required Brightness brightness,
+  }) {
+    final hsl = HSLColor.fromColor(seed);
+    final primaryLightness = brightness == Brightness.dark ? 0.62 : 0.50;
+    final primarySaturation = brightness == Brightness.dark ? 0.65 : 0.72;
+    final primary = hsl
+        .withLightness(primaryLightness)
+        .withSaturation(primarySaturation)
+        .toColor();
+
+    final secondary = hsl
+        .withHue((hsl.hue + 24) % 360)
+        .withSaturation((hsl.saturation * 0.82).clamp(0.45, 0.78))
+        .withLightness(
+          (brightness == Brightness.dark ? 0.58 : 0.46).clamp(0.0, 1.0),
+        )
+        .toColor();
+
+    final tertiary = hsl
+        .withHue((hsl.hue + 330) % 360)
+        .withSaturation((hsl.saturation * 0.70).clamp(0.40, 0.72))
+        .withLightness(
+          (brightness == Brightness.dark ? 0.64 : 0.54).clamp(0.0, 1.0),
+        )
+        .toColor();
+
+    return _Palette(primary: primary, secondary: secondary, tertiary: tertiary);
   }
 }
 

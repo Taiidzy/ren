@@ -102,6 +102,8 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
               gradient: AnimatedGradientUtils.buildAnimatedGradient(
                 _backgroundAnimation.value,
                 isDark,
+                primaryColor: theme.colorScheme.primary,
+                secondaryColor: theme.colorScheme.secondary,
               ),
             ),
             child: SafeArea(

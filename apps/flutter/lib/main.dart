@@ -175,13 +175,26 @@ class _MyAppState extends State<MyApp> {
           },
         ),
       ],
-      child: Consumer<ThemeSettings>(
-        builder: (context, settings, _) {
+      child: Consumer2<ThemeSettings, BackgroundSettings>(
+        builder: (context, settings, backgroundSettings, _) {
+          final lightAutoSeed =
+              settings.colorScheme == AppColorSchemePreset.auto
+              ? backgroundSettings.autoSeedLight
+              : null;
+          final darkAutoSeed = settings.colorScheme == AppColorSchemePreset.auto
+              ? backgroundSettings.autoSeedDark
+              : null;
           return MaterialApp(
             debugShowCheckedModeBanner: false,
             navigatorKey: rootNavigatorKey,
-            theme: AppTheme.lightThemeFor(settings.colorScheme),
-            darkTheme: AppTheme.darkThemeFor(settings.colorScheme),
+            theme: AppTheme.lightThemeFor(
+              settings.colorScheme,
+              autoSeedColor: lightAutoSeed,
+            ),
+            darkTheme: AppTheme.darkThemeFor(
+              settings.colorScheme,
+              autoSeedColor: darkAutoSeed,
+            ),
             themeMode: settings.themeMode,
             home: const SplashPage(),
           );
