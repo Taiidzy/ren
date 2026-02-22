@@ -366,7 +366,7 @@ class _ProfileEditContentState extends State<_ProfileEditContent> {
                       },
                       maxLength: 32,
                       decoration: InputDecoration(
-                        labelText: 'Имя (username)',
+                        labelText: 'Имя пользователя',
                         labelStyle: TextStyle(
                           color: theme.colorScheme.onSurface.withOpacity(0.75),
                         ),
@@ -400,23 +400,6 @@ class _ProfileEditContentState extends State<_ProfileEditContent> {
                         counterText: '',
                       ),
                     ),
-                    const SizedBox(height: 12),
-                    GlassSurface(
-                      borderRadius: 14,
-                      blurSigma: 12,
-                      height: 46,
-                      borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.10),
-                      onTap: store.isLoading ? null : _saveUsername,
-                      child: Center(
-                        child: Text(
-                          store.isLoading ? 'Сохранение...' : 'Сохранить',
-                          style: theme.textTheme.titleSmall?.copyWith(
-                            color: theme.colorScheme.onSurface,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                    ),
                     const SizedBox(height: 18),
                     TextField(
                       controller: _nicknameController,
@@ -433,7 +416,7 @@ class _ProfileEditContentState extends State<_ProfileEditContent> {
                       },
                       maxLength: 32,
                       decoration: InputDecoration(
-                        labelText: 'Nickname (отображаемое имя)',
+                        labelText: 'Отображаемое имя',
                         labelStyle: TextStyle(
                           color: theme.colorScheme.onSurface.withOpacity(0.75),
                         ),
