@@ -3832,8 +3832,36 @@ class _ChatMembersSheetBodyState extends State<_ChatMembersSheetBody> {
                       child: TextField(
                         controller: _memberIdCtrl,
                         keyboardType: TextInputType.number,
-                        decoration: const InputDecoration(
+                        style: theme.textTheme.bodyLarge?.copyWith(
+                          color: theme.colorScheme.onSurface,
+                        ),
+                        cursorColor: theme.colorScheme.onSurface,
+                        decoration: InputDecoration(
                           labelText: 'ID участника',
+                          labelStyle: TextStyle(
+                            color: theme.colorScheme.onSurface.withOpacity(0.75),
+                          ),
+                          filled: true,
+                          fillColor: Colors.transparent,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(16),
+                            borderSide: BorderSide(
+                              color: baseInk.withOpacity(isDark ? 0.28 : 0.18),
+                            ),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(16),
+                            borderSide: BorderSide(
+                              color: baseInk.withOpacity(isDark ? 0.28 : 0.18),
+                            ),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(16),
+                            borderSide: BorderSide(
+                              color: theme.colorScheme.primary,
+                              width: 1.5,
+                            ),
+                          ),
                         ),
                       ),
                     ),
@@ -3867,8 +3895,36 @@ class _ChatMembersSheetBodyState extends State<_ChatMembersSheetBody> {
                 TextField(
                   controller: _memberSearchCtrl,
                   onChanged: _scheduleMemberSearch,
+                  style: theme.textTheme.bodyLarge?.copyWith(
+                    color: theme.colorScheme.onSurface,
+                  ),
+                  cursorColor: theme.colorScheme.onSurface,
                   decoration: InputDecoration(
                     labelText: 'Поиск пользователя (username / ID)',
+                    labelStyle: TextStyle(
+                      color: theme.colorScheme.onSurface.withOpacity(0.75),
+                    ),
+                    filled: true,
+                    fillColor: Colors.transparent,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      borderSide: BorderSide(
+                        color: baseInk.withOpacity(isDark ? 0.28 : 0.18),
+                      ),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      borderSide: BorderSide(
+                        color: baseInk.withOpacity(isDark ? 0.28 : 0.18),
+                      ),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      borderSide: BorderSide(
+                        color: theme.colorScheme.primary,
+                        width: 1.5,
+                      ),
+                    ),
                     suffixIcon: _memberSearchCtrl.text.trim().isEmpty
                         ? null
                         : IconButton(

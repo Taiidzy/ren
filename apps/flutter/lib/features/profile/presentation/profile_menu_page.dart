@@ -10,7 +10,7 @@ import 'package:ren/features/profile/presentation/widgets/profile_edit_sheet.dar
 import 'package:ren/features/profile/presentation/widgets/storage_sheet.dart';
 import 'package:ren/features/profile/presentation/widgets/notifications_sheet.dart';
 import 'package:ren/features/profile/data/profile_repository.dart';
-import 'package:ren/features/profile/presentation/profile_store.dart';
+import 'package:ren/core/providers/profile_store.dart';
 import 'package:ren/features/profile/presentation/widgets/security_sheet.dart';
 import 'package:ren/shared/widgets/adaptive_page_route.dart';
 import 'package:ren/shared/widgets/background.dart';

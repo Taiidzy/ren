@@ -28,7 +28,7 @@ import 'package:ren/features/chats/presentation/chat_page.dart';
 
 import 'package:ren/features/profile/data/profile_api.dart';
 import 'package:ren/features/profile/data/profile_repository.dart';
-import 'package:ren/features/profile/presentation/profile_store.dart';
+import 'package:ren/core/providers/profile_store.dart';
 
 import 'package:ren/core/realtime/realtime_client.dart';
 import 'package:ren/core/notifications/local_notifications.dart';
