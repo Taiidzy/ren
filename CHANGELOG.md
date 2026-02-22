@@ -126,6 +126,29 @@
 
 ### Backend (`backend`)
 
+#### User nickname support
+- Добавлена поддержка nickname (отображаемого имени) пользователя:
+  - миграция БД: колонка `users.nickname` (TEXT, максимум 32 символа);
+  - `nickname` не уникален, при регистрации без nickname устанавливается равным `username`;
+  - модели `UserResponse`, `UserAuthResponse`, `UserRegisterRequest`, `Claims`, `Chat`, `ChatMember` — поле `nickname`;
+  - JWT access token включает `nickname`.
+- Новые эндпоинты:
+  - `PATCH /users/nickname` — смена отображаемого имени (валидация длины);
+  - `POST /auth/register` — обновлён с опциональным `nickname`.
+- Обновлённые эндпоинты:
+  - `GET /users/me` — возврат `nickname`;
+  - `GET /users/search` — поиск по `username`, возврат `nickname`;
+  - `GET /chats` — возврат `peer_nickname` для чатов;
+  - `GET /chats/:id/members` — возврат `nickname` участников.
+- Файлы:
+  - `backend/migrations/20260222120000_add_nickname.sql`
+  - `backend/src/models/auth.rs`
+  - `backend/src/models/chats.rs`
+  - `backend/src/route/auth.rs`
+  - `backend/src/route/users.rs`
+  - `backend/src/route/chats.rs`
+  - `backend/src/route/ws.rs`
+
 #### Chat info update endpoint
 - Добавлен endpoint `PATCH /chats/:id` для обновления информации о чате:
   - поддержка обновления `title` и `avatar`;
