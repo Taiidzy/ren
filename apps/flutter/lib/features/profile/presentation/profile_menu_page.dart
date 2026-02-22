@@ -57,7 +57,16 @@ class ProfileMenuPage extends StatelessWidget {
     try {
       await context.read<RealtimeClient>().disconnect();
     } catch (_) {}
-    context.read<ChatsRepository>().resetSessionState();
+    final chatsRepo = context.read<ChatsRepository>();
+    chatsRepo.resetSessionState();
+    try {
+      await chatsRepo.clearAppCache(
+        includeChats: true,
+        includeMessages: true,
+        includeMedia: true,
+      );
+    } catch (_) {}
+    context.read<ProfileStore>().resetSession();
     await SecureStorage.deleteAllKeys();
     if (!context.mounted) return;
 

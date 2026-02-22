@@ -1,15 +1,18 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'package:hugeicons/hugeicons.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
 import 'package:ren/features/chats/data/chats_repository.dart';
 import 'package:ren/features/chats/domain/chat_models.dart';
 import 'package:ren/features/chats/presentation/chat_page.dart';
 import 'package:ren/features/profile/presentation/profile_menu_page.dart';
+import 'package:ren/features/profile/presentation/widgets/profile_edit_sheet.dart';
 
 import 'package:ren/core/constants/api_url.dart';
 import 'package:ren/core/constants/keys.dart';
@@ -531,6 +534,16 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
             value: 'favorite',
           ),
         ),
+        if (isGroupOrChannel && isOwner) ...[
+          const RenContextMenuEntry.divider(),
+          RenContextMenuEntry.action(
+            RenContextMenuAction<String>(
+              icon: const Icon(Icons.edit_rounded, size: 20),
+              label: 'Редактировать',
+              value: 'edit_chat',
+            ),
+          ),
+        ],
         const RenContextMenuEntry.divider(),
         RenContextMenuEntry.action(
           RenContextMenuAction<String>(
@@ -563,6 +576,19 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
       } catch (e) {
         if (!mounted) return;
         showGlassSnack(context, e.toString(), kind: GlassSnackKind.error);
+      }
+      return;
+    }
+
+    if (action == 'edit_chat') {
+      final updated = await showModalBottomSheet<bool>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (_) => _EditGroupChannelSheet(chat: chat),
+      );
+      if (updated == true) {
+        await _reloadChats();
       }
       return;
     }
@@ -737,6 +763,11 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
             );
           }
         }
+        unawaited(_syncChats());
+        return;
+      }
+
+      if (evt.type == 'chat_updated') {
         unawaited(_syncChats());
         return;
       }
@@ -1767,6 +1798,254 @@ class _PressableState extends State<_Pressable> {
           curve: Curves.easeOut,
           opacity: opacity,
           child: widget.child,
+        ),
+      ),
+    );
+  }
+}
+
+class _EditGroupChannelSheet extends StatefulWidget {
+  final ChatPreview chat;
+
+  const _EditGroupChannelSheet({required this.chat});
+
+  @override
+  State<_EditGroupChannelSheet> createState() => _EditGroupChannelSheetState();
+}
+
+class _EditGroupChannelSheetState extends State<_EditGroupChannelSheet> {
+  final _titleCtrl = TextEditingController();
+  File? _newAvatar;
+  bool _removeAvatar = false;
+  bool _isSaving = false;
+
+  ChatsRepository get _repo => context.read<ChatsRepository>();
+
+  @override
+  void initState() {
+    super.initState();
+    _titleCtrl.text = widget.chat.user.name.trim();
+  }
+
+  @override
+  void dispose() {
+    _titleCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickAvatar() async {
+    final picker = ImagePicker();
+    final source = await picker.pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 96,
+      maxWidth: 2048,
+      maxHeight: 2048,
+    );
+    if (source == null || !mounted) return;
+    final cropped = await AvatarCropEditor.show(context, File(source.path));
+    if (cropped == null || !mounted) return;
+    setState(() {
+      _newAvatar = cropped;
+      _removeAvatar = false;
+    });
+  }
+
+  void _markAvatarForRemove() {
+    setState(() {
+      _newAvatar = null;
+      _removeAvatar = true;
+    });
+  }
+
+  Future<void> _save() async {
+    if (_isSaving) return;
+    final chatId = int.tryParse(widget.chat.id) ?? 0;
+    if (chatId <= 0) return;
+
+    final nextTitle = _titleCtrl.text.trim();
+    if (nextTitle.isEmpty) {
+      showGlassSnack(context, 'Введите название', kind: GlassSnackKind.error);
+      return;
+    }
+
+    final initialTitle = widget.chat.user.name.trim();
+    final hadAvatar = widget.chat.user.avatarUrl.trim().isNotEmpty;
+    final titleChanged = nextTitle != initialTitle;
+    final avatarChanged = _newAvatar != null || (_removeAvatar && hadAvatar);
+    if (!titleChanged && !avatarChanged) {
+      Navigator.of(context).pop(false);
+      return;
+    }
+
+    setState(() => _isSaving = true);
+    try {
+      if (titleChanged) {
+        await _repo.updateChatInfo(chatId, title: nextTitle);
+      }
+      if (_newAvatar != null) {
+        await _repo.uploadChatAvatar(chatId, _newAvatar!);
+      } else if (_removeAvatar && hadAvatar) {
+        await _repo.removeChatAvatar(chatId);
+      }
+      if (!mounted) return;
+      showGlassSnack(
+        context,
+        'Изменения сохранены',
+        kind: GlassSnackKind.success,
+      );
+      Navigator.of(context).pop(true);
+    } catch (e) {
+      if (!mounted) return;
+      showGlassSnack(context, e.toString(), kind: GlassSnackKind.error);
+      setState(() => _isSaving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final baseInk = isDark ? Colors.white : Colors.black;
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+    final currentAvatarUrl = widget.chat.user.avatarUrl.trim();
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(12, 12, 12, bottomInset + 12),
+      child: GlassSurface(
+        borderRadius: 24,
+        blurSigma: 16,
+        borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.10),
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Редактирование',
+              style: theme.textTheme.titleMedium?.copyWith(
+                color: theme.colorScheme.onSurface,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 14),
+            Center(
+              child: SizedBox(
+                width: 94,
+                height: 94,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(47),
+                  child: _newAvatar != null
+                      ? Image.file(_newAvatar!, fit: BoxFit.cover)
+                      : (_removeAvatar || currentAvatarUrl.isEmpty)
+                      ? Container(
+                          color: theme.colorScheme.surface,
+                          alignment: Alignment.center,
+                          child: Text(
+                            (widget.chat.user.name.isNotEmpty
+                                    ? widget.chat.user.name[0]
+                                    : '?')
+                                .toUpperCase(),
+                            style: theme.textTheme.headlineSmall?.copyWith(
+                              color: theme.colorScheme.onSurface,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        )
+                      : Image.network(
+                          currentAvatarUrl,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) {
+                            return Container(
+                              color: theme.colorScheme.surface,
+                              alignment: Alignment.center,
+                              child: Text(
+                                (widget.chat.user.name.isNotEmpty
+                                        ? widget.chat.user.name[0]
+                                        : '?')
+                                    .toUpperCase(),
+                                style: theme.textTheme.headlineSmall?.copyWith(
+                                  color: theme.colorScheme.onSurface,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                TextButton(
+                  onPressed: _isSaving ? null : _pickAvatar,
+                  child: const Text('Сменить аватар'),
+                ),
+                if (_newAvatar != null ||
+                    (!_removeAvatar && currentAvatarUrl.isNotEmpty))
+                  TextButton(
+                    onPressed: _isSaving ? null : _markAvatarForRemove,
+                    child: const Text('Удалить'),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _titleCtrl,
+              maxLength: 80,
+              textInputAction: TextInputAction.done,
+              enabled: !_isSaving,
+              decoration: InputDecoration(
+                labelText: 'Название',
+                labelStyle: TextStyle(
+                  color: theme.colorScheme.onSurface.withOpacity(0.75),
+                ),
+                filled: true,
+                fillColor: Colors.transparent,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  borderSide: BorderSide(
+                    color: baseInk.withOpacity(isDark ? 0.28 : 0.18),
+                  ),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  borderSide: BorderSide(
+                    color: baseInk.withOpacity(isDark ? 0.28 : 0.18),
+                  ),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  borderSide: BorderSide(
+                    color: theme.colorScheme.primary,
+                    width: 1.5,
+                  ),
+                ),
+                counterText: '',
+              ),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: TextButton(
+                    onPressed: _isSaving
+                        ? null
+                        : () => Navigator.of(context).pop(false),
+                    child: const Text('Отмена'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: _isSaving ? null : _save,
+                    child: Text(_isSaving ? 'Сохранение...' : 'Сохранить'),
+                  ),
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     );

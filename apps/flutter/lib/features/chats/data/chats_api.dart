@@ -1,8 +1,12 @@
+import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
+import 'package:http/http.dart' as http;
 
 import 'package:ren/core/constants/api_url.dart';
+import 'package:ren/core/sdk/ren_sdk.dart';
 import 'package:ren/core/secure/secure_storage.dart';
 import 'package:ren/core/constants/keys.dart';
 
@@ -317,6 +321,78 @@ class ChatsApi {
         statusCode: e.response?.statusCode,
       );
     }
+  }
+
+  Future<void> uploadChatAvatar(int chatId, File file) async {
+    final token = await _requireToken();
+    var attempt = 0;
+    while (true) {
+      attempt += 1;
+      try {
+        final uri = Uri.parse('${Apiurl.api}/chats/$chatId/avatar');
+        final request = http.MultipartRequest('POST', uri);
+        request.headers['Authorization'] = 'Bearer $token';
+        final sdkFingerprint = currentSdkFingerprint();
+        if (sdkFingerprint.isNotEmpty) {
+          request.headers['X-SDK-Fingerprint'] = sdkFingerprint;
+        }
+
+        final filename = file.uri.pathSegments.isNotEmpty
+            ? file.uri.pathSegments.last
+            : 'chat_avatar.jpg';
+        request.files.add(
+          await http.MultipartFile.fromPath(
+            'avatar',
+            file.path,
+            filename: filename,
+          ),
+        );
+
+        final streamedResponse = await request.send();
+        final response = await http.Response.fromStream(streamedResponse);
+        if (response.statusCode >= 200 && response.statusCode < 300) {
+          return;
+        }
+        throw ApiException(
+          response.body.isNotEmpty
+              ? response.body
+              : 'Ошибка загрузки аватара чата',
+          statusCode: response.statusCode,
+        );
+      } on SocketException {
+        await Future<void>.delayed(_delayForAttempt(attempt));
+      } on HttpException {
+        await Future<void>.delayed(_delayForAttempt(attempt));
+      } on TimeoutException {
+        await Future<void>.delayed(_delayForAttempt(attempt));
+      }
+    }
+  }
+
+  Future<void> removeChatAvatar(int chatId) async {
+    final token = await _requireToken();
+    try {
+      final form = FormData.fromMap({'remove': 'true'});
+      await dio.post(
+        '${Apiurl.api}/chats/$chatId/avatar',
+        data: form,
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+    } on DioException catch (e) {
+      throw ApiException(
+        (e.response?.data is String)
+            ? e.response?.data as String
+            : 'Ошибка удаления аватара чата',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
+  Duration _delayForAttempt(int attempt) {
+    if (attempt <= 1) return const Duration(milliseconds: 200);
+    if (attempt == 2) return const Duration(milliseconds: 500);
+    if (attempt == 3) return const Duration(seconds: 1);
+    return const Duration(seconds: 2);
   }
 
   Future<String> getPublicKey(int userId) async {

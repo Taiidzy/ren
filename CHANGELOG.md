@@ -95,13 +95,24 @@
 #### Owner-only chat info editing
 - Добавлена возможность для владельца изменять информацию о чате:
   - кнопка редактирования видна только владельцу канала/группы;
-  - диалог для изменения названия чата;
-  - заглушка для смены аватарки (требует backend интеграции);
-  - добавлен метод `updateChatInfo` в API и репозиторий.
+  - bottom sheet для изменения названия;
+  - загрузка/удаление аватарки чата с обрезкой изображения;
+  - добавлены методы `updateChatInfo`, `uploadChatAvatar`, `removeChatAvatar` в API и репозиторий;
+  - обработка realtime-события `chat_updated` для мгновенного обновления списка.
 - Файлы:
-  - `lib/features/chats/data/chats_api.dart` — endpoint `/chats/:id`;
-  - `lib/features/chats/data/chats_repository.dart` — метод `updateChatInfo`;
-  - `lib/features/chats/presentation/chat_page.dart` — `_editChatInfo`, `_changeAvatar`.
+  - `apps/flutter/lib/features/chats/data/chats_api.dart`
+  - `apps/flutter/lib/features/chats/data/chats_repository.dart`
+  - `apps/flutter/lib/features/chats/presentation/chats_page.dart`
+  - `apps/flutter/lib/features/profile/presentation/widgets/profile_edit_sheet.dart`
+
+#### Logout/login profile state reset fix
+- Исправлен баг, при котором после выхода и входа под другим пользователем на экране профиля могли оставаться данные предыдущего пользователя (avatar/display name/username).
+- Изменения:
+  - при logout теперь явно сбрасывается `ProfileStore`;
+  - при logout очищается локальный кэш чатов/сообщений/медиа, чтобы не показывать данные прошлой сессии до синхронизации.
+- Файлы:
+  - `apps/flutter/lib/features/profile/presentation/profile_store.dart`
+  - `apps/flutter/lib/features/profile/presentation/profile_menu_page.dart`
 
 #### Sender name/avatar in group messages
 - Добавлено отображение имени и аватарки отправителя в групповых чатах:
@@ -154,6 +165,9 @@
   - поддержка обновления `title` и `avatar`;
   - проверка прав доступа (только владелец);
   - валидация входных данных.
+- Добавлен endpoint `POST/PATCH /chats/:id/avatar` для загрузки и удаления аватара группы/канала.
+- Добавлена миграция с колонкой `chats.avatar` и публикация realtime-события `chat_updated`.
+- Для `GET /chats` в `group/channel` возвращается аватар чата (`chats.avatar`), а не аватар первого участника.
 - Практический эффект:
   - владелец может изменять название и аватарку группы/канала.
 

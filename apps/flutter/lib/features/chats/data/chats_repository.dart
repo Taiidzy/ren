@@ -251,7 +251,9 @@ class ChatsRepository {
       final lastMessageAt = DateTime.tryParse(lastMessageAtStr) ?? updatedAt;
 
       final userName = _isPrivateKind(kind)
-          ? (peerNickname.isNotEmpty ? peerNickname : (peerUsername.isNotEmpty ? peerUsername : 'User'))
+          ? (peerNickname.isNotEmpty
+                ? peerNickname
+                : (peerUsername.isNotEmpty ? peerUsername : 'User'))
           : (title.isNotEmpty ? title : 'Chat');
       final user = ChatUser(
         id: (peerId ?? 0).toString(),
@@ -395,7 +397,9 @@ class ChatsRepository {
       out.add(
         ChatUser(
           id: id.toString(),
-          name: nickname.isNotEmpty ? nickname : (username.isNotEmpty ? username : 'User'),
+          name: nickname.isNotEmpty
+              ? nickname
+              : (username.isNotEmpty ? username : 'User'),
           nickname: nickname.isNotEmpty ? nickname : null,
           avatarUrl: _avatarUrl(avatar),
           isOnline: false,
@@ -817,8 +821,8 @@ class ChatsRepository {
     final resolvedName = peerNickname.isNotEmpty
         ? peerNickname
         : (peerUsername.isNotEmpty
-            ? peerUsername
-            : (fallbackName.isNotEmpty ? fallbackName : 'User'));
+              ? peerUsername
+              : (fallbackName.isNotEmpty ? fallbackName : 'User'));
 
     final peerAvatar = ((json['peer_avatar'] as String?) ?? '').trim();
     final fallbackAvatar = (fallbackPeerAvatarUrl ?? '').trim();
@@ -994,6 +998,14 @@ class ChatsRepository {
     String? avatarPath,
   }) async {
     await api.updateChatInfo(chatId, title: title, avatarPath: avatarPath);
+  }
+
+  Future<void> uploadChatAvatar(int chatId, File file) async {
+    await api.uploadChatAvatar(chatId, file);
+  }
+
+  Future<void> removeChatAvatar(int chatId) async {
+    await api.removeChatAvatar(chatId);
   }
 
   Future<void> deleteChat(int chatId, {bool forAll = false}) async {
