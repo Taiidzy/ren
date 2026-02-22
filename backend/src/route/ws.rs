@@ -364,6 +364,25 @@ pub fn publish_chat_created(
     publish_payload_to_users(state, recipients, payload);
 }
 
+pub fn publish_chat_updated(
+    state: &AppState,
+    recipients: &[i32],
+    chat_id: i32,
+    title: Option<&str>,
+    avatar: Option<&str>,
+    changed_by: i32,
+) {
+    let payload = json!({
+        "type": "chat_updated",
+        "chat_id": chat_id,
+        "title": title,
+        "avatar": avatar,
+        "changed_by": changed_by
+    })
+    .to_string();
+    publish_payload_to_users(state, recipients, payload);
+}
+
 pub fn publish_message_read(
     state: &AppState,
     recipients: &[i32],

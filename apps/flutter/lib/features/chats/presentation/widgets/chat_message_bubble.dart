@@ -41,6 +41,11 @@ class ChatMessageBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final baseInk = isDark ? Colors.white : Colors.black;
+    final mediaW = MediaQuery.sizeOf(context).width;
+    final bubbleMaxWidth = (mediaW * 0.68).clamp(240.0, 300.0).toDouble();
+    final attachmentWidth = (bubbleMaxWidth - 40)
+        .clamp(200.0, 240.0)
+        .toDouble();
     final dpr = MediaQuery.of(context).devicePixelRatio;
     final isMeColor = isMe
         ? (isDark
@@ -68,7 +73,7 @@ class ChatMessageBubble extends StatelessWidget {
       color: isMeColor,
       borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.10),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 260),
+        constraints: BoxConstraints(maxWidth: bubbleMaxWidth),
         child: Padding(
           padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
           child: Column(
@@ -143,7 +148,7 @@ class ChatMessageBubble extends StatelessWidget {
                       onTap: () => onTapAttachment(a),
                       borderRadius: BorderRadius.circular(12),
                       child: Container(
-                        width: 220,
+                        width: attachmentWidth,
                         height: 140,
                         decoration: BoxDecoration(
                           color: theme.colorScheme.surface,
@@ -348,6 +353,8 @@ class _ChatImageCollageState extends State<_ChatImageCollage> {
 
   @override
   Widget build(BuildContext context) {
+    final mediaW = MediaQuery.sizeOf(context).width;
+    final collageWidth = (mediaW * 0.56).clamp(200.0, 220.0).toDouble();
     const gap = 2.0;
 
     return FutureBuilder<List<double?>>(
@@ -397,7 +404,7 @@ class _ChatImageCollageState extends State<_ChatImageCollage> {
           }
 
           return SizedBox(
-            width: 220,
+            width: collageWidth,
             child: Row(
               children: [
                 Expanded(
@@ -480,7 +487,7 @@ class _ChatImageCollageState extends State<_ChatImageCollage> {
           }
 
           return SizedBox(
-            width: 220,
+            width: collageWidth,
             child: Row(
               children: [
                 Expanded(
@@ -526,8 +533,8 @@ class _ChatImageCollageState extends State<_ChatImageCollage> {
         }
 
         return SizedBox(
-          width: 220,
-          height: 220,
+          width: collageWidth,
+          height: collageWidth,
           child: Column(
             children: [
               Expanded(
@@ -606,7 +613,9 @@ class _ChatImageThumb extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final maxW = tight ? double.infinity : 220.0;
+    final mediaW = MediaQuery.sizeOf(context).width;
+    final baseWidth = (mediaW * 0.56).clamp(200.0, 220.0).toDouble();
+    final maxW = tight ? double.infinity : baseWidth;
 
     return FutureBuilder<double?>(
       future: _ChatImageAspectCache.instance.read(attachment.localPath),
@@ -630,12 +639,12 @@ class _ChatImageThumb extends StatelessWidget {
                   child: Image.file(
                     File(attachment.localPath),
                     fit: fit,
-                    cacheWidth: (220 * dpr).round(),
+                    cacheWidth: (baseWidth * dpr).round(),
                     cacheHeight: (maxH * dpr).round(),
                     errorBuilder: (context, error, stack) {
                       return Container(
-                        width: 220,
-                        height: 160,
+                        width: baseWidth,
+                        height: maxH,
                         color: Theme.of(context).colorScheme.surface,
                       );
                     },

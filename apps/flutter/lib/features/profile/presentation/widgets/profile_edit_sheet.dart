@@ -214,7 +214,13 @@ class _ProfileEditContentState extends State<_ProfileEditContent> {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final baseInk = isDark ? Colors.white : Colors.black;
+    final sheetWidth = MediaQuery.sizeOf(context).width;
     final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+    final isCompact = sheetWidth < 360;
+    final outerHorizontal = isCompact ? 12.0 : 16.0;
+    final cardPadding = isCompact ? 14.0 : 18.0;
+    final avatarSize = isCompact ? 92.0 : 104.0;
+    final avatarFontSize = isCompact ? 24.0 : 28.0;
 
     return Consumer<ProfileStore>(
       builder: (context, store, _) {
@@ -224,7 +230,12 @@ class _ProfileEditContentState extends State<_ProfileEditContent> {
         return ListView(
           controller: widget.scrollController,
           keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-          padding: EdgeInsets.fromLTRB(16, 10, 16, 22 + bottomInset),
+          padding: EdgeInsets.fromLTRB(
+            outerHorizontal,
+            10,
+            outerHorizontal,
+            22 + bottomInset,
+          ),
           children: [
             if (widget.showDragHandle)
               Center(
@@ -263,7 +274,12 @@ class _ProfileEditContentState extends State<_ProfileEditContent> {
               borderRadius: 24,
               blurSigma: 14,
               width: double.infinity,
-              padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
+              padding: EdgeInsets.fromLTRB(
+                cardPadding,
+                cardPadding - 2,
+                cardPadding,
+                cardPadding,
+              ),
               borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.12),
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 420),
@@ -272,8 +288,8 @@ class _ProfileEditContentState extends State<_ProfileEditContent> {
                   children: [
                     const SizedBox(height: 6),
                     SizedBox(
-                      width: 104,
-                      height: 104,
+                      width: avatarSize,
+                      height: avatarSize,
                       child: ClipOval(
                         child: (user?.avatar ?? '').isEmpty
                             ? ColoredBox(
@@ -284,7 +300,7 @@ class _ProfileEditContentState extends State<_ProfileEditContent> {
                                     style: TextStyle(
                                       color: theme.colorScheme.onSurface,
                                       fontWeight: FontWeight.w700,
-                                      fontSize: 28,
+                                      fontSize: avatarFontSize,
                                     ),
                                   ),
                                 ),
@@ -301,7 +317,7 @@ class _ProfileEditContentState extends State<_ProfileEditContent> {
                                         style: TextStyle(
                                           color: theme.colorScheme.onSurface,
                                           fontWeight: FontWeight.w700,
-                                          fontSize: 28,
+                                          fontSize: avatarFontSize,
                                         ),
                                       ),
                                     ),
@@ -314,22 +330,24 @@ class _ProfileEditContentState extends State<_ProfileEditContent> {
                     Row(
                       children: [
                         Expanded(
-                          child: GlassSurface(
-                            borderRadius: 14,
-                            blurSigma: 12,
-                            height: 44,
-                            borderColor: baseInk.withOpacity(
-                              isDark ? 0.20 : 0.10,
-                            ),
-                            onTap: store.isLoading ? null : _pickAvatar,
-                            child: Center(
-                              child: Text(
-                                store.isLoading
-                                    ? 'Загрузка...'
-                                    : 'Выбрать фото',
-                                style: theme.textTheme.titleSmall?.copyWith(
-                                  color: theme.colorScheme.onSurface,
-                                  fontWeight: FontWeight.w700,
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(minHeight: 44),
+                            child: GlassSurface(
+                              borderRadius: 14,
+                              blurSigma: 12,
+                              borderColor: baseInk.withOpacity(
+                                isDark ? 0.20 : 0.10,
+                              ),
+                              onTap: store.isLoading ? null : _pickAvatar,
+                              child: Center(
+                                child: Text(
+                                  store.isLoading
+                                      ? 'Загрузка...'
+                                      : 'Выбрать фото',
+                                  style: theme.textTheme.titleSmall?.copyWith(
+                                    color: theme.colorScheme.onSurface,
+                                    fontWeight: FontWeight.w700,
+                                  ),
                                 ),
                               ),
                             ),
@@ -337,21 +355,23 @@ class _ProfileEditContentState extends State<_ProfileEditContent> {
                         ),
                         const SizedBox(width: 10),
                         Expanded(
-                          child: GlassSurface(
-                            borderRadius: 14,
-                            blurSigma: 12,
-                            height: 44,
-                            color: const Color(0xFF991B1B).withOpacity(0.55),
-                            borderColor: baseInk.withOpacity(
-                              isDark ? 0.20 : 0.10,
-                            ),
-                            onTap: store.isLoading ? null : _removeAvatar,
-                            child: Center(
-                              child: Text(
-                                'Удалить',
-                                style: theme.textTheme.titleSmall?.copyWith(
-                                  color: theme.colorScheme.onSurface,
-                                  fontWeight: FontWeight.w700,
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(minHeight: 44),
+                            child: GlassSurface(
+                              borderRadius: 14,
+                              blurSigma: 12,
+                              color: const Color(0xFF991B1B).withOpacity(0.55),
+                              borderColor: baseInk.withOpacity(
+                                isDark ? 0.20 : 0.10,
+                              ),
+                              onTap: store.isLoading ? null : _removeAvatar,
+                              child: Center(
+                                child: Text(
+                                  'Удалить',
+                                  style: theme.textTheme.titleSmall?.copyWith(
+                                    color: theme.colorScheme.onSurface,
+                                    fontWeight: FontWeight.w700,
+                                  ),
                                 ),
                               ),
                             ),
@@ -460,18 +480,20 @@ class _ProfileEditContentState extends State<_ProfileEditContent> {
                       ),
                     ),
                     const SizedBox(height: 12),
-                    GlassSurface(
-                      borderRadius: 14,
-                      blurSigma: 12,
-                      height: 46,
-                      borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.10),
-                      onTap: store.isLoading ? null : _saveNickname,
-                      child: Center(
-                        child: Text(
-                          store.isLoading ? 'Сохранение...' : 'Сохранить',
-                          style: theme.textTheme.titleSmall?.copyWith(
-                            color: theme.colorScheme.onSurface,
-                            fontWeight: FontWeight.w700,
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(minHeight: 46),
+                      child: GlassSurface(
+                        borderRadius: 14,
+                        blurSigma: 12,
+                        borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.10),
+                        onTap: store.isLoading ? null : _saveNickname,
+                        child: Center(
+                          child: Text(
+                            store.isLoading ? 'Сохранение...' : 'Сохранить',
+                            style: theme.textTheme.titleSmall?.copyWith(
+                              color: theme.colorScheme.onSurface,
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
                         ),
                       ),

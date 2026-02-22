@@ -1,15 +1,18 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'package:hugeicons/hugeicons.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
 import 'package:ren/features/chats/data/chats_repository.dart';
 import 'package:ren/features/chats/domain/chat_models.dart';
 import 'package:ren/features/chats/presentation/chat_page.dart';
 import 'package:ren/features/profile/presentation/profile_menu_page.dart';
+import 'package:ren/features/profile/presentation/widgets/profile_edit_sheet.dart';
 
 import 'package:ren/core/constants/api_url.dart';
 import 'package:ren/core/constants/keys.dart';
@@ -531,6 +534,16 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
             value: 'favorite',
           ),
         ),
+        if (isGroupOrChannel && isOwner) ...[
+          const RenContextMenuEntry.divider(),
+          RenContextMenuEntry.action(
+            RenContextMenuAction<String>(
+              icon: const Icon(Icons.edit_rounded, size: 20),
+              label: 'Редактировать',
+              value: 'edit_chat',
+            ),
+          ),
+        ],
         const RenContextMenuEntry.divider(),
         RenContextMenuEntry.action(
           RenContextMenuAction<String>(
@@ -563,6 +576,19 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
       } catch (e) {
         if (!mounted) return;
         showGlassSnack(context, e.toString(), kind: GlassSnackKind.error);
+      }
+      return;
+    }
+
+    if (action == 'edit_chat') {
+      final updated = await showModalBottomSheet<bool>(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (_) => _EditGroupChannelSheet(chat: chat),
+      );
+      if (updated == true) {
+        await _reloadChats();
       }
       return;
     }
@@ -741,6 +767,11 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
         return;
       }
 
+      if (evt.type == 'chat_updated') {
+        unawaited(_syncChats());
+        return;
+      }
+
       if (evt.type == 'profile_updated') {
         final userDyn = evt.data['user'];
         if (userDyn is! Map) return;
@@ -768,7 +799,9 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                   kind: c.kind,
                   user: ChatUser(
                     id: c.user.id,
-                    name: nickname.isNotEmpty ? nickname : (username.isNotEmpty ? username : c.user.name),
+                    name: nickname.isNotEmpty
+                        ? nickname
+                        : (username.isNotEmpty ? username : c.user.name),
                     nickname: nickname.isNotEmpty ? nickname : null,
                     avatarUrl: avatarUrl.isNotEmpty
                         ? avatarUrl
@@ -871,6 +904,11 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final theme = Theme.of(context);
     final baseInk = isDark ? Colors.white : Colors.black;
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final appBarSearchHorizontalInset = (screenWidth * 0.16)
+        .clamp(16.0, 96.0)
+        .toDouble();
+    final pageHorizontalPadding = screenWidth < 360 ? 12.0 : 16.0;
     return AppBackground(
       // Опционально: передайте картинку, чтобы она была задним фоном
       // backgroundImage: AssetImage('assets/wallpapers/my_bg.jpg'),
@@ -886,43 +924,43 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
           title: ValueListenableBuilder<bool>(
             valueListenable: context.read<ChatsRepository>().chatsSyncing,
             builder: (context, isSyncing, _) {
-              return SizedBox(
-                width: 124,
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    Text(
-                      'Чаты',
-                      style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                        color: theme.colorScheme.onSurface,
-                      ),
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Чаты',
+                    style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                      color: theme.colorScheme.onSurface,
                     ),
-                    Positioned(
-                      right: 0,
-                      child: AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 180),
-                        child: isSyncing
-                            ? SizedBox(
-                                key: const ValueKey('syncing'),
-                                width: 14,
-                                height: 14,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: theme.colorScheme.onSurface
-                                      .withOpacity(0.8),
+                  ),
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 180),
+                      child: isSyncing
+                          ? SizedBox(
+                              key: const ValueKey('syncing'),
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: theme.colorScheme.onSurface.withOpacity(
+                                  0.8,
                                 ),
-                              )
-                            : const SizedBox(
-                                key: ValueKey('idle'),
-                                width: 14,
-                                height: 14,
                               ),
-                      ),
+                            )
+                          : const SizedBox(
+                              key: ValueKey('idle'),
+                              width: 14,
+                              height: 14,
+                            ),
                     ),
-                  ],
-                ),
+                  ),
+                ],
               );
             },
           ),
@@ -947,7 +985,12 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
           bottom: PreferredSize(
             preferredSize: const Size.fromHeight(36),
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(64, 0, 64, 4),
+              padding: EdgeInsets.fromLTRB(
+                appBarSearchHorizontalInset,
+                0,
+                appBarSearchHorizontalInset,
+                4,
+              ),
               child: GlassSurface(
                 blurSigma: 12,
                 borderColor: baseInk.withOpacity(0),
@@ -1060,7 +1103,12 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
               final favorites = favoriteChats.map((c) => c.user).toList();
 
               return Padding(
-                padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+                padding: EdgeInsets.fromLTRB(
+                  pageHorizontalPadding,
+                  14,
+                  pageHorizontalPadding,
+                  0,
+                ),
                 child: Column(
                   children: [
                     favoriteChats.isEmpty
@@ -1213,15 +1261,21 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                                                           .onSurface,
                                                     ),
                                                     const SizedBox(width: 6),
-                                                    Text(
-                                                      'Создать группу',
-                                                      style: theme
-                                                          .textTheme
-                                                          .bodySmall
-                                                          ?.copyWith(
-                                                            fontWeight:
-                                                                FontWeight.w600,
-                                                          ),
+                                                    Flexible(
+                                                      child: Text(
+                                                        'Создать группу',
+                                                        maxLines: 1,
+                                                        overflow: TextOverflow
+                                                            .ellipsis,
+                                                        style: theme
+                                                            .textTheme
+                                                            .bodySmall
+                                                            ?.copyWith(
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w600,
+                                                            ),
+                                                      ),
                                                     ),
                                                   ],
                                                 ),
@@ -1266,15 +1320,21 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                                                           .onSurface,
                                                     ),
                                                     const SizedBox(width: 6),
-                                                    Text(
-                                                      'Создать канал',
-                                                      style: theme
-                                                          .textTheme
-                                                          .bodySmall
-                                                          ?.copyWith(
-                                                            fontWeight:
-                                                                FontWeight.w600,
-                                                          ),
+                                                    Flexible(
+                                                      child: Text(
+                                                        'Создать канал',
+                                                        maxLines: 1,
+                                                        overflow: TextOverflow
+                                                            .ellipsis,
+                                                        style: theme
+                                                            .textTheme
+                                                            .bodySmall
+                                                            ?.copyWith(
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w600,
+                                                            ),
+                                                      ),
                                                     ),
                                                   ],
                                                 ),
@@ -1554,127 +1614,133 @@ class _ChatTile extends StatelessWidget {
     return _Pressable(
       onTap: onTap,
       onLongPressStart: (d) => onLongPressAt(d.globalPosition),
-      child: GlassSurface(
-        borderRadius: 18,
-        blurSigma: 14,
-        height: 72,
-        padding: const EdgeInsets.symmetric(horizontal: 14),
-        borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.12),
-        child: Row(
-          children: [
-            RenAvatar(
-              url: chat.user.avatarUrl,
-              name: chat.user.name,
-              isOnline: chat.user.isOnline,
-              size: 44,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    chat.user.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: theme.colorScheme.onSurface,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 72),
+        child: GlassSurface(
+          borderRadius: 18,
+          blurSigma: 14,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+          borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.12),
+          child: Row(
+            children: [
+              RenAvatar(
+                url: chat.user.avatarUrl,
+                name: chat.user.name,
+                isOnline: chat.user.isOnline,
+                size: 44,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      chat.user.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: theme.colorScheme.onSurface,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 2),
-                  Row(
-                    children: [
-                      if (chat.lastMessageIsMine || chat.lastMessageIsPending)
-                        Padding(
-                          padding: const EdgeInsets.only(right: 4),
-                          child: Icon(
-                            chat.lastMessageIsPending
-                                ? Icons.schedule_rounded
-                                : (chat.lastMessageIsRead ||
-                                          chat.lastMessageIsDelivered
-                                      ? Icons.done_all_rounded
-                                      : Icons.done_rounded),
-                            size: 13,
-                            color: chat.lastMessageIsPending
-                                ? theme.colorScheme.onSurface.withOpacity(0.55)
-                                : (chat.lastMessageIsRead
-                                      ? theme.colorScheme.primary.withOpacity(
-                                          0.92,
-                                        )
-                                      : (chat.lastMessageIsDelivered
-                                            ? theme.colorScheme.onSurface
-                                                  .withOpacity(0.65)
-                                            : theme.colorScheme.onSurface
-                                                  .withOpacity(0.55))),
+                    const SizedBox(height: 2),
+                    Row(
+                      children: [
+                        if (chat.lastMessageIsMine || chat.lastMessageIsPending)
+                          Padding(
+                            padding: const EdgeInsets.only(right: 4),
+                            child: Icon(
+                              chat.lastMessageIsPending
+                                  ? Icons.schedule_rounded
+                                  : (chat.lastMessageIsRead ||
+                                            chat.lastMessageIsDelivered
+                                        ? Icons.done_all_rounded
+                                        : Icons.done_rounded),
+                              size: 13,
+                              color: chat.lastMessageIsPending
+                                  ? theme.colorScheme.onSurface.withOpacity(
+                                      0.55,
+                                    )
+                                  : (chat.lastMessageIsRead
+                                        ? theme.colorScheme.primary.withOpacity(
+                                            0.92,
+                                          )
+                                        : (chat.lastMessageIsDelivered
+                                              ? theme.colorScheme.onSurface
+                                                    .withOpacity(0.65)
+                                              : theme.colorScheme.onSurface
+                                                    .withOpacity(0.55))),
+                            ),
                           ),
-                        ),
-                      Expanded(
-                        child: Text(
-                          chat.lastMessage,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: theme.colorScheme.onSurface.withOpacity(
-                              0.70,
+                        Expanded(
+                          child: Text(
+                            chat.lastMessage,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: theme.colorScheme.onSurface.withOpacity(
+                                0.70,
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    _formatTime(chat.lastMessageAt),
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: theme.colorScheme.onSurface.withOpacity(0.60),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 180),
+                    child: unreadCount > 0
+                        ? Container(
+                            key: ValueKey<int>(unreadCount),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 7,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: theme.colorScheme.primary.withOpacity(
+                                0.92,
+                              ),
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            constraints: const BoxConstraints(minWidth: 22),
+                            alignment: Alignment.center,
+                            child: Text(
+                              unreadCount > 99 ? '99+' : '$unreadCount',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w800,
+                                color: theme.colorScheme.onPrimary,
+                              ),
+                            ),
+                          )
+                        : const SizedBox(
+                            key: ValueKey('no_unread'),
+                            width: 22,
+                            height: 16,
+                          ),
                   ),
                 ],
               ),
-            ),
-            const SizedBox(width: 10),
-            Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(
-                  _formatTime(chat.lastMessageAt),
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: theme.colorScheme.onSurface.withOpacity(0.60),
-                  ),
-                ),
-                const SizedBox(height: 6),
-                AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 180),
-                  child: unreadCount > 0
-                      ? Container(
-                          key: ValueKey<int>(unreadCount),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 7,
-                            vertical: 2,
-                          ),
-                          decoration: BoxDecoration(
-                            color: theme.colorScheme.primary.withOpacity(0.92),
-                            borderRadius: BorderRadius.circular(999),
-                          ),
-                          constraints: const BoxConstraints(minWidth: 22),
-                          alignment: Alignment.center,
-                          child: Text(
-                            unreadCount > 99 ? '99+' : '$unreadCount',
-                            style: TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w800,
-                              color: theme.colorScheme.onPrimary,
-                            ),
-                          ),
-                        )
-                      : const SizedBox(
-                          key: ValueKey('no_unread'),
-                          width: 22,
-                          height: 16,
-                        ),
-                ),
-              ],
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -1732,6 +1798,254 @@ class _PressableState extends State<_Pressable> {
           curve: Curves.easeOut,
           opacity: opacity,
           child: widget.child,
+        ),
+      ),
+    );
+  }
+}
+
+class _EditGroupChannelSheet extends StatefulWidget {
+  final ChatPreview chat;
+
+  const _EditGroupChannelSheet({required this.chat});
+
+  @override
+  State<_EditGroupChannelSheet> createState() => _EditGroupChannelSheetState();
+}
+
+class _EditGroupChannelSheetState extends State<_EditGroupChannelSheet> {
+  final _titleCtrl = TextEditingController();
+  File? _newAvatar;
+  bool _removeAvatar = false;
+  bool _isSaving = false;
+
+  ChatsRepository get _repo => context.read<ChatsRepository>();
+
+  @override
+  void initState() {
+    super.initState();
+    _titleCtrl.text = widget.chat.user.name.trim();
+  }
+
+  @override
+  void dispose() {
+    _titleCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickAvatar() async {
+    final picker = ImagePicker();
+    final source = await picker.pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 96,
+      maxWidth: 2048,
+      maxHeight: 2048,
+    );
+    if (source == null || !mounted) return;
+    final cropped = await AvatarCropEditor.show(context, File(source.path));
+    if (cropped == null || !mounted) return;
+    setState(() {
+      _newAvatar = cropped;
+      _removeAvatar = false;
+    });
+  }
+
+  void _markAvatarForRemove() {
+    setState(() {
+      _newAvatar = null;
+      _removeAvatar = true;
+    });
+  }
+
+  Future<void> _save() async {
+    if (_isSaving) return;
+    final chatId = int.tryParse(widget.chat.id) ?? 0;
+    if (chatId <= 0) return;
+
+    final nextTitle = _titleCtrl.text.trim();
+    if (nextTitle.isEmpty) {
+      showGlassSnack(context, 'Введите название', kind: GlassSnackKind.error);
+      return;
+    }
+
+    final initialTitle = widget.chat.user.name.trim();
+    final hadAvatar = widget.chat.user.avatarUrl.trim().isNotEmpty;
+    final titleChanged = nextTitle != initialTitle;
+    final avatarChanged = _newAvatar != null || (_removeAvatar && hadAvatar);
+    if (!titleChanged && !avatarChanged) {
+      Navigator.of(context).pop(false);
+      return;
+    }
+
+    setState(() => _isSaving = true);
+    try {
+      if (titleChanged) {
+        await _repo.updateChatInfo(chatId, title: nextTitle);
+      }
+      if (_newAvatar != null) {
+        await _repo.uploadChatAvatar(chatId, _newAvatar!);
+      } else if (_removeAvatar && hadAvatar) {
+        await _repo.removeChatAvatar(chatId);
+      }
+      if (!mounted) return;
+      showGlassSnack(
+        context,
+        'Изменения сохранены',
+        kind: GlassSnackKind.success,
+      );
+      Navigator.of(context).pop(true);
+    } catch (e) {
+      if (!mounted) return;
+      showGlassSnack(context, e.toString(), kind: GlassSnackKind.error);
+      setState(() => _isSaving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final baseInk = isDark ? Colors.white : Colors.black;
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+    final currentAvatarUrl = widget.chat.user.avatarUrl.trim();
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(12, 12, 12, bottomInset + 12),
+      child: GlassSurface(
+        borderRadius: 24,
+        blurSigma: 16,
+        borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.10),
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Редактирование',
+              style: theme.textTheme.titleMedium?.copyWith(
+                color: theme.colorScheme.onSurface,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 14),
+            Center(
+              child: SizedBox(
+                width: 94,
+                height: 94,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(47),
+                  child: _newAvatar != null
+                      ? Image.file(_newAvatar!, fit: BoxFit.cover)
+                      : (_removeAvatar || currentAvatarUrl.isEmpty)
+                      ? Container(
+                          color: theme.colorScheme.surface,
+                          alignment: Alignment.center,
+                          child: Text(
+                            (widget.chat.user.name.isNotEmpty
+                                    ? widget.chat.user.name[0]
+                                    : '?')
+                                .toUpperCase(),
+                            style: theme.textTheme.headlineSmall?.copyWith(
+                              color: theme.colorScheme.onSurface,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        )
+                      : Image.network(
+                          currentAvatarUrl,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) {
+                            return Container(
+                              color: theme.colorScheme.surface,
+                              alignment: Alignment.center,
+                              child: Text(
+                                (widget.chat.user.name.isNotEmpty
+                                        ? widget.chat.user.name[0]
+                                        : '?')
+                                    .toUpperCase(),
+                                style: theme.textTheme.headlineSmall?.copyWith(
+                                  color: theme.colorScheme.onSurface,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                TextButton(
+                  onPressed: _isSaving ? null : _pickAvatar,
+                  child: const Text('Сменить аватар'),
+                ),
+                if (_newAvatar != null ||
+                    (!_removeAvatar && currentAvatarUrl.isNotEmpty))
+                  TextButton(
+                    onPressed: _isSaving ? null : _markAvatarForRemove,
+                    child: const Text('Удалить'),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _titleCtrl,
+              maxLength: 80,
+              textInputAction: TextInputAction.done,
+              enabled: !_isSaving,
+              decoration: InputDecoration(
+                labelText: 'Название',
+                labelStyle: TextStyle(
+                  color: theme.colorScheme.onSurface.withOpacity(0.75),
+                ),
+                filled: true,
+                fillColor: Colors.transparent,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  borderSide: BorderSide(
+                    color: baseInk.withOpacity(isDark ? 0.28 : 0.18),
+                  ),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  borderSide: BorderSide(
+                    color: baseInk.withOpacity(isDark ? 0.28 : 0.18),
+                  ),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  borderSide: BorderSide(
+                    color: theme.colorScheme.primary,
+                    width: 1.5,
+                  ),
+                ),
+                counterText: '',
+              ),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: TextButton(
+                    onPressed: _isSaving
+                        ? null
+                        : () => Navigator.of(context).pop(false),
+                    child: const Text('Отмена'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: _isSaving ? null : _save,
+                    child: Text(_isSaving ? 'Сохранение...' : 'Сохранить'),
+                  ),
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     );

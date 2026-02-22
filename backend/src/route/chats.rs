@@ -1,20 +1,23 @@
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
+    extract::{Multipart as MultipartExtractor, Path, Query, State},
     http::StatusCode,
-    routing::{delete, get, patch, post},
+    routing::{get, patch, post},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_json::json;
 use sqlx::{Postgres, Row, Transaction};
+use std::path::Path as StdPath;
+use tokio::fs;
+use tokio::io::AsyncWriteExt;
 
 use crate::AppState;
 use crate::middleware::CurrentUser; // экстрактор текущего пользователя
 use crate::middleware::ensure_member;
 use crate::models::chats::{Chat, CreateChatRequest, FileMetadata, Message};
 use crate::route::ws::{
-    publish_chat_created, publish_member_added, publish_member_removed,
+    publish_chat_created, publish_chat_updated, publish_member_added, publish_member_removed,
     publish_member_role_changed, publish_message_delivered, publish_message_read,
     publish_payload_to_users,
 };
@@ -32,6 +35,10 @@ pub fn router() -> Router<AppState> {
         .route("/chats/:chat_id/messages", get(get_messages))
         .route("/chats/:id/read", post(mark_chat_read))
         .route("/chats/:id/delivered", post(mark_chat_delivered))
+        .route(
+            "/chats/:id/avatar",
+            post(update_chat_avatar).patch(update_chat_avatar),
+        )
         .route("/chats/:id/members", get(list_members).post(add_member))
         .route(
             "/chats/:id/members/:user_id",
@@ -41,7 +48,10 @@ pub fn router() -> Router<AppState> {
             "/chats/:id/favorite",
             post(add_favorite).delete(remove_favorite),
         )
-        .route("/chats/:id", delete(delete_or_leave_chat))
+        .route(
+            "/chats/:id",
+            patch(update_chat_info).delete(delete_or_leave_chat),
+        )
 }
 
 #[derive(Deserialize)]
@@ -90,6 +100,12 @@ struct MarkDeliveredRequest {
 #[derive(Serialize)]
 struct MarkDeliveredResponse {
     last_delivered_message_id: i64,
+}
+
+#[derive(Deserialize)]
+struct UpdateChatInfoRequest {
+    title: Option<String>,
+    avatar: Option<String>,
 }
 
 fn normalize_member_role(kind: &str, role: Option<&str>) -> Result<String, (StatusCode, String)> {
@@ -250,6 +266,305 @@ async fn create_system_message_and_publish(
     .to_string();
     publish_payload_to_users(state, recipients, payload);
     Ok(())
+}
+
+async fn load_chat_kind_role_and_title(
+    state: &AppState,
+    chat_id: i32,
+    user_id: i32,
+) -> Result<(String, String, Option<String>), (StatusCode, String)> {
+    let row = sqlx::query(
+        r#"
+        SELECT c.kind, COALESCE(cp.role, 'member') AS role, c.title
+        FROM chats c
+        JOIN chat_participants cp ON cp.chat_id = c.id
+        WHERE c.id = $1 AND cp.user_id = $2
+        LIMIT 1
+        "#,
+    )
+    .bind(chat_id)
+    .bind(user_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Ошибка БД: {}", e),
+        )
+    })?;
+
+    let Some(row) = row else {
+        return Err((StatusCode::NOT_FOUND, "Чат не найден".into()));
+    };
+
+    let kind = row
+        .try_get::<String, _>("kind")
+        .unwrap_or_default()
+        .trim()
+        .to_lowercase();
+    let role = row
+        .try_get::<String, _>("role")
+        .unwrap_or_else(|_| "member".to_string())
+        .trim()
+        .to_lowercase();
+    let title: Option<String> = row.try_get("title").ok().flatten();
+    Ok((kind, role, title))
+}
+
+async fn update_chat_info(
+    State(state): State<AppState>,
+    Path(id): Path<i32>,
+    CurrentUser {
+        id: current_user_id,
+        ..
+    }: CurrentUser,
+    Json(body): Json<UpdateChatInfoRequest>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    if body.title.is_none() && body.avatar.is_none() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Нет данных для обновления чата".into(),
+        ));
+    }
+
+    let (kind, role, old_title) =
+        load_chat_kind_role_and_title(&state, id, current_user_id).await?;
+    if kind != "group" && kind != "channel" {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Обновление доступно только для группы/канала".into(),
+        ));
+    }
+    if role != "owner" {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Только owner может менять информацию о чате".into(),
+        ));
+    }
+
+    let mut changed = false;
+    let mut title_for_event = old_title.clone();
+    let mut avatar_for_event: Option<String> = None;
+
+    if let Some(raw_title) = body.title {
+        let title = raw_title.trim();
+        if title.is_empty() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "Название не может быть пустым".into(),
+            ));
+        }
+        sqlx::query("UPDATE chats SET title = $1, updated_at = now() WHERE id = $2")
+            .bind(title)
+            .bind(id)
+            .execute(&state.pool)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Ошибка БД: {}", e),
+                )
+            })?;
+        changed = true;
+        title_for_event = Some(title.to_string());
+    }
+
+    if let Some(raw_avatar) = body.avatar {
+        let next_avatar = {
+            let trimmed = raw_avatar.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        };
+        sqlx::query("UPDATE chats SET avatar = $1, updated_at = now() WHERE id = $2")
+            .bind(&next_avatar)
+            .bind(id)
+            .execute(&state.pool)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Ошибка БД: {}", e),
+                )
+            })?;
+        changed = true;
+        avatar_for_event = next_avatar;
+    }
+
+    if changed {
+        let recipients = load_chat_recipients(&state, id).await?;
+        publish_chat_updated(
+            &state,
+            &recipients,
+            id,
+            title_for_event.as_deref(),
+            avatar_for_event.as_deref(),
+            current_user_id,
+        );
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn update_chat_avatar(
+    State(state): State<AppState>,
+    Path(id): Path<i32>,
+    CurrentUser {
+        id: current_user_id,
+        ..
+    }: CurrentUser,
+    mut multipart: MultipartExtractor,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let (kind, role, title_for_event) =
+        load_chat_kind_role_and_title(&state, id, current_user_id).await?;
+    if kind != "group" && kind != "channel" {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Обновление доступно только для группы/канала".into(),
+        ));
+    }
+    if role != "owner" {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Только owner может менять аватар чата".into(),
+        ));
+    }
+
+    let current_avatar_row = sqlx::query("SELECT avatar FROM chats WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Ошибка БД: {}", e),
+            )
+        })?;
+    let current_avatar_path = current_avatar_row
+        .and_then(|row| row.try_get::<Option<String>, _>("avatar").ok())
+        .flatten();
+
+    let mut avatar_data: Option<Vec<u8>> = None;
+    let mut avatar_filename: Option<String> = None;
+    let mut remove_avatar = false;
+
+    while let Some(field) = multipart.next_field().await.map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Ошибка чтения multipart: {}", e),
+        )
+    })? {
+        let name = field.name().unwrap_or("").to_string();
+        match name.as_str() {
+            "avatar" => {
+                avatar_filename = field.file_name().map(|s| s.to_string());
+                let data = field.bytes().await.map_err(|e| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        format!("Ошибка чтения файла avatar: {}", e),
+                    )
+                })?;
+                if !data.is_empty() {
+                    avatar_data = Some(data.to_vec());
+                }
+            }
+            "remove" => {
+                let text = field.text().await.unwrap_or_default();
+                remove_avatar = text == "true" || text == "1";
+            }
+            _ => {}
+        }
+    }
+
+    let old_avatar_path = current_avatar_path.clone();
+    let new_avatar_path = if remove_avatar {
+        None
+    } else if let Some(data) = avatar_data {
+        const MAX_AVATAR_BYTES: usize = 5 * 1024 * 1024;
+        if data.len() > MAX_AVATAR_BYTES {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "Слишком большой файл аватара".into(),
+            ));
+        }
+
+        let avatars_dir = StdPath::new("uploads/avatars");
+        fs::create_dir_all(avatars_dir).await.map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Не удалось создать директорию для аватаров: {}", e),
+            )
+        })?;
+
+        let extension_raw = avatar_filename
+            .as_ref()
+            .and_then(|f| StdPath::new(f).extension())
+            .and_then(|ext| ext.to_str())
+            .unwrap_or("jpg");
+        let extension = extension_raw.to_ascii_lowercase();
+        let extension = match extension.as_str() {
+            "jpg" | "jpeg" | "png" | "gif" | "webp" => extension,
+            _ => "jpg".to_string(),
+        };
+
+        let new_path = format!("uploads/avatars/chat_{}.{}", id, extension);
+        let mut file = fs::File::create(&new_path).await.map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Не удалось создать файл аватара: {}", e),
+            )
+        })?;
+        file.write_all(&data).await.map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Не удалось записать файл аватара: {}", e),
+            )
+        })?;
+        file.sync_all().await.map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Не удалось синхронизировать файл аватара: {}", e),
+            )
+        })?;
+        Some(format!("avatars/chat_{}.{}", id, extension))
+    } else {
+        old_avatar_path.clone()
+    };
+
+    if let Some(ref old_path) = old_avatar_path {
+        if new_avatar_path.as_ref() != Some(old_path) {
+            let full_old_path = StdPath::new("uploads").join(old_path);
+            if full_old_path.exists() {
+                let _ = fs::remove_file(&full_old_path).await;
+            }
+        }
+    }
+
+    sqlx::query("UPDATE chats SET avatar = $1, updated_at = now() WHERE id = $2")
+        .bind(&new_avatar_path)
+        .bind(id)
+        .execute(&state.pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Ошибка БД: {}", e),
+            )
+        })?;
+
+    let recipients = load_chat_recipients(&state, id).await?;
+    publish_chat_updated(
+        &state,
+        &recipients,
+        id,
+        title_for_event.as_deref(),
+        new_avatar_path.as_deref(),
+        current_user_id,
+    );
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ---------------------------
@@ -647,7 +962,10 @@ async fn list_chats(
             ) AS peer_id,
             COALESCE(u.username, u.login) AS peer_username,
             u.nickname AS peer_nickname,
-            u.avatar   AS peer_avatar,
+            CASE
+                WHEN c.kind = 'group' OR c.kind = 'channel' THEN c.avatar
+                ELSE u.avatar
+            END AS peer_avatar,
             lm.id AS last_message_id,
             lm.message AS last_message,
             lm.message_type AS last_message_type,

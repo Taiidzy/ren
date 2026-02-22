@@ -91,7 +91,6 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final size = MediaQuery.of(context).size;
 
     return Scaffold(
       body: AnimatedBuilder(
@@ -109,6 +108,33 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
             child: SafeArea(
               child: LayoutBuilder(
                 builder: (context, constraints) {
+                  final horizontalPadding = (constraints.maxWidth * 0.08).clamp(
+                    16.0,
+                    28.0,
+                  );
+                  final outerVerticalPadding = (constraints.maxHeight * 0.03)
+                      .clamp(12.0, 24.0);
+                  final logoSize = constraints.maxWidth < 360
+                      ? 104.0
+                      : constraints.maxWidth > 520
+                      ? 128.0
+                      : 120.0;
+                  final headerBottomSpacing = constraints.maxHeight < 700
+                      ? 20.0
+                      : 30.0;
+                  final formBottomSpacing = constraints.maxHeight < 700
+                      ? 12.0
+                      : 16.0;
+                  final cardPadding = constraints.maxWidth < 360 ? 16.0 : 20.0;
+                  final cardSectionSpacing = constraints.maxWidth < 360
+                      ? 16.0
+                      : 20.0;
+                  final formHorizontalPadding = constraints.maxWidth < 360
+                      ? 4.0
+                      : 8.0;
+                  final footerTopSpacing = constraints.maxWidth < 360
+                      ? 12.0
+                      : 16.0;
                   return ScrollConfiguration(
                     behavior: const ScrollBehavior().copyWith(
                       overscroll: false,
@@ -122,8 +148,8 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
                         child: Center(
                           child: Padding(
                             padding: EdgeInsets.symmetric(
-                              horizontal: size.width * 0.08,
-                              vertical: 16,
+                              horizontal: horizontalPadding,
+                              vertical: outerVerticalPadding,
                             ),
                             child: ConstrainedBox(
                               constraints: const BoxConstraints(maxWidth: 400),
@@ -131,9 +157,9 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  const SizedBox(height: 16),
-                                  _buildHeader(isDark),
-                                  const SizedBox(height: 30),
+                                  SizedBox(height: outerVerticalPadding),
+                                  _buildHeader(isDark, logoSize: logoSize),
+                                  SizedBox(height: headerBottomSpacing),
                                   AnimatedBuilder(
                                     animation: _formAnimation,
                                     builder: (context, child) {
@@ -144,12 +170,20 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
                                         ),
                                         child: Opacity(
                                           opacity: _formAnimation.value,
-                                          child: _buildMainCard(isDark),
+                                          child: _buildMainCard(
+                                            isDark,
+                                            cardPadding: cardPadding,
+                                            cardSectionSpacing:
+                                                cardSectionSpacing,
+                                            formHorizontalPadding:
+                                                formHorizontalPadding,
+                                            footerTopSpacing: footerTopSpacing,
+                                          ),
                                         ),
                                       );
                                     },
                                   ),
-                                  const SizedBox(height: 16),
+                                  SizedBox(height: formBottomSpacing),
                                 ],
                               ),
                             ),
@@ -167,30 +201,35 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
     );
   }
 
-  Widget _buildHeader(bool isDark) {
+  Widget _buildHeader(bool isDark, {required double logoSize}) {
     return Column(
       children: [
-        // Адаптивный размер логотипа
         SizedBox(
-          width: 120, // Уменьшено с 160
-          height: 120, // Уменьшено с 160
+          width: logoSize,
+          height: logoSize,
           child: RenLogo(
-            size: 120,
+            size: logoSize,
             controller: _solarSystemController,
-            fontSize: 14, // Уменьшено с 16
-            strokeWidth: 1.0, // Уменьшено с 1.2
-            dotRadius: 2.5, // Уменьшено с 3.0
+            fontSize: logoSize * 0.12,
+            strokeWidth: logoSize < 110 ? 0.9 : 1.0,
+            dotRadius: logoSize < 110 ? 2.2 : 2.5,
           ),
         ),
       ],
     );
   }
 
-  Widget _buildMainCard(bool isDark) {
+  Widget _buildMainCard(
+    bool isDark, {
+    required double cardPadding,
+    required double cardSectionSpacing,
+    required double formHorizontalPadding,
+    required double footerTopSpacing,
+  }) {
     return GlassSurface(
       borderRadius: 24,
       blurSigma: 18,
-      padding: const EdgeInsets.all(20), // Уменьшено с 28
+      padding: EdgeInsets.all(cardPadding),
       borderColor: isDark
           ? Colors.white.withOpacity(0.15)
           : Colors.white.withOpacity(0.4),
@@ -206,15 +245,13 @@ class _AuthPageState extends State<AuthPage> with TickerProviderStateMixin {
       child: Column(
         children: [
           _buildTabBar(isDark),
-          const SizedBox(height: 20), // Уменьшено с 32
+          SizedBox(height: cardSectionSpacing),
           Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: 8.0,
-            ), // Уменьшено с 12
+            padding: EdgeInsets.symmetric(horizontal: formHorizontalPadding),
             child: _buildCurrentForm(),
           ),
           if (_selectedTab != 2) ...[
-            const SizedBox(height: 16), // Уменьшено с 24
+            SizedBox(height: footerTopSpacing),
             _buildForgotPasswordButton(isDark),
           ],
         ],

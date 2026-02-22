@@ -20,13 +20,10 @@ class RenContextMenuEntry<T> {
   final RenContextMenuAction<T>? action;
   final bool isDivider;
 
-  const RenContextMenuEntry._({
-    required this.action,
-    required this.isDivider,
-  });
+  const RenContextMenuEntry._({required this.action, required this.isDivider});
 
   const RenContextMenuEntry.action(RenContextMenuAction<T> action)
-      : this._(action: action, isDivider: false);
+    : this._(action: action, isDivider: false);
 
   const RenContextMenuEntry.divider() : this._(action: null, isDivider: true);
 }
@@ -49,6 +46,11 @@ class RenContextMenu {
 
     final media = MediaQuery.of(context);
     final safe = media.padding;
+    final rawAvailableWidth =
+        size.width - safe.left - safe.right - horizontalPadding * 2;
+    final availableWidth = rawAvailableWidth < 120 ? 120.0 : rawAvailableWidth;
+    final minMenuWidth = availableWidth < 160 ? availableWidth : 160.0;
+    final effectiveWidth = width.clamp(minMenuWidth, availableWidth).toDouble();
 
     double contentHeight = 0;
     for (final e in entries) {
@@ -61,13 +63,20 @@ class RenContextMenu {
     final menuHeight = contentHeight + innerVerticalPadding * 2;
 
     final minLeft = horizontalPadding + safe.left;
-    final maxLeft = size.width - width - horizontalPadding - safe.right;
+    final maxLeft =
+        size.width - effectiveWidth - horizontalPadding - safe.right;
 
     final minTop = verticalPadding + safe.top;
     final maxTop = size.height - menuHeight - verticalPadding - safe.bottom;
 
-    final left = (globalPosition.dx).clamp(minLeft, maxLeft < minLeft ? minLeft : maxLeft);
-    final top = (globalPosition.dy).clamp(minTop, maxTop < minTop ? minTop : maxTop);
+    final left = (globalPosition.dx).clamp(
+      minLeft,
+      maxLeft < minLeft ? minLeft : maxLeft,
+    );
+    final top = (globalPosition.dy).clamp(
+      minTop,
+      maxTop < minTop ? minTop : maxTop,
+    );
 
     return showGeneralDialog<T>(
       context: context,
@@ -89,7 +98,7 @@ class RenContextMenu {
                 left: left,
                 top: top,
                 child: GlassSurface(
-                  width: width,
+                  width: effectiveWidth,
                   blurSigma: blurSigma,
                   borderRadius: 16,
                   padding: EdgeInsets.symmetric(vertical: innerVerticalPadding),

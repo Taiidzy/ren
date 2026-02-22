@@ -28,10 +28,7 @@ class ProfileStore extends ChangeNotifier {
     if (uri == null) return u;
 
     final nextUri = uri.replace(
-      queryParameters: <String, String>{
-        ...uri.queryParameters,
-        'v': ts,
-      },
+      queryParameters: <String, String>{...uri.queryParameters, 'v': ts},
     );
 
     return ProfileUser(
@@ -44,6 +41,13 @@ class ProfileStore extends ChangeNotifier {
 
   void setRepo(ProfileRepository next) {
     repo = next;
+  }
+
+  void resetSession() {
+    user = null;
+    isLoading = false;
+    error = null;
+    notifyListeners();
   }
 
   Future<void> loadMe() async {

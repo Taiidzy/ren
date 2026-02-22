@@ -21,7 +21,8 @@ class ChatAttachmentViewerSheet extends StatefulWidget {
   });
 
   @override
-  State<ChatAttachmentViewerSheet> createState() => _ChatAttachmentViewerSheetState();
+  State<ChatAttachmentViewerSheet> createState() =>
+      _ChatAttachmentViewerSheetState();
 }
 
 class _ChatAttachmentViewerSheetState extends State<ChatAttachmentViewerSheet> {
@@ -79,7 +80,11 @@ class _ChatAttachmentViewerSheetState extends State<ChatAttachmentViewerSheet> {
     } catch (error) {
       if (!mounted) return;
       debugPrint('Failed to share file: $error');
-      showGlassSnack(context, 'Не удалось сохранить файл', kind: GlassSnackKind.error);
+      showGlassSnack(
+        context,
+        'Не удалось сохранить файл',
+        kind: GlassSnackKind.error,
+      );
     }
   }
 
@@ -91,7 +96,11 @@ class _ChatAttachmentViewerSheetState extends State<ChatAttachmentViewerSheet> {
       await OpenFilex.open(path);
     } catch (_) {
       if (!mounted) return;
-      showGlassSnack(context, 'Не удалось открыть файл', kind: GlassSnackKind.error);
+      showGlassSnack(
+        context,
+        'Не удалось открыть файл',
+        kind: GlassSnackKind.error,
+      );
     }
   }
 
@@ -107,6 +116,7 @@ class _ChatAttachmentViewerSheetState extends State<ChatAttachmentViewerSheet> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final compact = MediaQuery.sizeOf(context).width < 360;
 
     return DraggableScrollableSheet(
       initialChildSize: 0.92,
@@ -119,12 +129,19 @@ class _ChatAttachmentViewerSheetState extends State<ChatAttachmentViewerSheet> {
             child: Column(
               children: [
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+                  padding: EdgeInsets.fromLTRB(
+                    compact ? 10 : 12,
+                    10,
+                    compact ? 10 : 12,
+                    8,
+                  ),
                   child: Row(
                     children: [
                       Expanded(
                         child: Text(
-                          _current.filename.isNotEmpty ? _current.filename : _prettyType(_current),
+                          _current.filename.isNotEmpty
+                              ? _current.filename
+                              : _prettyType(_current),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: theme.textTheme.titleMedium,
@@ -163,7 +180,9 @@ class _ChatAttachmentViewerSheetState extends State<ChatAttachmentViewerSheet> {
                             child: Image.file(
                               File(path),
                               errorBuilder: (context, error, stack) {
-                                return const Text('Не удалось загрузить изображение');
+                                return const Text(
+                                  'Не удалось загрузить изображение',
+                                );
                               },
                             ),
                           ),
@@ -177,7 +196,8 @@ class _ChatAttachmentViewerSheetState extends State<ChatAttachmentViewerSheet> {
                           child: FutureBuilder<void>(
                             future: init,
                             builder: (context, snap) {
-                              if (snap.connectionState != ConnectionState.done) {
+                              if (snap.connectionState !=
+                                  ConnectionState.done) {
                                 return const CircularProgressIndicator();
                               }
                               if (!c.value.isInitialized) {
@@ -203,11 +223,15 @@ class _ChatAttachmentViewerSheetState extends State<ChatAttachmentViewerSheet> {
                                     ),
                                     AnimatedOpacity(
                                       opacity: c.value.isPlaying ? 0.0 : 1.0,
-                                      duration: const Duration(milliseconds: 180),
+                                      duration: const Duration(
+                                        milliseconds: 180,
+                                      ),
                                       curve: Curves.easeOut,
                                       child: AnimatedScale(
                                         scale: c.value.isPlaying ? 0.96 : 1.0,
-                                        duration: const Duration(milliseconds: 220),
+                                        duration: const Duration(
+                                          milliseconds: 220,
+                                        ),
                                         curve: Curves.easeOutCubic,
                                         child: Icon(
                                           Icons.play_circle_fill,
@@ -237,7 +261,9 @@ class _ChatAttachmentViewerSheetState extends State<ChatAttachmentViewerSheet> {
                               Icon(
                                 icon,
                                 size: 64,
-                                color: theme.colorScheme.onSurface.withOpacity(0.75),
+                                color: theme.colorScheme.onSurface.withOpacity(
+                                  0.75,
+                                ),
                               ),
                               const SizedBox(height: 12),
                               Text(
@@ -248,15 +274,16 @@ class _ChatAttachmentViewerSheetState extends State<ChatAttachmentViewerSheet> {
                                 style: theme.textTheme.titleSmall,
                               ),
                               const SizedBox(height: 14),
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
+                              Wrap(
+                                alignment: WrapAlignment.center,
+                                spacing: 12,
+                                runSpacing: 8,
                                 children: [
                                   ElevatedButton.icon(
                                     onPressed: _openCurrent,
                                     icon: const Icon(Icons.open_in_new),
                                     label: const Text('Открыть'),
                                   ),
-                                  const SizedBox(width: 12),
                                   OutlinedButton.icon(
                                     onPressed: _saveCurrent,
                                     icon: const Icon(Icons.download_outlined),

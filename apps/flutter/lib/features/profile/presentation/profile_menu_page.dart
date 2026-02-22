@@ -57,7 +57,16 @@ class ProfileMenuPage extends StatelessWidget {
     try {
       await context.read<RealtimeClient>().disconnect();
     } catch (_) {}
-    context.read<ChatsRepository>().resetSessionState();
+    final chatsRepo = context.read<ChatsRepository>();
+    chatsRepo.resetSessionState();
+    try {
+      await chatsRepo.clearAppCache(
+        includeChats: true,
+        includeMessages: true,
+        includeMedia: true,
+      );
+    } catch (_) {}
+    context.read<ProfileStore>().resetSession();
     await SecureStorage.deleteAllKeys();
     if (!context.mounted) return;
 
@@ -95,117 +104,160 @@ class ProfileMenuPage extends StatelessWidget {
           ),
         ),
         body: SafeArea(
-          child: Center(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(18, 10, 18, 18),
-              child: GlassSurface(
-                borderRadius: 24,
-                blurSigma: 14,
-                width: double.infinity,
-                padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
-                borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.12),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final isCompact =
+                  constraints.maxHeight < 760 || constraints.maxWidth < 360;
+              final outerHorizontal = constraints.maxWidth < 360 ? 12.0 : 18.0;
+              final outerTop = isCompact ? 8.0 : 10.0;
+              final outerBottom = isCompact ? 14.0 : 18.0;
+              final cardPadding = constraints.maxWidth < 360 ? 14.0 : 18.0;
+              final avatarSize = constraints.maxWidth < 360 ? 92.0 : 104.0;
+              final avatarFontSize = constraints.maxWidth < 360 ? 24.0 : 28.0;
+              final menuGap = isCompact ? 8.0 : 10.0;
+
+              return SingleChildScrollView(
                 child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 420),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const SizedBox(height: 6),
-                      SizedBox(
-                        width: 104,
-                        height: 104,
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(52),
-                          child: (store.user?.avatar ?? '').isEmpty
-                              ? Container(
-                                  color: theme.colorScheme.surface,
-                                  child: Center(
-                                    child: Text(
-                                      _initials(store.user?.username ?? ''),
-                                      style: TextStyle(
-                                        color: theme.colorScheme.onSurface,
-                                        fontWeight: FontWeight.w700,
-                                        fontSize: 28,
-                                      ),
-                                    ),
+                  constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                  child: Center(
+                    child: Padding(
+                      padding: EdgeInsets.fromLTRB(
+                        outerHorizontal,
+                        outerTop,
+                        outerHorizontal,
+                        outerBottom,
+                      ),
+                      child: GlassSurface(
+                        borderRadius: 24,
+                        blurSigma: 14,
+                        width: double.infinity,
+                        padding: EdgeInsets.fromLTRB(
+                          cardPadding,
+                          cardPadding - 2,
+                          cardPadding,
+                          cardPadding,
+                        ),
+                        borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.12),
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 420),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const SizedBox(height: 6),
+                              SizedBox(
+                                width: avatarSize,
+                                height: avatarSize,
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(
+                                    avatarSize / 2,
                                   ),
-                                )
-                              : Image.network(
-                                  store.user!.avatar!,
-                                  width: 104,
-                                  height: 104,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (context, error, stack) {
-                                    return Container(
-                                      color: theme.colorScheme.surface,
-                                      child: Center(
-                                        child: Text(
-                                          _initials(store.user?.username ?? ''),
-                                          style: TextStyle(
-                                            color: theme.colorScheme.onSurface,
-                                            fontWeight: FontWeight.w700,
-                                            fontSize: 28,
+                                  child: (store.user?.avatar ?? '').isEmpty
+                                      ? Container(
+                                          color: theme.colorScheme.surface,
+                                          child: Center(
+                                            child: Text(
+                                              _initials(
+                                                store.user?.username ?? '',
+                                              ),
+                                              style: TextStyle(
+                                                color:
+                                                    theme.colorScheme.onSurface,
+                                                fontWeight: FontWeight.w700,
+                                                fontSize: avatarFontSize,
+                                              ),
+                                            ),
                                           ),
+                                        )
+                                      : Image.network(
+                                          store.user!.avatar!,
+                                          width: avatarSize,
+                                          height: avatarSize,
+                                          fit: BoxFit.cover,
+                                          errorBuilder:
+                                              (context, error, stack) {
+                                                return Container(
+                                                  color:
+                                                      theme.colorScheme.surface,
+                                                  child: Center(
+                                                    child: Text(
+                                                      _initials(
+                                                        store.user?.username ??
+                                                            '',
+                                                      ),
+                                                      style: TextStyle(
+                                                        color: theme
+                                                            .colorScheme
+                                                            .onSurface,
+                                                        fontWeight:
+                                                            FontWeight.w700,
+                                                        fontSize:
+                                                            avatarFontSize,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                );
+                                              },
                                         ),
-                                      ),
-                                    );
-                                  },
                                 ),
+                              ),
+                              SizedBox(height: isCompact ? 14 : 18),
+                              _MenuItem(
+                                icon: HugeIcons.strokeRoundedUser,
+                                title: 'Профиль',
+                                onTap: () {
+                                  ProfileEditSheet.show(context);
+                                },
+                              ),
+                              SizedBox(height: menuGap),
+                              _MenuItem(
+                                materialIcon: Icons.shield_outlined,
+                                title: 'Безопасность',
+                                onTap: () {
+                                  SecuritySheet.show(context);
+                                },
+                              ),
+                              SizedBox(height: menuGap),
+                              _MenuItem(
+                                icon: HugeIcons.strokeRoundedNotification01,
+                                title: 'Уведомления',
+                                onTap: () {
+                                  NotificationsSheet.show(context);
+                                },
+                              ),
+                              SizedBox(height: menuGap),
+                              _MenuItem(
+                                icon: HugeIcons.strokeRoundedPaintBrush02,
+                                title: 'Персонализация',
+                                onTap: () {
+                                  PersonalizationSheet.show(context);
+                                },
+                              ),
+                              SizedBox(height: menuGap),
+                              _MenuItem(
+                                icon: HugeIcons.strokeRoundedDatabase,
+                                title: 'Хранилище',
+                                onTap: () {
+                                  StorageSheet.show(context);
+                                },
+                              ),
+                              SizedBox(height: isCompact ? 10 : 12),
+                              _MenuItem(
+                                icon: HugeIcons.strokeRoundedLogout01,
+                                title: 'Выйти',
+                                isDanger: true,
+                                onTap: () {
+                                  _confirmAndLogout(context);
+                                },
+                              ),
+                            ],
+                          ),
                         ),
                       ),
-                      const SizedBox(height: 18),
-                      _MenuItem(
-                        icon: HugeIcons.strokeRoundedUser,
-                        title: 'Профиль',
-                        onTap: () {
-                          ProfileEditSheet.show(context);
-                        },
-                      ),
-                      const SizedBox(height: 10),
-                      _MenuItem(
-                        materialIcon: Icons.shield_outlined,
-                        title: 'Безопасность',
-                        onTap: () {
-                          SecuritySheet.show(context);
-                        },
-                      ),
-                      const SizedBox(height: 10),
-                      _MenuItem(
-                        icon: HugeIcons.strokeRoundedNotification01,
-                        title: 'Уведомления',
-                        onTap: () {
-                          NotificationsSheet.show(context);
-                        },
-                      ),
-                      const SizedBox(height: 10),
-                      _MenuItem(
-                        icon: HugeIcons.strokeRoundedPaintBrush02,
-                        title: 'Персонализация',
-                        onTap: () {
-                          PersonalizationSheet.show(context);
-                        },
-                      ),
-                      const SizedBox(height: 10),
-                      _MenuItem(
-                        icon: HugeIcons.strokeRoundedDatabase,
-                        title: 'Хранилище',
-                        onTap: () {
-                          StorageSheet.show(context);
-                        },
-                      ),
-                      const SizedBox(height: 12),
-                      _MenuItem(
-                        icon: HugeIcons.strokeRoundedLogout01,
-                        title: 'Выйти',
-                        isDanger: true,
-                        onTap: () {
-                          _confirmAndLogout(context);
-                        },
-                      ),
-                    ],
+                    ),
                   ),
                 ),
-              ),
-            ),
+              );
+            },
           ),
         ),
       ),

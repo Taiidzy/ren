@@ -28,11 +28,16 @@ class GlassConfirmDialog extends StatelessWidget {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final baseInk = isDark ? Colors.white : Colors.black;
+    final width = MediaQuery.sizeOf(context).width;
+    final horizontalInset = width < 360 ? 12.0 : 18.0;
 
     return Dialog(
       backgroundColor: Colors.transparent,
       elevation: 0,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 24),
+      insetPadding: EdgeInsets.symmetric(
+        horizontal: horizontalInset,
+        vertical: 24,
+      ),
       child: GlassSurface(
         borderRadius: 22,
         blurSigma: 14,
@@ -78,18 +83,20 @@ class GlassConfirmDialog extends StatelessWidget {
             Row(
               children: [
                 Expanded(
-                  child: GlassSurface(
-                    borderRadius: 14,
-                    blurSigma: 12,
-                    height: 44,
-                    borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.10),
-                    onTap: onCancel ?? () => Navigator.of(context).pop(false),
-                    child: Center(
-                      child: Text(
-                        cancelLabel,
-                        style: theme.textTheme.titleSmall?.copyWith(
-                          color: theme.colorScheme.onSurface,
-                          fontWeight: FontWeight.w600,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(minHeight: 44),
+                    child: GlassSurface(
+                      borderRadius: 14,
+                      blurSigma: 12,
+                      borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.10),
+                      onTap: onCancel ?? () => Navigator.of(context).pop(false),
+                      child: Center(
+                        child: Text(
+                          cancelLabel,
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            color: theme.colorScheme.onSurface,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
                       ),
                     ),
@@ -97,21 +104,23 @@ class GlassConfirmDialog extends StatelessWidget {
                 ),
                 const SizedBox(width: 10),
                 Expanded(
-                  child: GlassSurface(
-                    borderRadius: 14,
-                    blurSigma: 12,
-                    height: 44,
-                    color:
-                        confirmColor ??
-                        const Color(0xFF991B1B).withOpacity(0.55),
-                    borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.10),
-                    onTap: onConfirm,
-                    child: Center(
-                      child: Text(
-                        confirmLabel,
-                        style: theme.textTheme.titleSmall?.copyWith(
-                          color: theme.colorScheme.onSurface,
-                          fontWeight: FontWeight.w700,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(minHeight: 44),
+                    child: GlassSurface(
+                      borderRadius: 14,
+                      blurSigma: 12,
+                      color:
+                          confirmColor ??
+                          const Color(0xFF991B1B).withOpacity(0.55),
+                      borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.10),
+                      onTap: onConfirm,
+                      child: Center(
+                        child: Text(
+                          confirmLabel,
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            color: theme.colorScheme.onSurface,
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                       ),
                     ),

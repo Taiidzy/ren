@@ -87,21 +87,41 @@
   - заменено поле ввода ID на поиск пользователей (аватар + имя);
   - все текстовые инпуты сделаны прозрачными (без фона, borderless);
   - заменён `DropdownButton` на кастомный `_RoleSelectorDropdown`;
-  - заменён `PopupMenuButton` на кастомный `_MemberActionDropdown`;
+  - заменён `PopupMenuButton` на кастомное меню через `RenContextMenu` (как в `shared/widgets/context_menu.dart`);
+  - действия участника (сделать admin/member, удалить) открываются из glass-кнопки `...` рядом с карточкой участника;
   - единый стиль glass surface на протяжении всего UI.
 - Файлы:
-  - `lib/features/chats/presentation/chat_page.dart` — `_ChatMembersSheetBody` обновлён.
+  - `apps/flutter/lib/features/chats/presentation/chat_page.dart` — `_ChatMembersSheetBody` обновлён.
+
+#### Chat input and attach menu polish
+- Небольшие UI-правки в compose/attach:
+  - из bottom sheet вложений убрана отдельная кнопка `Отмена` (оставлено закрытие через системные жесты/тап вне sheet);
+  - иконка отмены записи в input bar заменена на `HugeIcons.strokeRoundedCancel01` для визуальной консистентности.
+- Файлы:
+  - `apps/flutter/lib/features/chats/presentation/widgets/chat_attach_menu.dart`
+  - `apps/flutter/lib/features/chats/presentation/widgets/chat_input_bar.dart`
 
 #### Owner-only chat info editing
 - Добавлена возможность для владельца изменять информацию о чате:
   - кнопка редактирования видна только владельцу канала/группы;
-  - диалог для изменения названия чата;
-  - заглушка для смены аватарки (требует backend интеграции);
-  - добавлен метод `updateChatInfo` в API и репозиторий.
+  - bottom sheet для изменения названия;
+  - загрузка/удаление аватарки чата с обрезкой изображения;
+  - добавлены методы `updateChatInfo`, `uploadChatAvatar`, `removeChatAvatar` в API и репозиторий;
+  - обработка realtime-события `chat_updated` для мгновенного обновления списка.
 - Файлы:
-  - `lib/features/chats/data/chats_api.dart` — endpoint `/chats/:id`;
-  - `lib/features/chats/data/chats_repository.dart` — метод `updateChatInfo`;
-  - `lib/features/chats/presentation/chat_page.dart` — `_editChatInfo`, `_changeAvatar`.
+  - `apps/flutter/lib/features/chats/data/chats_api.dart`
+  - `apps/flutter/lib/features/chats/data/chats_repository.dart`
+  - `apps/flutter/lib/features/chats/presentation/chats_page.dart`
+  - `apps/flutter/lib/features/profile/presentation/widgets/profile_edit_sheet.dart`
+
+#### Logout/login profile state reset fix
+- Исправлен баг, при котором после выхода и входа под другим пользователем на экране профиля могли оставаться данные предыдущего пользователя (avatar/display name/username).
+- Изменения:
+  - при logout теперь явно сбрасывается `ProfileStore`;
+  - при logout очищается локальный кэш чатов/сообщений/медиа, чтобы не показывать данные прошлой сессии до синхронизации.
+- Файлы:
+  - `apps/flutter/lib/features/profile/presentation/profile_store.dart`
+  - `apps/flutter/lib/features/profile/presentation/profile_menu_page.dart`
 
 #### Sender name/avatar in group messages
 - Добавлено отображение имени и аватарки отправителя в групповых чатах:
@@ -154,6 +174,9 @@
   - поддержка обновления `title` и `avatar`;
   - проверка прав доступа (только владелец);
   - валидация входных данных.
+- Добавлен endpoint `POST/PATCH /chats/:id/avatar` для загрузки и удаления аватара группы/канала.
+- Добавлена миграция с колонкой `chats.avatar` и публикация realtime-события `chat_updated`.
+- Для `GET /chats` в `group/channel` возвращается аватар чата (`chats.avatar`), а не аватар первого участника.
 - Практический эффект:
   - владелец может изменять название и аватарку группы/канала.
 
@@ -278,3 +301,58 @@
 - Практический эффект:
   - согласованные права в UI и backend;
   - корректное отображение owner-only операций в списке чатов.
+
+---
+
+### Flutter App (`apps/flutter`) — Layout & Adaptive pass (HIG-aligned, style-preserving)
+
+#### Full UI proportion/adaptive audit and fixes
+- Проведен полный layout-pass с минимально инвазивными правками:
+  - выровнены пропорции и отступы между экранами;
+  - убраны ключевые fixed-size ограничения в критичных контейнерах;
+  - добавлены adaptive размеры/паддинги для compact экранов;
+  - снижены риски overflow при узкой ширине и увеличенном text scale;
+  - улучшены touch-target зоны без изменения визуального языка.
+
+#### Key improvements by area
+- Auth:
+  - адаптивные размеры hero/logo/card spacing и внутренних отступов;
+  - выровнена высота loading-состояний с кнопками.
+- Chats:
+  - адаптивные отступы app bar/search/content;
+  - chat tile переведен с fixed height на min height;
+  - стабилизированы узкие action rows и поисковые CTA.
+- Chat page:
+  - адаптированы размеры video-recording overlay и control capsule;
+  - ограничена высота forward bottom sheet через безопасный clamp.
+- Profile:
+  - добавлен scroll-safe layout для profile menu;
+  - адаптированы avatar/paddings/spacing в profile edit;
+  - адаптированы header-decor размеры в security sheet;
+  - адаптивные отступы и min-height CTA в storage/personalization/notifications.
+- Shared/chat widgets:
+  - attach menu и attachment viewer адаптированы под узкие экраны;
+  - bubble/media widths переведены на constraints-based поведение;
+  - context menu и confirm dialog получили adaptive width/inset + min-height actions.
+
+#### Files
+- `apps/flutter/lib/features/auth/presentation/auth_page.dart`
+- `apps/flutter/lib/features/auth/presentation/components/signin.dart`
+- `apps/flutter/lib/features/auth/presentation/components/recovery.dart`
+- `apps/flutter/lib/features/chats/presentation/chats_page.dart`
+- `apps/flutter/lib/features/chats/presentation/chat_page.dart`
+- `apps/flutter/lib/features/chats/presentation/widgets/chat_input_bar.dart`
+- `apps/flutter/lib/features/chats/presentation/widgets/chat_attach_menu.dart`
+- `apps/flutter/lib/features/chats/presentation/widgets/chat_attachment_viewer_sheet.dart`
+- `apps/flutter/lib/features/chats/presentation/widgets/chat_message_bubble.dart`
+- `apps/flutter/lib/features/chats/presentation/widgets/square_video_bubble.dart`
+- `apps/flutter/lib/features/chats/presentation/widgets/voice_message_bubble.dart`
+- `apps/flutter/lib/features/profile/presentation/profile_menu_page.dart`
+- `apps/flutter/lib/features/profile/presentation/widgets/profile_edit_sheet.dart`
+- `apps/flutter/lib/features/profile/presentation/widgets/security_sheet.dart`
+- `apps/flutter/lib/features/profile/presentation/widgets/storage_sheet.dart`
+- `apps/flutter/lib/features/profile/presentation/widgets/personalization_sheet.dart`
+- `apps/flutter/lib/features/profile/presentation/widgets/notifications_sheet.dart`
+- `apps/flutter/lib/shared/widgets/context_menu.dart`
+- `apps/flutter/lib/shared/widgets/glass_confirm_dialog.dart`
+- `apps/flutter/lib/shared/widgets/matte_toggle.dart`
