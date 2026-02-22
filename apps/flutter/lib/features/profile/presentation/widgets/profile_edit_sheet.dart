@@ -6,7 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
-import 'package:ren/features/profile/presentation/profile_store.dart';
+import 'package:ren/core/providers/profile_store.dart';
 import 'package:ren/shared/widgets/glass_overlays.dart';
 import 'package:ren/shared/widgets/glass_snackbar.dart';
 import 'package:ren/shared/widgets/glass_surface.dart';
@@ -81,8 +81,9 @@ class _ProfileEditContentState extends State<_ProfileEditContent> {
   final _nicknameController = TextEditingController();
   final _picker = ImagePicker();
 
-  bool _didSeedUsername = false;
-  bool _didSeedNickname = false;
+  String? _lastSyncedUsername;
+  String? _lastSyncedNickname;
+  String? _lastSyncedAvatar;
 
   @override
   void initState() {
@@ -100,22 +101,31 @@ class _ProfileEditContentState extends State<_ProfileEditContent> {
     super.dispose();
   }
 
+  void _syncControllersWithStore(ProfileStore store) {
+    final user = store.user;
+    if (user == null) return;
+
+    if (_lastSyncedUsername != user.username) {
+      _usernameController.text = user.username;
+      _lastSyncedUsername = user.username;
+    }
+
+    final nickname = user.nickname ?? '';
+    if (_lastSyncedNickname != nickname) {
+      _nicknameController.text = nickname;
+      _lastSyncedNickname = nickname;
+    }
+
+    final avatar = user.avatar ?? '';
+    if (_lastSyncedAvatar != avatar) {
+      _lastSyncedAvatar = avatar;
+    }
+  }
+
   String _initials(String value) {
     final parts = value.trim().split(RegExp(r'\s+')).where((p) => p.isNotEmpty);
     final letters = parts.map((p) => p.characters.first).take(2).join();
     return letters.isEmpty ? '?' : letters.toUpperCase();
-  }
-
-  void _seedUsernameOnce(ProfileStore store) {
-    if (_didSeedUsername || store.user == null) return;
-    _usernameController.text = store.user!.username;
-    _didSeedUsername = true;
-  }
-
-  void _seedNicknameOnce(ProfileStore store) {
-    if (_didSeedNickname || store.user == null) return;
-    _nicknameController.text = store.user!.nickname ?? '';
-    _didSeedNickname = true;
   }
 
   Future<void> _pickAvatar() async {
@@ -215,8 +225,7 @@ class _ProfileEditContentState extends State<_ProfileEditContent> {
     return Consumer<ProfileStore>(
       builder: (context, store, _) {
         final user = store.user;
-        _seedUsernameOnce(store);
-        _seedNicknameOnce(store);
+        _syncControllersWithStore(store);
 
         return ListView(
           controller: widget.scrollController,
