@@ -20,7 +20,8 @@ class LocalNotifications {
   static const String _channelName = 'Messages';
   static const String _channelDescription = 'Chat message notifications';
 
-  final FlutterLocalNotificationsPlugin _plugin = FlutterLocalNotificationsPlugin();
+  final FlutterLocalNotificationsPlugin _plugin =
+      FlutterLocalNotificationsPlugin();
 
   bool _initialized = false;
 
@@ -52,7 +53,9 @@ class LocalNotifications {
           final decoded = jsonDecode(payload);
           if (decoded is Map) {
             final chatIdDyn = decoded['chat_id'] ?? decoded['chatId'];
-            final chatId = (chatIdDyn is int) ? chatIdDyn : int.tryParse('$chatIdDyn') ?? 0;
+            final chatId = (chatIdDyn is int)
+                ? chatIdDyn
+                : int.tryParse('$chatIdDyn') ?? 0;
             if (chatId > 0) {
               final cb = _onOpenChat;
               if (cb != null) {
@@ -74,7 +77,9 @@ class LocalNotifications {
 
   Future<void> _ensureChannel() async {
     final android = _plugin
-        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
     if (android == null) return;
 
     const channel = AndroidNotificationChannel(
@@ -89,18 +94,19 @@ class LocalNotifications {
 
   Future<void> _requestPermissions() async {
     if (Platform.isIOS) {
-      final ios =
-          _plugin.resolvePlatformSpecificImplementation<IOSFlutterLocalNotificationsPlugin>();
-      await ios?.requestPermissions(
-        alert: true,
-        badge: true,
-        sound: true,
-      );
+      final ios = _plugin
+          .resolvePlatformSpecificImplementation<
+            IOSFlutterLocalNotificationsPlugin
+          >();
+      await ios?.requestPermissions(alert: true, badge: true, sound: true);
       return;
     }
 
     if (Platform.isAndroid) {
-      final android = _plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+      final android = _plugin
+          .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin
+          >();
       await android?.requestNotificationsPermission();
     }
   }
@@ -131,9 +137,12 @@ class LocalNotifications {
       attachments.add(a);
     }
 
-    final AndroidBitmap<Object>? avatarBitmap = (avatarBytes != null && avatarBytes.isNotEmpty)
+    final AndroidBitmap<Object>? avatarBitmap =
+        (avatarBytes != null && avatarBytes.isNotEmpty)
         ? ByteArrayAndroidBitmap(avatarBytes)
-        : ((avatarPath != null && avatarPath.isNotEmpty) ? FilePathAndroidBitmap(avatarPath) : null);
+        : ((avatarPath != null && avatarPath.isNotEmpty)
+              ? FilePathAndroidBitmap(avatarPath)
+              : null);
 
     final StyleInformation? androidStyle = (avatarBitmap != null)
         ? BigPictureStyleInformation(
@@ -171,13 +180,7 @@ class LocalNotifications {
 
     final payload = jsonEncode({'chat_id': chatId});
 
-    await _plugin.show(
-      id,
-      title,
-      body,
-      details,
-      payload: payload,
-    );
+    await _plugin.show(id, title, body, details, payload: payload);
   }
 
   Future<({String path, Uint8List bytes})?> _tryDownloadAvatar({
@@ -203,7 +206,10 @@ class LocalNotifications {
       if (bytes.isEmpty) return null;
 
       final dir = await getTemporaryDirectory();
-      final safe = (senderName ?? 'user').replaceAll(RegExp(r'[^a-zA-Z0-9_\-]'), '_');
+      final safe = (senderName ?? 'user').replaceAll(
+        RegExp(r'[^a-zA-Z0-9_\-]'),
+        '_',
+      );
       final path = '${dir.path}/notif_avatar_${chatId}_$safe.png';
       final f = File(path);
       await f.writeAsBytes(bytes, flush: true);
@@ -218,6 +224,14 @@ class LocalNotifications {
     final preset = _parseScheme(schemeStr) ?? AppColorSchemePreset.indigo;
 
     switch (preset) {
+      case AppColorSchemePreset.auto:
+        final backgroundValue = await SecureStorage.readKey(
+          Keys.backgroundValue,
+        );
+        if (backgroundValue == null || backgroundValue.isEmpty) {
+          return const Color(0xFF6366F1);
+        }
+        return _colorFromTextHash(backgroundValue);
       case AppColorSchemePreset.indigo:
         return const Color(0xFF6366F1);
       case AppColorSchemePreset.emerald:
@@ -229,6 +243,15 @@ class LocalNotifications {
       case AppColorSchemePreset.cyan:
         return const Color(0xFF06B6D4);
     }
+  }
+
+  Color _colorFromTextHash(String input) {
+    var hash = 0;
+    for (final unit in input.codeUnits) {
+      hash = ((hash * 31) + unit) & 0x7fffffff;
+    }
+    final hue = (hash % 360).toDouble();
+    return HSLColor.fromAHSL(1, hue, 0.68, 0.52).toColor();
   }
 
   AppColorSchemePreset? _parseScheme(String? v) {

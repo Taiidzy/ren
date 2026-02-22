@@ -11,15 +11,19 @@ class AnimatedGradientUtils {
   /// Возвращает LinearGradient с плавными анимированными переходами
   static LinearGradient buildAnimatedGradient(
     double animationValue,
-    bool isDarkMode,
-  ) {
+    bool isDarkMode, {
+    Color? primaryColor,
+    Color? secondaryColor,
+  }) {
     final t = animationValue;
+    final primary = primaryColor ?? AppColors.primary;
+    final secondary = secondaryColor ?? AppColors.secondary;
 
     if (isDarkMode) {
       // Темная тема: минималистичные переходы
       final baseColor1 = AppColors.darkBackground;
       final baseColor2 = AppColors.darkSurface;
-      final accentColor = AppColors.primary.withOpacity(0.05);
+      final accentColor = primary.withOpacity(0.05);
 
       final color1 = Color.lerp(
         baseColor1,
@@ -56,8 +60,8 @@ class AnimatedGradientUtils {
       // Светлая тема: чистые, минималистичные цвета
       final baseColor1 = AppColors.lightBackground;
       final baseColor2 = AppColors.lightSurface;
-      final accentColor1 = AppColors.primary.withOpacity(0.03);
-      final accentColor2 = AppColors.secondary.withOpacity(0.02);
+      final accentColor1 = primary.withOpacity(0.03);
+      final accentColor2 = secondary.withOpacity(0.02);
 
       final color1 = Color.lerp(
         baseColor1,
@@ -94,7 +98,13 @@ class AnimatedGradientUtils {
   }
 
   /// Создает статический градиент без анимации
-  static LinearGradient buildStaticGradient(bool isDarkMode) {
+  static LinearGradient buildStaticGradient(
+    bool isDarkMode, {
+    Color? primaryColor,
+    Color? secondaryColor,
+  }) {
+    final primary = primaryColor ?? AppColors.primary;
+    final secondary = secondaryColor ?? AppColors.secondary;
     if (isDarkMode) {
       return LinearGradient(
         begin: Alignment.topLeft,
@@ -102,7 +112,7 @@ class AnimatedGradientUtils {
         colors: [
           AppColors.darkBackground,
           AppColors.darkSurface,
-          AppColors.darkCard.withOpacity(0.8),
+          Color.lerp(AppColors.darkCard.withOpacity(0.8), primary, 0.08)!,
         ],
         stops: const [0.0, 0.6, 1.0],
       );
@@ -113,7 +123,7 @@ class AnimatedGradientUtils {
         colors: [
           AppColors.lightBackground,
           AppColors.lightSurface,
-          AppColors.neutral50,
+          Color.lerp(AppColors.neutral50, secondary, 0.08)!,
         ],
         stops: const [0.0, 0.5, 1.0],
       );

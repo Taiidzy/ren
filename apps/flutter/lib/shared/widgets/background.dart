@@ -90,7 +90,8 @@ class _AppBackgroundState extends State<AppBackground>
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
     final shouldAnimate = PerformanceTuning.shouldAnimateBackground(
       context,
       widget.animate,
@@ -115,8 +116,17 @@ class _AppBackgroundState extends State<AppBackground>
 
     Widget gradientLayer(double t) {
       final gradient = shouldAnimate
-          ? AnimatedGradientUtils.buildAnimatedGradient(t, isDark)
-          : AnimatedGradientUtils.buildStaticGradient(isDark);
+          ? AnimatedGradientUtils.buildAnimatedGradient(
+              t,
+              isDark,
+              primaryColor: theme.colorScheme.primary,
+              secondaryColor: theme.colorScheme.secondary,
+            )
+          : AnimatedGradientUtils.buildStaticGradient(
+              isDark,
+              primaryColor: theme.colorScheme.primary,
+              secondaryColor: theme.colorScheme.secondary,
+            );
       return IgnorePointer(
         child: Opacity(
           opacity: effectiveShowGradient ? effectiveGradientOpacity : 0.0,

@@ -3,13 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:ren/core/constants/keys.dart';
 import 'package:ren/core/secure/secure_storage.dart';
 
-enum AppColorSchemePreset {
-  indigo,
-  emerald,
-  rose,
-  orange,
-  cyan,
-}
+enum AppColorSchemePreset { auto, indigo, emerald, rose, orange, cyan }
 
 class ThemeSettings extends ChangeNotifier {
   ThemeMode _themeMode = ThemeMode.system;

@@ -18,7 +18,6 @@ class PersonalizationSheet {
       },
     );
   }
-
 }
 
 class _SegmentedItem<T> {
@@ -178,6 +177,10 @@ class _SheetBody extends StatelessWidget {
                 value: themeSettings.colorScheme,
                 items: const [
                   _SegmentedItem(
+                    value: AppColorSchemePreset.auto,
+                    label: 'Авто',
+                  ),
+                  _SegmentedItem(
                     value: AppColorSchemePreset.indigo,
                     label: 'Indigo',
                   ),
@@ -207,7 +210,8 @@ class _SheetBody extends StatelessWidget {
                 height: 92,
                 child: ListView.separated(
                   scrollDirection: Axis.horizontal,
-                  itemCount: BackgroundPresets.wallpaperUrls.length +
+                  itemCount:
+                      BackgroundPresets.wallpaperUrls.length +
                       settings.galleryHistoryPaths.length +
                       2,
                   separatorBuilder: (_, __) => const SizedBox(width: 12),
@@ -223,6 +227,8 @@ class _SheetBody extends StatelessWidget {
                             borderRadius: BorderRadius.circular(18),
                             gradient: AnimatedGradientUtils.buildStaticGradient(
                               isDark,
+                              primaryColor: theme.colorScheme.primary,
+                              secondaryColor: theme.colorScheme.secondary,
                             ),
                           ),
                         ),
@@ -285,8 +291,7 @@ class _SheetBody extends StatelessWidget {
                     final url = BackgroundPresets.wallpaperUrls[urlIndex];
                     final isSelected =
                         (settings.backgroundImage is NetworkImage) &&
-                            (settings.backgroundImage as NetworkImage).url ==
-                                url;
+                        (settings.backgroundImage as NetworkImage).url == url;
                     return _WallpaperTile(
                       label: ' ',
                       isSelected: isSelected,
@@ -312,8 +317,9 @@ class _SheetBody extends StatelessWidget {
                 child: ElevatedButton(
                   onPressed: () => Navigator.of(context).maybePop(),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: theme.colorScheme.onSurface
-                        .withOpacity(isDark ? 0.15 : 0.12),
+                    backgroundColor: theme.colorScheme.onSurface.withOpacity(
+                      isDark ? 0.15 : 0.12,
+                    ),
                     foregroundColor: theme.colorScheme.onSurface,
                     elevation: 0,
                   ),
@@ -452,12 +458,7 @@ class _SliderRow extends StatelessWidget {
     return Row(
       children: [
         Expanded(
-          child: Slider(
-            value: value,
-            min: min,
-            max: max,
-            onChanged: onChanged,
-          ),
+          child: Slider(value: value, min: min, max: max, onChanged: onChanged),
         ),
         SizedBox(
           width: 48,
