@@ -20,6 +20,7 @@ class ChatMessage {
   final List<ChatAttachment> attachments;
   final DateTime sentAt;
   final String? replyToMessageId;
+  final bool isRead;
 
   const ChatMessage({
     required this.id,
@@ -29,6 +30,7 @@ class ChatMessage {
     this.attachments = const [],
     required this.sentAt,
     this.replyToMessageId,
+    this.isRead = false,
   });
 }
 
@@ -57,6 +59,7 @@ class ChatPreview {
   final bool isFavorite;
   final String lastMessage;
   final DateTime lastMessageAt;
+  final int unreadCount;
 
   const ChatPreview({
     required this.id,
@@ -66,6 +69,7 @@ class ChatPreview {
     this.isFavorite = false,
     required this.lastMessage,
     required this.lastMessageAt,
+    this.unreadCount = 0,
   });
 }
 

@@ -12,6 +12,8 @@ class ChatMessageBubble extends StatelessWidget {
   final List<ChatAttachment> attachments;
   final String timeLabel;
   final bool isMe;
+  final bool isRead;
+  final bool isPending;
   final bool isDark;
   final void Function(ChatAttachment a)? onOpenAttachment;
 
@@ -22,6 +24,8 @@ class ChatMessageBubble extends StatelessWidget {
     this.attachments = const [],
     required this.timeLabel,
     required this.isMe,
+    this.isRead = false,
+    this.isPending = false,
     required this.isDark,
     this.onOpenAttachment,
   });
@@ -196,12 +200,35 @@ class ChatMessageBubble extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 4),
-              Text(
-                timeLabel,
-                style: TextStyle(
-                  fontSize: 10,
-                  color: theme.colorScheme.onSurface.withOpacity(0.55),
-                ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    timeLabel,
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: theme.colorScheme.onSurface.withOpacity(0.55),
+                    ),
+                  ),
+                  if (isMe) ...[
+                    const SizedBox(width: 4),
+                    Icon(
+                      isPending
+                          ? Icons.schedule_rounded
+                          : (isRead
+                                ? Icons.done_all_rounded
+                                : Icons.done_rounded),
+                      size: 13,
+                      color: isPending
+                          ? theme.colorScheme.onSurface.withOpacity(0.55)
+                          : (isRead
+                                ? theme.colorScheme.primary.withOpacity(0.92)
+                                : theme.colorScheme.onSurface.withOpacity(
+                                    0.55,
+                                  )),
+                    ),
+                  ],
+                ],
               ),
             ],
           ),

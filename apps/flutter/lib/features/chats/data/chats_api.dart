@@ -167,6 +167,28 @@ class ChatsApi {
     }
   }
 
+  Future<Map<String, dynamic>> markChatRead(
+    int chatId, {
+    int? messageId,
+  }) async {
+    final token = await _requireToken();
+    try {
+      final resp = await dio.post(
+        '${Apiurl.api}/chats/$chatId/read',
+        data: {if (messageId != null && messageId > 0) 'message_id': messageId},
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+      return (resp.data as Map<String, dynamic>?) ?? const <String, dynamic>{};
+    } on DioException catch (e) {
+      throw ApiException(
+        (e.response?.data is String)
+            ? e.response?.data as String
+            : 'Ошибка отметки прочтения',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
   Future<List<dynamic>> listMembers(int chatId) async {
     final token = await _requireToken();
     try {

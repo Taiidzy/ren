@@ -228,6 +228,9 @@ class ChatsRepository {
       final kind = ((m['kind'] as String?) ?? 'private').trim().toLowerCase();
       final isFavorite =
           (m['is_favorite'] == true) || (m['isFavorite'] == true);
+      final unreadCount = (m['unread_count'] is int)
+          ? m['unread_count'] as int
+          : int.tryParse('${m['unread_count'] ?? ''}') ?? 0;
       final updatedAtStr = (m['updated_at'] as String?) ?? '';
 
       final updatedAt = DateTime.tryParse(updatedAtStr) ?? DateTime.now();
@@ -251,6 +254,7 @@ class ChatsRepository {
           isFavorite: isFavorite,
           lastMessage: '',
           lastMessageAt: updatedAt,
+          unreadCount: unreadCount < 0 ? 0 : unreadCount,
         ),
       );
     }
@@ -351,6 +355,7 @@ class ChatsRepository {
       final senderId = (m['sender_id'] is int)
           ? m['sender_id'] as int
           : int.tryParse('${m['sender_id']}') ?? 0;
+      final isRead = m['is_read'] == true || m['isRead'] == true;
 
       final replyDyn = m['reply_to_message_id'] ?? m['replyToMessageId'];
       final replyId = (replyDyn is int)
@@ -362,13 +367,18 @@ class ChatsRepository {
           .toLocal();
 
       final encrypted = (m['message'] as String?) ?? '';
+      final messageType = ((m['message_type'] as String?) ?? 'text')
+          .trim()
+          .toLowerCase();
 
-      final decrypted = await _tryDecryptMessageAndKey(
-        encrypted: encrypted,
-        envelopes: m['envelopes'],
-        myUserId: myUserId,
-        myPrivateKeyB64: privateKey,
-      );
+      final decrypted = (messageType == 'system')
+          ? (text: encrypted, key: null)
+          : await _tryDecryptMessageAndKey(
+              encrypted: encrypted,
+              envelopes: m['envelopes'],
+              myUserId: myUserId,
+              myPrivateKeyB64: privateKey,
+            );
 
       final msgKey = decrypted.key;
       final attachments = await _tryDecryptAttachments(
@@ -389,6 +399,7 @@ class ChatsRepository {
           replyToMessageId: (replyId != null && replyId > 0)
               ? replyId.toString()
               : null,
+          isRead: isRead,
         ),
       );
     }
@@ -482,13 +493,15 @@ class ChatsRepository {
   }) async {
     if (metadata is! List) return const [];
     final key = msgKeyB64?.trim();
-    if (key == null || key.isEmpty) return const [];
+    final hasKey = key != null && key.isNotEmpty;
 
-    Uint8List keyBytes;
-    try {
-      keyBytes = base64Decode(key);
-    } catch (_) {
-      return const [];
+    Uint8List? keyBytes;
+    if (hasKey) {
+      try {
+        keyBytes = base64Decode(key);
+      } catch (_) {
+        return const [];
+      }
     }
 
     final outByIndex = List<ChatAttachment?>.filled(metadata.length, null);
@@ -505,10 +518,6 @@ class ChatsRepository {
       final size = (m['size'] is int)
           ? m['size'] as int
           : int.tryParse('${m['size']}') ?? 0;
-
-      if (nonce == null || nonce.isEmpty) {
-        return;
-      }
 
       Uint8List? ciphertextBytes;
       String? ciphertextB64;
@@ -530,15 +539,32 @@ class ChatsRepository {
         ciphertextB64 = encFile;
       }
 
-      final bytes = (ciphertextBytes != null)
-          ? await renSdk.decryptFileBytesRawWithKeyBytes(
-              ciphertextBytes,
-              nonce,
-              keyBytes,
-            )
-          : (ciphertextB64 != null && ciphertextB64.isNotEmpty)
-          ? await renSdk.decryptFileBytes(ciphertextB64, nonce, key)
-          : null;
+      Uint8List? bytes;
+      if (hasKey) {
+        if (nonce == null || nonce.isEmpty || keyBytes == null) {
+          return;
+        }
+        bytes = (ciphertextBytes != null)
+            ? await renSdk.decryptFileBytesRawWithKeyBytes(
+                ciphertextBytes,
+                nonce,
+                keyBytes,
+              )
+            : (ciphertextB64 != null && ciphertextB64.isNotEmpty)
+            ? await renSdk.decryptFileBytes(ciphertextB64, nonce, key)
+            : null;
+      } else {
+        // non-E2EE attachments: store bytes as-is
+        if (ciphertextBytes != null) {
+          bytes = ciphertextBytes;
+        } else if (ciphertextB64 != null && ciphertextB64.isNotEmpty) {
+          try {
+            bytes = Uint8List.fromList(base64Decode(ciphertextB64));
+          } catch (_) {
+            bytes = null;
+          }
+        }
+      }
       if (bytes == null) return;
 
       final path = await _localCache.saveMediaBytes(
@@ -714,6 +740,7 @@ class ChatsRepository {
       isFavorite: isFavorite,
       lastMessage: '',
       lastMessageAt: DateTime.now(),
+      unreadCount: 0,
     );
   }
 
@@ -749,6 +776,7 @@ class ChatsRepository {
       isFavorite: isFavorite,
       lastMessage: '',
       lastMessageAt: DateTime.now(),
+      unreadCount: 0,
     );
   }
 
@@ -845,6 +873,14 @@ class ChatsRepository {
 
   Future<void> deleteChat(int chatId, {bool forAll = false}) async {
     await api.deleteChat(chatId, forAll: forAll);
+  }
+
+  Future<int> markChatRead(int chatId, {int? messageId}) async {
+    final json = await api.markChatRead(chatId, messageId: messageId);
+    final lastRead = (json['last_read_message_id'] is int)
+        ? json['last_read_message_id'] as int
+        : int.tryParse('${json['last_read_message_id'] ?? ''}') ?? 0;
+    return lastRead;
   }
 
   Future<Map<String, dynamic>> buildOutgoingWsTextMessage({
@@ -1059,13 +1095,54 @@ class ChatsRepository {
     required String caption,
     required List<OutgoingAttachment> attachments,
   }) async {
-    if (!_isPrivateKind(chatKind)) {
-      throw Exception(
-        'Вложения пока поддерживаются только для private-чатов (E2EE)',
-      );
-    }
-
     return _runInMediaPipeline(() async {
+      if (!_isPrivateKind(chatKind)) {
+        final metadata = <Map<String, dynamic>>[];
+        for (final att in attachments) {
+          final filename = att.filename.isNotEmpty
+              ? att.filename
+              : 'file_${DateTime.now().millisecondsSinceEpoch}';
+          final mimetype = att.mimetype.isNotEmpty
+              ? att.mimetype
+              : 'application/octet-stream';
+          final rawBytes = att.bytes is Uint8List
+              ? att.bytes as Uint8List
+              : Uint8List.fromList(att.bytes);
+
+          final uploadResp = await _uploadMediaWithRetry(
+            chatId: chatId,
+            ciphertextBytes: rawBytes,
+            filename: filename,
+            mimetype: mimetype,
+          );
+          final uploadedId = uploadResp['file_id'];
+          final fileId = (uploadedId is int)
+              ? uploadedId
+              : int.tryParse('$uploadedId') ?? 0;
+          if (fileId <= 0) {
+            throw Exception('Не удалось загрузить файл');
+          }
+
+          metadata.add({
+            'file_id': fileId,
+            'filename': filename,
+            'mimetype': mimetype,
+            'size': rawBytes.length,
+            'enc_file': null,
+            'nonce': null,
+            'file_creation_date': null,
+          });
+        }
+
+        return {
+          'chat_id': chatId,
+          'message': caption,
+          'message_type': 'media',
+          'envelopes': null,
+          'metadata': metadata,
+        };
+      }
+
       final peer = peerId ?? 0;
       if (peer <= 0) {
         throw Exception('Некорректный peerId');
@@ -1185,6 +1262,12 @@ class ChatsRepository {
     final myPrivateKeyB64 = await _getMyPrivateKeyB64();
 
     final encrypted = message['message'] as String? ?? '';
+    final messageType = ((message['message_type'] as String?) ?? 'text')
+        .trim()
+        .toLowerCase();
+    if (messageType == 'system') {
+      return encrypted;
+    }
     final envelopes = message['envelopes'];
 
     final decrypted = await _tryDecryptMessageAndKey(
@@ -1203,6 +1286,12 @@ class ChatsRepository {
     final myPrivateKeyB64 = await _getMyPrivateKeyB64();
 
     final encrypted = message['message'] as String? ?? '';
+    final messageType = ((message['message_type'] as String?) ?? 'text')
+        .trim()
+        .toLowerCase();
+    if (messageType == 'system') {
+      return (text: encrypted, attachments: const <ChatAttachment>[]);
+    }
     final envelopes = message['envelopes'];
 
     final decrypted = await _tryDecryptMessageAndKey(
@@ -1254,6 +1343,14 @@ class ChatsRepository {
     List<ChatMessage> messages,
   ) async {
     await _localCache.writeMessages(chatId, messages);
+  }
+
+  Future<double?> loadChatScrollOffset(String chatId) async {
+    return _localCache.readChatScrollOffset(chatId);
+  }
+
+  Future<void> saveChatScrollOffset(String chatId, double offset) async {
+    await _localCache.writeChatScrollOffset(chatId, offset);
   }
 
   Future<void> clearAppCache({

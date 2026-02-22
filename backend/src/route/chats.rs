@@ -6,12 +6,17 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use serde_json::json;
 use sqlx::{Postgres, Row, Transaction};
 
 use crate::AppState;
 use crate::middleware::CurrentUser; // экстрактор текущего пользователя
 use crate::middleware::ensure_member;
 use crate::models::chats::{Chat, CreateChatRequest, FileMetadata, Message};
+use crate::route::ws::{
+    publish_chat_created, publish_member_added, publish_member_removed,
+    publish_member_role_changed, publish_message_read, publish_payload_to_users,
+};
 
 // Модели вынесены в crate::models::chats
 
@@ -24,6 +29,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/chats", post(create_chat).get(list_chats))
         .route("/chats/:chat_id/messages", get(get_messages))
+        .route("/chats/:id/read", post(mark_chat_read))
         .route("/chats/:id/members", get(list_members).post(add_member))
         .route(
             "/chats/:id/members/:user_id",
@@ -63,6 +69,16 @@ struct UpdateMemberRoleRequest {
     role: String,
 }
 
+#[derive(Deserialize)]
+struct MarkReadRequest {
+    message_id: Option<i64>,
+}
+
+#[derive(Serialize)]
+struct MarkReadResponse {
+    last_read_message_id: i64,
+}
+
 fn normalize_member_role(kind: &str, role: Option<&str>) -> Result<String, (StatusCode, String)> {
     let normalized = role.unwrap_or("member").trim().to_lowercase();
     if normalized.is_empty() {
@@ -94,6 +110,133 @@ fn normalize_member_role(kind: &str, role: Option<&str>) -> Result<String, (Stat
     }
 }
 
+async fn load_chat_recipients(
+    state: &AppState,
+    chat_id: i32,
+) -> Result<Vec<i32>, (StatusCode, String)> {
+    let rows = sqlx::query("SELECT user_id FROM chat_participants WHERE chat_id = $1")
+        .bind(chat_id)
+        .fetch_all(&state.pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Ошибка БД: {}", e),
+            )
+        })?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| row.try_get::<i32, _>("user_id").unwrap_or_default())
+        .collect::<Vec<_>>())
+}
+
+async fn resolve_user_name(state: &AppState, user_id: i32) -> String {
+    if user_id <= 0 {
+        return "пользователь".to_string();
+    }
+
+    let row = sqlx::query("SELECT COALESCE(username, login) AS name FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_optional(&state.pool)
+        .await
+        .ok()
+        .flatten();
+
+    if let Some(row) = row {
+        let name = row.try_get::<String, _>("name").unwrap_or_default();
+        let trimmed = name.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    format!("user #{}", user_id)
+}
+
+async fn create_system_message_and_publish(
+    state: &AppState,
+    chat_id: i32,
+    actor_user_id: i32,
+    text: String,
+    recipients: &[i32],
+) -> Result<(), (StatusCode, String)> {
+    let row = sqlx::query(
+        r#"
+        INSERT INTO messages (chat_id, sender_id, message, message_type, envelopes, metadata)
+        VALUES ($1, $2, $3, 'system', NULL, NULL)
+        RETURNING
+            id::INT8 AS id,
+            chat_id::INT8 AS chat_id,
+            sender_id::INT8 AS sender_id,
+            message,
+            message_type,
+            created_at,
+            edited_at,
+            reply_to_message_id::INT8 AS reply_to_message_id,
+            forwarded_from_message_id::INT8 AS forwarded_from_message_id,
+            forwarded_from_chat_id::INT8 AS forwarded_from_chat_id,
+            forwarded_from_sender_id::INT8 AS forwarded_from_sender_id,
+            deleted_at,
+            deleted_by::INT8 AS deleted_by,
+            is_read,
+            envelopes,
+            metadata
+        "#,
+    )
+    .bind(chat_id)
+    .bind(actor_user_id)
+    .bind(text)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Ошибка БД: {}", e),
+        )
+    })?;
+
+    let msg = Message {
+        id: row.try_get("id").unwrap_or_default(),
+        chat_id: row.try_get("chat_id").unwrap_or_default(),
+        sender_id: row.try_get("sender_id").unwrap_or_default(),
+        message: row.try_get("message").unwrap_or_default(),
+        message_type: row
+            .try_get("message_type")
+            .unwrap_or_else(|_| "system".to_string()),
+        created_at: row
+            .try_get::<chrono::DateTime<chrono::Utc>, _>("created_at")
+            .map(|t| t.to_rfc3339())
+            .unwrap_or_default(),
+        edited_at: row
+            .try_get::<chrono::DateTime<chrono::Utc>, _>("edited_at")
+            .ok()
+            .map(|t| t.to_rfc3339()),
+        reply_to_message_id: row.try_get("reply_to_message_id").ok(),
+        forwarded_from_message_id: row.try_get("forwarded_from_message_id").ok(),
+        forwarded_from_chat_id: row.try_get("forwarded_from_chat_id").ok(),
+        forwarded_from_sender_id: row.try_get("forwarded_from_sender_id").ok(),
+        deleted_at: row
+            .try_get::<chrono::DateTime<chrono::Utc>, _>("deleted_at")
+            .ok()
+            .map(|t| t.to_rfc3339()),
+        deleted_by: row.try_get("deleted_by").ok(),
+        is_read: row.try_get("is_read").unwrap_or(false),
+        has_files: Some(false),
+        metadata: None,
+        envelopes: None,
+        status: Some("sent".to_string()),
+    };
+
+    let payload = json!({
+        "type": "message_new",
+        "chat_id": chat_id,
+        "message": msg
+    })
+    .to_string();
+    publish_payload_to_users(state, recipients, payload);
+    Ok(())
+}
+
 // ---------------------------
 // POST /chats — создать чат
 // ---------------------------
@@ -123,7 +266,10 @@ async fn create_chat(
         }
         "channel" => {
             if body.title.as_deref().unwrap_or("").trim().is_empty() {
-                return Err((StatusCode::BAD_REQUEST, "Для channel обязателен title".into()));
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "Для channel обязателен title".into(),
+                ));
             }
         }
         _ => {
@@ -186,6 +332,7 @@ async fn create_chat(
                 peer_id: None,
                 peer_username: None,
                 peer_avatar: None,
+                unread_count: Some(0),
             };
             // Гарантируем, что текущий пользователь числится участником (если выходил ранее — вернём в чат)
             sqlx::query(
@@ -271,6 +418,7 @@ async fn create_chat(
                 peer_id: None,
                 peer_username: None,
                 peer_avatar: None,
+                unread_count: Some(0),
             };
             tx.commit().await.ok();
             return Ok(Json(chat));
@@ -394,7 +542,18 @@ async fn create_chat(
         peer_id: None,
         peer_username: None,
         peer_avatar: None,
+        unread_count: Some(0),
     };
+
+    let recipients = inserted_users.into_iter().collect::<Vec<_>>();
+    publish_chat_created(
+        &state,
+        &recipients,
+        chat_id,
+        &chat.kind,
+        chat.title.as_deref(),
+        current_user_id,
+    );
 
     Ok(Json(chat))
 }
@@ -437,7 +596,15 @@ async fn list_chats(
                 )
             ) AS peer_id,
             COALESCE(u.username, u.login) AS peer_username,
-            u.avatar   AS peer_avatar
+            u.avatar   AS peer_avatar,
+            (
+                SELECT COUNT(*)::INT8
+                FROM messages m
+                WHERE m.chat_id = c.id
+                  AND m.deleted_at IS NULL
+                  AND m.sender_id <> $1
+                  AND m.id::INT8 > COALESCE(p.last_read_message_id::INT8, 0)
+            ) AS unread_count
         FROM chats c
         JOIN chat_participants p ON p.chat_id = c.id
         LEFT JOIN users u ON u.id = COALESCE(
@@ -490,6 +657,7 @@ async fn list_chats(
             peer_id: row.try_get("peer_id").ok(),
             peer_username: row.try_get("peer_username").ok(),
             peer_avatar: row.try_get("peer_avatar").ok(),
+            unread_count: row.try_get("unread_count").ok().or(Some(0)),
         })
         .collect();
 
@@ -603,6 +771,93 @@ async fn get_messages(
         .collect();
 
     Ok(Json(items))
+}
+
+// ---------------------------
+// POST /chats/{id}/read — отметить сообщения как прочитанные до message_id (или до последнего)
+// ---------------------------
+async fn mark_chat_read(
+    State(state): State<AppState>,
+    CurrentUser {
+        id: current_user_id,
+        ..
+    }: CurrentUser,
+    Path(id): Path<i32>,
+    Json(body): Json<MarkReadRequest>,
+) -> Result<Json<MarkReadResponse>, (StatusCode, String)> {
+    ensure_member(&state, id, current_user_id).await?;
+
+    let max_message_id: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COALESCE(MAX(id)::INT8, 0)
+        FROM messages
+        WHERE chat_id = $1
+          AND deleted_at IS NULL
+        "#,
+    )
+    .bind(id)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Ошибка БД: {}", e),
+        )
+    })?;
+
+    let requested = body.message_id.unwrap_or(max_message_id).max(0);
+    let target = requested.min(max_message_id);
+    let target_i32 = target.min(i32::MAX as i64) as i32;
+
+    let updated_last_read: i64 = sqlx::query_scalar(
+        r#"
+        UPDATE chat_participants
+        SET last_read_message_id = GREATEST(COALESCE(last_read_message_id, 0), $3)
+        WHERE chat_id = $1 AND user_id = $2
+        RETURNING COALESCE(last_read_message_id::INT8, 0)
+        "#,
+    )
+    .bind(id)
+    .bind(current_user_id)
+    .bind(target_i32)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Ошибка БД: {}", e),
+        )
+    })?;
+
+    let kind: String = sqlx::query_scalar("SELECT kind FROM chats WHERE id = $1")
+        .bind(id)
+        .fetch_one(&state.pool)
+        .await
+        .unwrap_or_else(|_| "private".to_string());
+
+    if kind == "private" && updated_last_read > 0 {
+        let _ = sqlx::query(
+            r#"
+            UPDATE messages
+            SET is_read = TRUE
+            WHERE chat_id = $1
+              AND sender_id <> $2
+              AND id::INT8 <= $3
+            "#,
+        )
+        .bind(id)
+        .bind(current_user_id)
+        .bind(updated_last_read)
+        .execute(&state.pool)
+        .await;
+    }
+
+    let recipients = load_chat_recipients(&state, id).await?;
+    publish_message_read(&state, &recipients, id, current_user_id, updated_last_read);
+
+    Ok(Json(MarkReadResponse {
+        last_read_message_id: updated_last_read,
+    }))
 }
 
 // ---------------------------
@@ -721,7 +976,7 @@ async fn add_member(
     )
     .bind(id)
     .bind(body.user_id)
-    .bind(role)
+    .bind(&role)
     .execute(&state.pool)
     .await
     .map_err(|e| {
@@ -730,6 +985,23 @@ async fn add_member(
             format!("Ошибка БД: {}", e),
         )
     })?;
+
+    let recipients = load_chat_recipients(&state, id).await?;
+    publish_member_added(
+        &state,
+        &recipients,
+        id,
+        body.user_id,
+        role.clone(),
+        current_user_id,
+    );
+    let actor_name = resolve_user_name(&state, current_user_id).await;
+    let target_name = resolve_user_name(&state, body.user_id).await;
+    let text = format!(
+        "{} добавил(а) {} в чат (роль: {}).",
+        actor_name, target_name, role
+    );
+    create_system_message_and_publish(&state, id, current_user_id, text, &recipients).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -793,24 +1065,40 @@ async fn update_member_role(
     }
 
     let role = normalize_member_role(&kind, Some(body.role.as_str()))?;
-    let updated = sqlx::query(
-        "UPDATE chat_participants SET role = $1 WHERE chat_id = $2 AND user_id = $3",
-    )
-    .bind(role)
-    .bind(id)
-    .bind(user_id)
-    .execute(&state.pool)
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Ошибка БД: {}", e),
-        )
-    })?;
+    let updated =
+        sqlx::query("UPDATE chat_participants SET role = $1 WHERE chat_id = $2 AND user_id = $3")
+            .bind(role.clone())
+            .bind(id)
+            .bind(user_id)
+            .execute(&state.pool)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Ошибка БД: {}", e),
+                )
+            })?;
 
     if updated.rows_affected() == 0 {
         return Err((StatusCode::NOT_FOUND, "Участник не найден".into()));
     }
+
+    let recipients = load_chat_recipients(&state, id).await?;
+    publish_member_role_changed(
+        &state,
+        &recipients,
+        id,
+        user_id,
+        role.clone(),
+        current_user_id,
+    );
+    let actor_name = resolve_user_name(&state, current_user_id).await;
+    let target_name = resolve_user_name(&state, user_id).await;
+    let text = format!(
+        "{} изменил(а) роль {} на {}.",
+        actor_name, target_name, role
+    );
+    create_system_message_and_publish(&state, id, current_user_id, text, &recipients).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -891,6 +1179,19 @@ async fn remove_member(
     if deleted.rows_affected() == 0 {
         return Err((StatusCode::NOT_FOUND, "Участник не найден".into()));
     }
+
+    let mut recipients = load_chat_recipients(&state, id).await?;
+    recipients.push(user_id);
+    publish_member_removed(&state, &recipients, id, user_id, current_user_id);
+    let actor_name = resolve_user_name(&state, current_user_id).await;
+    let target_name = resolve_user_name(&state, user_id).await;
+    let text = format!("{} удалил(а) {} из чата.", actor_name, target_name);
+    let system_recipients = recipients
+        .into_iter()
+        .filter(|uid| *uid != user_id)
+        .collect::<Vec<_>>();
+    create_system_message_and_publish(&state, id, current_user_id, text, &system_recipients)
+        .await?;
 
     Ok(StatusCode::NO_CONTENT)
 }

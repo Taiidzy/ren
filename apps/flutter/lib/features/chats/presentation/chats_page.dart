@@ -158,12 +158,43 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
           x.user.avatarUrl != y.user.avatarUrl ||
           x.lastMessage != y.lastMessage ||
           x.isFavorite != y.isFavorite ||
+          x.unreadCount != y.unreadCount ||
           x.lastMessageAt.millisecondsSinceEpoch !=
               y.lastMessageAt.millisecondsSinceEpoch) {
         return true;
       }
     }
     return false;
+  }
+
+  Future<void> _openChat(ChatPreview chat) async {
+    final chatId = int.tryParse(chat.id) ?? 0;
+    if (chatId > 0 && mounted) {
+      setState(() {
+        _chats = _chats
+            .map(
+              (c) => c.id == chat.id
+                  ? ChatPreview(
+                      id: c.id,
+                      peerId: c.peerId,
+                      kind: c.kind,
+                      user: c.user,
+                      isFavorite: c.isFavorite,
+                      lastMessage: c.lastMessage,
+                      lastMessageAt: c.lastMessageAt,
+                      unreadCount: 0,
+                    )
+                  : c,
+            )
+            .toList(growable: false);
+      });
+    }
+    if (!mounted) return;
+    await Navigator.of(
+      context,
+    ).push(adaptivePageRoute((_) => ChatPage(chat: chat)));
+    if (!mounted) return;
+    await _syncChats();
   }
 
   Future<void> _loadChatsOfflineFirst() async {
@@ -496,9 +527,7 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
         if (!mounted) return;
         await _reloadChats();
         if (!mounted) return;
-        Navigator.of(
-          context,
-        ).push(adaptivePageRoute((_) => ChatPage(chat: chat)));
+        _openChat(chat);
       } catch (e) {
         if (!mounted) return;
         showGlassSnack(context, e.toString(), kind: GlassSnackKind.error);
@@ -569,9 +598,7 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
       if (!mounted) return;
       await _reloadChats();
       if (!mounted) return;
-      Navigator.of(
-        context,
-      ).push(adaptivePageRoute((_) => ChatPage(chat: chat)));
+      _openChat(chat);
     } catch (e) {
       if (!mounted) return;
       showGlassSnack(context, e.toString(), kind: GlassSnackKind.error);
@@ -705,7 +732,12 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
 
       if (evt.type == 'message_new' ||
           evt.type == 'message_updated' ||
-          evt.type == 'message_deleted') {
+          evt.type == 'message_deleted' ||
+          evt.type == 'message_read' ||
+          evt.type == 'chat_created' ||
+          evt.type == 'member_added' ||
+          evt.type == 'member_removed' ||
+          evt.type == 'member_role_changed') {
         unawaited(_syncChats());
       }
 
@@ -744,6 +776,7 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                   isFavorite: c.isFavorite,
                   lastMessage: c.lastMessage,
                   lastMessageAt: c.lastMessageAt,
+                  unreadCount: c.unreadCount,
                 );
               })
               .toList(growable: false);
@@ -783,7 +816,6 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
 
         final decoded = await repo.decryptIncomingWsMessageFull(message: m);
         final hasAttachments = decoded.attachments.isNotEmpty;
-
         final chat = _chatIndex[chatId];
         final title = (chat?.user.name ?? '').trim().isNotEmpty
             ? (chat!.user.name)
@@ -804,9 +836,7 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
             onTap: () {
               final c = _chatIndex[chatId];
               if (c == null) return;
-              Navigator.of(
-                context,
-              ).push(adaptivePageRoute((_) => ChatPage(chat: c)));
+              _openChat(c);
             },
           );
         } else {
@@ -994,6 +1024,7 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                       isFavorite: c.isFavorite,
                       lastMessage: c.lastMessage,
                       lastMessageAt: c.lastMessageAt,
+                      unreadCount: c.unreadCount,
                     ),
                   )
                   .toList();
@@ -1123,15 +1154,10 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                                       final chat = visibleChats[index];
                                       return _ChatTile(
                                         chat: chat,
+                                        unreadCount: chat.unreadCount,
                                         onLongPressAt: (pos) =>
                                             _showChatActionsAt(chat, pos),
-                                        onTap: () {
-                                          Navigator.of(context).push(
-                                            adaptivePageRoute(
-                                              (_) => ChatPage(chat: chat),
-                                            ),
-                                          );
-                                        },
+                                        onTap: () => _openChat(chat),
                                       );
                                     },
                                   )
@@ -1151,15 +1177,10 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                                       for (final chat in visibleChats) ...[
                                         _ChatTile(
                                           chat: chat,
+                                          unreadCount: chat.unreadCount,
                                           onLongPressAt: (pos) =>
                                               _showChatActionsAt(chat, pos),
-                                          onTap: () {
-                                            Navigator.of(context).push(
-                                              adaptivePageRoute(
-                                                (_) => ChatPage(chat: chat),
-                                              ),
-                                            );
-                                          },
+                                          onTap: () => _openChat(chat),
                                         ),
                                         const SizedBox(height: 10),
                                       ],
@@ -1244,13 +1265,7 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
 
                                               if (existing != null) {
                                                 if (!context.mounted) return;
-                                                Navigator.of(context).push(
-                                                  adaptivePageRoute(
-                                                    (_) => ChatPage(
-                                                      chat: existing,
-                                                    ),
-                                                  ),
-                                                );
+                                                _openChat(existing);
                                                 return;
                                               }
 
@@ -1268,11 +1283,7 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                                                 if (!context.mounted) return;
                                                 await _reloadChats();
                                                 if (!context.mounted) return;
-                                                Navigator.of(context).push(
-                                                  adaptivePageRoute(
-                                                    (_) => ChatPage(chat: chat),
-                                                  ),
-                                                );
+                                                _openChat(chat);
                                               } catch (e) {
                                                 if (!context.mounted) return;
                                                 showGlassSnack(
@@ -1403,11 +1414,13 @@ class _FavoriteItem extends StatelessWidget {
 
 class _ChatTile extends StatelessWidget {
   final ChatPreview chat;
+  final int unreadCount;
   final VoidCallback onTap;
   final ValueChanged<Offset> onLongPressAt;
 
   const _ChatTile({
     required this.chat,
+    this.unreadCount = 0,
     required this.onTap,
     required this.onLongPressAt,
   });
@@ -1465,12 +1478,49 @@ class _ChatTile extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 10),
-            Text(
-              _formatTime(chat.lastMessageAt),
-              style: TextStyle(
-                fontSize: 11,
-                color: theme.colorScheme.onSurface.withOpacity(0.60),
-              ),
+            Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  _formatTime(chat.lastMessageAt),
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: theme.colorScheme.onSurface.withOpacity(0.60),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 180),
+                  child: unreadCount > 0
+                      ? Container(
+                          key: ValueKey<int>(unreadCount),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 7,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.primary.withOpacity(0.92),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          constraints: const BoxConstraints(minWidth: 22),
+                          alignment: Alignment.center,
+                          child: Text(
+                            unreadCount > 99 ? '99+' : '$unreadCount',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800,
+                              color: theme.colorScheme.onPrimary,
+                            ),
+                          ),
+                        )
+                      : const SizedBox(
+                          key: ValueKey('no_unread'),
+                          width: 22,
+                          height: 16,
+                        ),
+                ),
+              ],
             ),
           ],
         ),

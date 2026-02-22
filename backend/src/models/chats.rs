@@ -15,6 +15,7 @@ pub struct Chat {
     pub peer_id: Option<i32>,
     pub peer_username: Option<String>,
     pub peer_avatar: Option<String>,
+    pub unread_count: Option<i64>,
 }
 
 // Конверт для E2EE (зашифрованный ключ для конкретного пользователя)

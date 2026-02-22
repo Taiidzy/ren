@@ -54,6 +54,10 @@ class _ChatPageState extends State<ChatPage>
   final _controller = TextEditingController();
   final _focusNode = FocusNode();
   final _scrollController = ScrollController();
+  static final Map<String, double> _savedScrollOffsetByChatId =
+      <String, double>{};
+  final Map<String, GlobalKey> _messageItemKeys = <String, GlobalKey>{};
+  bool _didApplyInitialScroll = false;
   bool _loading = true;
   bool _loadingMore = false;
   bool _hasMore = true;
@@ -87,7 +91,11 @@ class _ChatPageState extends State<ChatPage>
   bool _peerTyping = false;
   String _peerName = '';
   String _peerAvatarUrl = '';
+  String _myRoleInChat = 'member';
+  bool _canSendInCurrentChat = true;
   Timer? _typingDebounce;
+  Timer? _markReadDebounce;
+  int _lastReadMarkedMessageId = 0;
 
   bool _isAtBottom = true;
 
@@ -188,6 +196,11 @@ class _ChatPageState extends State<ChatPage>
       return '${(bytes / kb).toStringAsFixed(1)} KB';
     }
     return '$bytes B';
+  }
+
+  int _asInt(dynamic value) {
+    if (value is int) return value;
+    return int.tryParse('$value') ?? 0;
   }
 
   String _newPendingId() {
@@ -317,9 +330,12 @@ class _ChatPageState extends State<ChatPage>
 
   void _reindexMessages() {
     _messageById.clear();
+    final ids = <String>{};
     for (final m in _messages) {
       _messageById[m.id] = m;
+      ids.add(m.id);
     }
+    _messageItemKeys.removeWhere((id, _) => !ids.contains(id));
   }
 
   String _messageSummary(ChatMessage m) {
@@ -383,6 +399,8 @@ class _ChatPageState extends State<ChatPage>
         audioPath: audioPath,
         timeLabel: _formatTime(msg.sentAt),
         isMe: msg.isMe,
+        isRead: msg.isRead,
+        isPending: msg.id.startsWith('local_'),
         isDark: isDark,
       );
     }
@@ -393,6 +411,8 @@ class _ChatPageState extends State<ChatPage>
         videoPath: videoPath,
         timeLabel: _formatTime(msg.sentAt),
         isMe: msg.isMe,
+        isRead: msg.isRead,
+        isPending: msg.id.startsWith('local_'),
         isDark: isDark,
       );
     }
@@ -405,6 +425,8 @@ class _ChatPageState extends State<ChatPage>
       attachments: msg.attachments,
       timeLabel: _formatTime(msg.sentAt),
       isMe: msg.isMe,
+      isRead: msg.isRead,
+      isPending: msg.id.startsWith('local_'),
       isDark: isDark,
       onOpenAttachment: (a) => _openAttachmentSheet(a),
     );
@@ -461,6 +483,43 @@ class _ChatPageState extends State<ChatPage>
         repo: _repo,
       ),
     );
+    await _refreshMyChatRole();
+  }
+
+  Future<void> _refreshMyChatRole() async {
+    final kind = widget.chat.kind.trim().toLowerCase();
+    if (kind != 'channel') {
+      if (!mounted) return;
+      setState(() {
+        _myRoleInChat = 'member';
+        _canSendInCurrentChat = true;
+      });
+      return;
+    }
+
+    final myId = _myUserId ?? await _readMyUserId();
+    final chatId = int.tryParse(widget.chat.id) ?? 0;
+    if (chatId <= 0) return;
+    try {
+      final members = await _repo.listMembers(chatId);
+      final me = members
+          .where((m) => m.userId == myId)
+          .cast<ChatMember?>()
+          .firstWhere((m) => m != null, orElse: () => null);
+      final role = (me?.role ?? 'member').trim().toLowerCase();
+      final canSend = role == 'owner' || role == 'admin';
+      if (!mounted) return;
+      setState(() {
+        _myRoleInChat = role.isEmpty ? 'member' : role;
+        _canSendInCurrentChat = canSend;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _myRoleInChat = 'member';
+        _canSendInCurrentChat = false;
+      });
+    }
   }
 
   @override
@@ -502,6 +561,17 @@ class _ChatPageState extends State<ChatPage>
       _scheduleScrollToBottom(animated: false);
     } else {
       _lastViewInsetsBottom = bottom;
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if ((state == AppLifecycleState.inactive ||
+            state == AppLifecycleState.paused) &&
+        _scrollController.hasClients) {
+      final offset = _scrollController.offset;
+      _savedScrollOffsetByChatId[widget.chat.id] = offset;
+      unawaited(_repo.saveChatScrollOffset(widget.chat.id, offset));
     }
   }
 
@@ -551,6 +621,8 @@ class _ChatPageState extends State<ChatPage>
         _loadOlder();
       });
     }
+
+    _scheduleMarkRead();
   }
 
   Future<void> _loadOlder() async {
@@ -660,10 +732,128 @@ class _ChatPageState extends State<ChatPage>
   }
 
   void _sendTyping(bool isTyping) {
+    if (!_canSendInCurrentChat) return;
     final chatId = int.tryParse(widget.chat.id) ?? 0;
     final rt = _rt;
     if (rt == null || !rt.isConnected) return;
     rt.typing(chatId, isTyping);
+  }
+
+  GlobalKey _messageKey(String messageId) {
+    return _messageItemKeys.putIfAbsent(
+      messageId,
+      () => GlobalKey(debugLabel: 'msg_$messageId'),
+    );
+  }
+
+  int _latestVisibleRemoteMessageId() {
+    if (!_scrollController.hasClients) return 0;
+    final viewportRenderObject = _scrollController
+        .position
+        .context
+        .storageContext
+        .findRenderObject();
+    if (viewportRenderObject is! RenderBox || !viewportRenderObject.attached) {
+      return 0;
+    }
+
+    final viewportRect = Offset.zero & viewportRenderObject.size;
+    var maxVisibleId = 0;
+
+    for (final msg in _messages) {
+      final mid = int.tryParse(msg.id) ?? 0;
+      if (mid <= 0) continue;
+
+      final key = _messageItemKeys[msg.id];
+      final ctx = key?.currentContext;
+      if (ctx == null) continue;
+      final box = ctx.findRenderObject();
+      if (box is! RenderBox || !box.attached) continue;
+
+      final topLeft = box.localToGlobal(
+        Offset.zero,
+        ancestor: viewportRenderObject,
+      );
+      final rect = topLeft & box.size;
+      final visible = rect.intersect(viewportRect);
+      if (visible.isEmpty) continue;
+
+      final minVisibleHeight = math.max(20.0, rect.height * 0.35);
+      if (visible.height < minVisibleHeight) continue;
+
+      if (mid > maxVisibleId) {
+        maxVisibleId = mid;
+      }
+    }
+
+    return maxVisibleId;
+  }
+
+  void _applyInitialScrollPosition() {
+    if (_didApplyInitialScroll) return;
+    _didApplyInitialScroll = true;
+
+    final savedOffset = _savedScrollOffsetByChatId[widget.chat.id];
+    if (savedOffset == null) {
+      _scheduleScrollToBottom(animated: false);
+      return;
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scrollController.hasClients) return;
+      final pos = _scrollController.position;
+      final target = savedOffset.clamp(0.0, pos.maxScrollExtent);
+      _scrollController.jumpTo(target);
+      final dist = pos.maxScrollExtent - target;
+      final atBottom = dist < 120;
+      if (atBottom != _isAtBottom && mounted) {
+        setState(() {
+          _isAtBottom = atBottom;
+        });
+      }
+    });
+  }
+
+  Future<void> _markChatReadUpToLatest() async {
+    final chatId = int.tryParse(widget.chat.id) ?? 0;
+    if (chatId <= 0) return;
+
+    final latestId = _latestVisibleRemoteMessageId();
+    if (latestId <= 0 || latestId <= _lastReadMarkedMessageId) return;
+
+    try {
+      final acknowledged = await _repo.markChatRead(
+        chatId,
+        messageId: latestId,
+      );
+      if (acknowledged > _lastReadMarkedMessageId) {
+        _lastReadMarkedMessageId = acknowledged;
+      }
+    } catch (_) {
+      // ignore transient read sync failures
+    }
+  }
+
+  void _scheduleMarkRead() {
+    _markReadDebounce?.cancel();
+    _markReadDebounce = Timer(const Duration(milliseconds: 220), () {
+      if (!mounted) return;
+      unawaited(_markChatReadUpToLatest());
+    });
+  }
+
+  Future<void> _ensurePersistedScrollOffsetLoaded() async {
+    if (_savedScrollOffsetByChatId.containsKey(widget.chat.id)) {
+      return;
+    }
+    try {
+      final stored = await _repo.loadChatScrollOffset(widget.chat.id);
+      if (stored != null && stored.isFinite) {
+        _savedScrollOffsetByChatId[widget.chat.id] = stored;
+      }
+    } catch (_) {
+      // ignore local cache read errors
+    }
   }
 
   void _onTextChanged() {
@@ -686,6 +876,7 @@ class _ChatPageState extends State<ChatPage>
   Future<void> _init() async {
     final chatId = int.tryParse(widget.chat.id) ?? 0;
     final repo = context.read<ChatsRepository>();
+    await _ensurePersistedScrollOffsetLoaded();
 
     final cached = await repo.getCachedMessages(chatId);
     if (mounted && cached.isNotEmpty) {
@@ -697,7 +888,8 @@ class _ChatPageState extends State<ChatPage>
         _loading = false;
         _hasMore = true;
       });
-      _scheduleScrollToBottom(animated: false);
+      _applyInitialScrollPosition();
+      _scheduleMarkRead();
     }
 
     try {
@@ -711,7 +903,8 @@ class _ChatPageState extends State<ChatPage>
         _loading = false;
         _hasMore = true;
       });
-      _scheduleScrollToBottom(animated: false);
+      _applyInitialScrollPosition();
+      _scheduleMarkRead();
     } catch (_) {
       if (!mounted) return;
       setState(() {
@@ -720,6 +913,7 @@ class _ChatPageState extends State<ChatPage>
     }
 
     await _ensureRealtime();
+    await _refreshMyChatRole();
   }
 
   Future<void> _resyncAfterReconnect() async {
@@ -735,7 +929,7 @@ class _ChatPageState extends State<ChatPage>
           ..addAll(list);
         _reindexMessages();
       });
-      _scheduleScrollToBottom(animated: false);
+      _scheduleMarkRead();
     } catch (_) {
       // ignore transient reconnect sync errors
     }
@@ -792,6 +986,7 @@ class _ChatPageState extends State<ChatPage>
         final reconnected = evt.data['reconnected'] == true;
         if (reconnected) {
           unawaited(_resyncAfterReconnect());
+          unawaited(_refreshMyChatRole());
         }
         return;
       }
@@ -821,6 +1016,70 @@ class _ChatPageState extends State<ChatPage>
           }
           _peerAvatarUrl = avatar;
         });
+        return;
+      }
+
+      if (evt.type == 'member_added' ||
+          evt.type == 'member_removed' ||
+          evt.type == 'member_role_changed') {
+        final evtChatId = _asInt(evt.data['chat_id'] ?? evt.data['chatId']);
+        if (evtChatId != chatId) return;
+
+        final targetUserId = _asInt(evt.data['user_id'] ?? evt.data['userId']);
+        final myId = _myUserId ?? 0;
+        if (evt.type == 'member_removed' &&
+            myId > 0 &&
+            targetUserId > 0 &&
+            targetUserId == myId) {
+          if (!mounted) return;
+          showGlassSnack(
+            context,
+            'Вы были удалены из этого чата',
+            kind: GlassSnackKind.info,
+          );
+          Navigator.of(context).maybePop();
+          return;
+        }
+
+        unawaited(_refreshMyChatRole());
+        return;
+      }
+
+      if (evt.type == 'message_read') {
+        final evtChatId = _asInt(evt.data['chat_id'] ?? evt.data['chatId']);
+        if (evtChatId != chatId) return;
+        final userId = _asInt(evt.data['user_id'] ?? evt.data['userId']);
+        final lastRead = _asInt(
+          evt.data['last_read_message_id'] ?? evt.data['lastReadMessageId'],
+        );
+        final myId = _myUserId ?? 0;
+        if (userId == myId && lastRead > _lastReadMarkedMessageId) {
+          _lastReadMarkedMessageId = lastRead;
+          return;
+        }
+
+        if (_isPrivateChat && userId != myId && lastRead > 0 && mounted) {
+          setState(() {
+            for (var i = 0; i < _messages.length; i++) {
+              final msg = _messages[i];
+              if (!msg.isMe || msg.isRead) continue;
+              final mid = int.tryParse(msg.id) ?? 0;
+              if (mid <= 0 || mid > lastRead) continue;
+              final updated = ChatMessage(
+                id: msg.id,
+                chatId: msg.chatId,
+                isMe: msg.isMe,
+                text: msg.text,
+                attachments: msg.attachments,
+                sentAt: msg.sentAt,
+                replyToMessageId: msg.replyToMessageId,
+                isRead: true,
+              );
+              _messages[i] = updated;
+              _messageById[msg.id] = updated;
+            }
+          });
+        }
         return;
       }
 
@@ -860,6 +1119,7 @@ class _ChatPageState extends State<ChatPage>
             attachments: old.attachments,
             sentAt: old.sentAt,
             replyToMessageId: old.replyToMessageId,
+            isRead: old.isRead,
           );
 
           _messages[idx] = updated;
@@ -983,6 +1243,7 @@ class _ChatPageState extends State<ChatPage>
           replyToMessageId: (replyId != null && replyId > 0)
               ? replyId.toString()
               : null,
+          isRead: m['is_read'] == true || m['isRead'] == true,
         );
         _messages.add(created);
         _messageById[created.id] = created;
@@ -990,6 +1251,9 @@ class _ChatPageState extends State<ChatPage>
 
       if (isMe || _isAtBottom) {
         _scheduleScrollToBottom(animated: true);
+      }
+      if (!isMe) {
+        _scheduleMarkRead();
       }
     });
   }
@@ -1000,6 +1264,14 @@ class _ChatPageState extends State<ChatPage>
   }
 
   Future<void> _send() async {
+    if (!_canSendInCurrentChat) {
+      showGlassSnack(
+        context,
+        'У вас нет прав на отправку сообщений в этом канале',
+        kind: GlassSnackKind.info,
+      );
+      return;
+    }
     if (_isSendingMessage) return;
     final chatId = int.tryParse(widget.chat.id) ?? 0;
     final peerId = widget.chat.peerId ?? 0;
@@ -1049,6 +1321,7 @@ class _ChatPageState extends State<ChatPage>
               attachments: old.attachments,
               sentAt: old.sentAt,
               replyToMessageId: old.replyToMessageId,
+              isRead: old.isRead,
             );
 
             _reindexMessages();
@@ -1207,9 +1480,18 @@ class _ChatPageState extends State<ChatPage>
   }
 
   Future<void> _sendRecordedVoice(PendingChatAttachment attachment) async {
+    if (!_canSendInCurrentChat) {
+      showGlassSnack(
+        context,
+        'У вас нет прав на отправку сообщений в этом канале',
+        kind: GlassSnackKind.info,
+      );
+      return;
+    }
     final chatId = int.tryParse(widget.chat.id) ?? 0;
     final peerId = widget.chat.peerId ?? 0;
-    if (chatId <= 0 || !_isPrivateChat || peerId <= 0) return;
+    if (chatId <= 0) return;
+    if (_isPrivateChat && peerId <= 0) return;
     if (!_canAttachFileSize(attachment.sizeBytes)) return;
 
     final repo = context.read<ChatsRepository>();
@@ -1252,7 +1534,7 @@ class _ChatPageState extends State<ChatPage>
       final payload = await repo.buildOutgoingWsMediaMessage(
         chatId: chatId,
         chatKind: widget.chat.kind,
-        peerId: peerId,
+        peerId: _isPrivateChat ? peerId : null,
         caption: '',
         attachments: [
           OutgoingAttachment(
@@ -1290,9 +1572,18 @@ class _ChatPageState extends State<ChatPage>
   }
 
   Future<void> _sendRecordedVideo(PendingChatAttachment attachment) async {
+    if (!_canSendInCurrentChat) {
+      showGlassSnack(
+        context,
+        'У вас нет прав на отправку сообщений в этом канале',
+        kind: GlassSnackKind.info,
+      );
+      return;
+    }
     final chatId = int.tryParse(widget.chat.id) ?? 0;
     final peerId = widget.chat.peerId ?? 0;
-    if (chatId <= 0 || !_isPrivateChat || peerId <= 0) return;
+    if (chatId <= 0) return;
+    if (_isPrivateChat && peerId <= 0) return;
     if (!_canAttachFileSize(attachment.sizeBytes)) return;
 
     final repo = context.read<ChatsRepository>();
@@ -1335,7 +1626,7 @@ class _ChatPageState extends State<ChatPage>
       final payload = await repo.buildOutgoingWsMediaMessage(
         chatId: chatId,
         chatKind: widget.chat.kind,
-        peerId: peerId,
+        peerId: _isPrivateChat ? peerId : null,
         caption: '',
         attachments: [
           OutgoingAttachment(
@@ -1489,6 +1780,11 @@ class _ChatPageState extends State<ChatPage>
   @override
   void dispose() {
     final chatId = int.tryParse(widget.chat.id) ?? 0;
+    if (_scrollController.hasClients) {
+      final offset = _scrollController.offset;
+      _savedScrollOffsetByChatId[widget.chat.id] = offset;
+      unawaited(_repo.saveChatScrollOffset(widget.chat.id, offset));
+    }
     final snapshot = List<ChatMessage>.from(_messages);
     unawaited(_repo.saveMessagesSnapshot(chatId, snapshot));
     WidgetsBinding.instance.removeObserver(this);
@@ -1500,6 +1796,8 @@ class _ChatPageState extends State<ChatPage>
     _selectedMessageIdsN.dispose();
     _typingDebounce?.cancel();
     _typingDebounce = null;
+    _markReadDebounce?.cancel();
+    _markReadDebounce = null;
     _loadOlderDebounce?.cancel();
     _loadOlderDebounce = null;
     _rt?.typing(chatId, false);
@@ -1618,137 +1916,147 @@ class _ChatPageState extends State<ChatPage>
                         ),
                       ),
                     ),
-                    child: GestureDetector(
-                      onTapDown: (_) {
-                        if (!mounted) return;
-                        if (_pressedMessageIdN.value == msg.id) {
-                          return;
-                        }
-                        _pressedMessageIdN.value = msg.id;
-                      },
-                      onTapCancel: () {
-                        if (!mounted) return;
-                        if (_pressedMessageIdN.value != msg.id) {
-                          return;
-                        }
-                        _pressedMessageIdN.value = null;
-                      },
-                      onTapUp: (_) {
-                        if (!mounted) return;
-                        if (_pressedMessageIdN.value != msg.id) {
-                          return;
-                        }
-                        _pressedMessageIdN.value = null;
-                      },
-                      onTap: () {
-                        if (selectionMode) {
-                          _toggleSelected(msg);
-                        }
-                      },
-                      onLongPressStart: (d) async {
-                        HapticFeedback.selectionClick();
-                        if (mounted && _pressedMessageIdN.value != msg.id) {
+                    child: Container(
+                      key: _messageKey(msg.id),
+                      child: GestureDetector(
+                        onTapDown: (_) {
+                          if (!mounted) return;
+                          if (_pressedMessageIdN.value == msg.id) {
+                            return;
+                          }
                           _pressedMessageIdN.value = msg.id;
-                        }
-                        if (selectionMode) {
-                          _toggleSelected(msg);
-                        } else {
-                          await _showMessageContextMenu(msg, d.globalPosition);
-                        }
-
-                        if (mounted && _pressedMessageIdN.value == msg.id) {
+                        },
+                        onTapCancel: () {
+                          if (!mounted) return;
+                          if (_pressedMessageIdN.value != msg.id) {
+                            return;
+                          }
                           _pressedMessageIdN.value = null;
-                        }
-                      },
-                      onLongPressEnd: (_) {
-                        if (!mounted) return;
-                        if (_pressedMessageIdN.value != msg.id) {
-                          return;
-                        }
-                        _pressedMessageIdN.value = null;
-                      },
-                      child: ValueListenableBuilder<String?>(
-                        valueListenable: _pressedMessageIdN,
-                        builder: (context, pressedId, child) {
-                          final pressed = pressedId == msg.id;
-                          return AnimatedScale(
-                            scale: pressed ? 0.985 : (selected ? 1.05 : 1.0),
-                            duration: const Duration(milliseconds: 110),
-                            curve: Curves.easeOut,
-                            child: Stack(
-                              clipBehavior: Clip.none,
-                              children: [
-                                AnimatedContainer(
-                                  duration: const Duration(milliseconds: 110),
-                                  curve: Curves.easeOut,
-                                  decoration: BoxDecoration(
-                                    borderRadius: BorderRadius.circular(16),
-                                    color: pressed
-                                        ? theme.colorScheme.onSurface
-                                              .withOpacity(isDark ? 0.10 : 0.06)
-                                        : (selected
-                                              ? theme.colorScheme.primary
-                                                    .withOpacity(
-                                                      isDark ? 0.12 : 0.10,
-                                                    )
-                                              : Colors.transparent),
-                                    border: selected
-                                        ? Border.all(
-                                            color: theme.colorScheme.primary
-                                                .withOpacity(0.8),
-                                            width: 1.2,
-                                          )
-                                        : null,
-                                  ),
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(2),
-                                    child: RepaintBoundary(
-                                      child: _buildMessageBubble(
-                                        msg: msg,
-                                        replyPreview: replyPreview,
-                                        isDark: isDark,
+                        },
+                        onTapUp: (_) {
+                          if (!mounted) return;
+                          if (_pressedMessageIdN.value != msg.id) {
+                            return;
+                          }
+                          _pressedMessageIdN.value = null;
+                        },
+                        onTap: () {
+                          if (selectionMode) {
+                            _toggleSelected(msg);
+                          }
+                        },
+                        onLongPressStart: (d) async {
+                          HapticFeedback.selectionClick();
+                          if (mounted && _pressedMessageIdN.value != msg.id) {
+                            _pressedMessageIdN.value = msg.id;
+                          }
+                          if (selectionMode) {
+                            _toggleSelected(msg);
+                          } else {
+                            await _showMessageContextMenu(
+                              msg,
+                              d.globalPosition,
+                            );
+                          }
+
+                          if (mounted && _pressedMessageIdN.value == msg.id) {
+                            _pressedMessageIdN.value = null;
+                          }
+                        },
+                        onLongPressEnd: (_) {
+                          if (!mounted) return;
+                          if (_pressedMessageIdN.value != msg.id) {
+                            return;
+                          }
+                          _pressedMessageIdN.value = null;
+                        },
+                        child: ValueListenableBuilder<String?>(
+                          valueListenable: _pressedMessageIdN,
+                          builder: (context, pressedId, child) {
+                            final pressed = pressedId == msg.id;
+                            return AnimatedScale(
+                              scale: pressed ? 0.985 : (selected ? 1.05 : 1.0),
+                              duration: const Duration(milliseconds: 110),
+                              curve: Curves.easeOut,
+                              child: Stack(
+                                clipBehavior: Clip.none,
+                                children: [
+                                  AnimatedContainer(
+                                    duration: const Duration(milliseconds: 110),
+                                    curve: Curves.easeOut,
+                                    decoration: BoxDecoration(
+                                      borderRadius: BorderRadius.circular(16),
+                                      color: pressed
+                                          ? theme.colorScheme.onSurface
+                                                .withOpacity(
+                                                  isDark ? 0.10 : 0.06,
+                                                )
+                                          : (selected
+                                                ? theme.colorScheme.primary
+                                                      .withOpacity(
+                                                        isDark ? 0.12 : 0.10,
+                                                      )
+                                                : Colors.transparent),
+                                      border: selected
+                                          ? Border.all(
+                                              color: theme.colorScheme.primary
+                                                  .withOpacity(0.8),
+                                              width: 1.2,
+                                            )
+                                          : null,
+                                    ),
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(2),
+                                      child: RepaintBoundary(
+                                        child: _buildMessageBubble(
+                                          msg: msg,
+                                          replyPreview: replyPreview,
+                                          isDark: isDark,
+                                        ),
                                       ),
                                     ),
                                   ),
-                                ),
-                                Positioned(
-                                  right: -6,
-                                  top: -6,
-                                  child: AnimatedOpacity(
-                                    opacity: selected ? 1 : 0,
-                                    duration: const Duration(milliseconds: 120),
-                                    curve: Curves.easeOut,
-                                    child: AnimatedScale(
-                                      scale: selected ? 1 : 0.9,
+                                  Positioned(
+                                    right: -6,
+                                    top: -6,
+                                    child: AnimatedOpacity(
+                                      opacity: selected ? 1 : 0,
                                       duration: const Duration(
                                         milliseconds: 120,
                                       ),
                                       curve: Curves.easeOut,
-                                      child: Container(
-                                        width: 20,
-                                        height: 20,
-                                        decoration: BoxDecoration(
-                                          color: theme.colorScheme.primary,
-                                          shape: BoxShape.circle,
-                                          border: Border.all(
-                                            color: theme.colorScheme.surface
-                                                .withOpacity(0.9),
-                                            width: 1,
-                                          ),
+                                      child: AnimatedScale(
+                                        scale: selected ? 1 : 0.9,
+                                        duration: const Duration(
+                                          milliseconds: 120,
                                         ),
-                                        child: Icon(
-                                          Icons.check,
-                                          size: 14,
-                                          color: theme.colorScheme.onPrimary,
+                                        curve: Curves.easeOut,
+                                        child: Container(
+                                          width: 20,
+                                          height: 20,
+                                          decoration: BoxDecoration(
+                                            color: theme.colorScheme.primary,
+                                            shape: BoxShape.circle,
+                                            border: Border.all(
+                                              color: theme.colorScheme.surface
+                                                  .withOpacity(0.9),
+                                              width: 1,
+                                            ),
+                                          ),
+                                          child: Icon(
+                                            Icons.check,
+                                            size: 14,
+                                            color: theme.colorScheme.onPrimary,
+                                          ),
                                         ),
                                       ),
                                     ),
                                   ),
-                                ),
-                              ],
-                            ),
-                          );
-                        },
+                                ],
+                              ),
+                            );
+                          },
+                        ),
                       ),
                     ),
                   ),
@@ -1773,82 +2081,123 @@ class _ChatPageState extends State<ChatPage>
         padding: EdgeInsets.only(bottom: media.viewInsets.bottom),
         child: SafeArea(
           top: false,
-          child: ChatInputBar(
-            controller: _controller,
-            focusNode: _focusNode,
-            isDark: isDark,
-            isEditing: _editing != null,
-            onCancelEditing: () {
-              if (_editing == null) return;
-              setState(() {
-                _editing = null;
-              });
-              _controller.clear();
-            },
-            hasReply: _replyTo != null,
-            replyText: replyText,
-            onCancelReply: () {
-              if (_replyTo == null) return;
-              setState(() {
-                _replyTo = null;
-              });
-            },
-            pending: _pending,
-            onRemovePending: (index) {
-              if (index < 0 || index >= _pending.length) return;
-              if (!_pending[index].canRemove) return;
-              setState(() {
-                _pending.removeAt(index);
-              });
-            },
-            onRetryPending: (index) {
-              if (index < 0 || index >= _pending.length) return;
-              if (!_pending[index].canRetry) return;
-              setState(() {
-                _pending[index] = _pending[index].markQueued();
-              });
-            },
-            onPickPhotos: _pickPhotos,
-            onPickFiles: _pickFiles,
-            onTakePhoto: _takePhoto,
-            onSend: _send,
-            onRecordingChanged: (mode, isRecording) {
-              if (mode == RecorderMode.video) {
-                _setVideoRecordingOverlay(show: isRecording);
-              }
-            },
-            onRecordingDurationChanged: _onVideoRecordingDurationChanged,
-            onRecordingLockedChanged: (mode, locked) {
-              if (mode != RecorderMode.video) return;
-              _onVideoRecordingLockedChanged(locked);
-            },
-            onRecorderController: (cancel, stop) {
-              _cancelVideoRecording = cancel;
-              _stopVideoRecording = stop;
-            },
-            onVideoControllerChanged: _onVideoControllerChanged,
-            onVideoActionsController: (setTorch, setUseFrontCamera) {
-              _setVideoTorch = setTorch;
-              _setVideoUseFrontCamera = setUseFrontCamera;
-            },
-            onAddRecordedFile: (attachment) async {
-              if (!mounted) return;
-              if ((attachment.mimetype).toLowerCase().startsWith('audio/')) {
-                await _sendRecordedVoice(attachment);
-                return;
-              }
-              if ((attachment.mimetype).toLowerCase().startsWith('video/')) {
-                await _sendRecordedVideo(attachment);
-                return;
-              }
-              if (!_canAttachFileSize(attachment.sizeBytes)) {
-                return;
-              }
-              setState(() {
-                _pending.add(attachment.markQueued());
-              });
-            },
-          ),
+          child: _canSendInCurrentChat
+              ? ChatInputBar(
+                  controller: _controller,
+                  focusNode: _focusNode,
+                  isDark: isDark,
+                  isEditing: _editing != null,
+                  onCancelEditing: () {
+                    if (_editing == null) return;
+                    setState(() {
+                      _editing = null;
+                    });
+                    _controller.clear();
+                  },
+                  hasReply: _replyTo != null,
+                  replyText: replyText,
+                  onCancelReply: () {
+                    if (_replyTo == null) return;
+                    setState(() {
+                      _replyTo = null;
+                    });
+                  },
+                  pending: _pending,
+                  onRemovePending: (index) {
+                    if (index < 0 || index >= _pending.length) return;
+                    if (!_pending[index].canRemove) return;
+                    setState(() {
+                      _pending.removeAt(index);
+                    });
+                  },
+                  onRetryPending: (index) {
+                    if (index < 0 || index >= _pending.length) return;
+                    if (!_pending[index].canRetry) return;
+                    setState(() {
+                      _pending[index] = _pending[index].markQueued();
+                    });
+                  },
+                  onPickPhotos: _pickPhotos,
+                  onPickFiles: _pickFiles,
+                  onTakePhoto: _takePhoto,
+                  onSend: _send,
+                  onRecordingChanged: (mode, isRecording) {
+                    if (mode == RecorderMode.video) {
+                      _setVideoRecordingOverlay(show: isRecording);
+                    }
+                  },
+                  onRecordingDurationChanged: _onVideoRecordingDurationChanged,
+                  onRecordingLockedChanged: (mode, locked) {
+                    if (mode != RecorderMode.video) return;
+                    _onVideoRecordingLockedChanged(locked);
+                  },
+                  onRecorderController: (cancel, stop) {
+                    _cancelVideoRecording = cancel;
+                    _stopVideoRecording = stop;
+                  },
+                  onVideoControllerChanged: _onVideoControllerChanged,
+                  onVideoActionsController: (setTorch, setUseFrontCamera) {
+                    _setVideoTorch = setTorch;
+                    _setVideoUseFrontCamera = setUseFrontCamera;
+                  },
+                  onAddRecordedFile: (attachment) async {
+                    if (!mounted) return;
+                    if ((attachment.mimetype).toLowerCase().startsWith(
+                      'audio/',
+                    )) {
+                      await _sendRecordedVoice(attachment);
+                      return;
+                    }
+                    if ((attachment.mimetype).toLowerCase().startsWith(
+                      'video/',
+                    )) {
+                      await _sendRecordedVideo(attachment);
+                      return;
+                    }
+                    if (!_canAttachFileSize(attachment.sizeBytes)) {
+                      return;
+                    }
+                    setState(() {
+                      _pending.add(attachment.markQueued());
+                    });
+                  },
+                )
+              : Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
+                  child: GlassSurface(
+                    borderRadius: 16,
+                    blurSigma: 12,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.lock_outline_rounded,
+                          size: 18,
+                          color: Theme.of(
+                            context,
+                          ).colorScheme.onSurface.withOpacity(0.75),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Только admin/owner могут писать в канал '
+                            '(ваша роль: ${_myRoleInChat.isEmpty ? "member" : _myRoleInChat}).',
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onSurface.withOpacity(0.82),
+                                  fontWeight: FontWeight.w600,
+                                ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
         ),
       ),
     );
@@ -1884,6 +2233,9 @@ class _ChatPageState extends State<ChatPage>
                   peerOnline: _peerOnline,
                   peerTyping: _peerTyping,
                   isSyncing: isSyncing,
+                  chatKind: widget.chat.kind,
+                  myRole: _myRoleInChat,
+                  canSend: _canSendInCurrentChat,
                   onBack: () {
                     if (selectionMode) {
                       _exitSelectionMode();
@@ -2788,6 +3140,9 @@ class _ChatMembersSheetBodyState extends State<_ChatMembersSheetBody> {
   bool _busy = false;
   String? _error;
   List<ChatMember> _members = const [];
+  RealtimeClient? _rt;
+  StreamSubscription? _rtSub;
+  Timer? _realtimeReloadDebounce;
 
   final TextEditingController _memberIdCtrl = TextEditingController();
   final TextEditingController _memberSearchCtrl = TextEditingController();
@@ -2797,6 +3152,11 @@ class _ChatMembersSheetBodyState extends State<_ChatMembersSheetBody> {
   bool _memberSearching = false;
   String? _memberSearchError;
   List<ChatUser> _memberSearchResults = const [];
+
+  int _asInt(dynamic value) {
+    if (value is int) return value;
+    return int.tryParse('$value') ?? 0;
+  }
 
   bool get _canManage {
     final me = _members
@@ -2812,36 +3172,84 @@ class _ChatMembersSheetBodyState extends State<_ChatMembersSheetBody> {
   void initState() {
     super.initState();
     _reload();
+    _ensureRealtime();
   }
 
   @override
   void dispose() {
+    _rtSub?.cancel();
+    _realtimeReloadDebounce?.cancel();
     _memberSearchDebounce?.cancel();
     _memberSearchCtrl.dispose();
     _memberIdCtrl.dispose();
     super.dispose();
   }
 
-  Future<void> _reload() async {
+  Future<void> _reload({bool withLoading = true}) async {
     if (!mounted) return;
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+    if (withLoading) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
     try {
       final members = await widget.repo.listMembers(widget.chatId);
       if (!mounted) return;
       setState(() {
         _members = members;
-        _loading = false;
+        if (withLoading) {
+          _loading = false;
+        }
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _loading = false;
+        if (withLoading) {
+          _loading = false;
+        }
         _error = '$e';
       });
     }
+  }
+
+  Future<void> _ensureRealtime() async {
+    _rt ??= context.read<RealtimeClient>();
+    final rt = _rt!;
+
+    if (!rt.isConnected) {
+      await rt.connect();
+    }
+
+    _rtSub ??= rt.events.listen((evt) {
+      final t = evt.type;
+      if (t != 'member_added' &&
+          t != 'member_removed' &&
+          t != 'member_role_changed') {
+        return;
+      }
+
+      final evtChatId = _asInt(evt.data['chat_id'] ?? evt.data['chatId']);
+      if (evtChatId != widget.chatId) return;
+
+      final removedUserId = _asInt(evt.data['user_id'] ?? evt.data['userId']);
+      if (t == 'member_removed' && removedUserId == widget.myUserId) {
+        if (!mounted) return;
+        showGlassSnack(
+          context,
+          'Вы были удалены из этого чата',
+          kind: GlassSnackKind.info,
+        );
+        Navigator.of(context).maybePop();
+        return;
+      }
+
+      _realtimeReloadDebounce?.cancel();
+      _realtimeReloadDebounce = Timer(const Duration(milliseconds: 120), () {
+        if (!mounted) return;
+        _reload(withLoading: false);
+      });
+    });
   }
 
   Set<int> _existingMemberIds() {

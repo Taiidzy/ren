@@ -12,6 +12,8 @@ class VoiceMessageBubble extends StatefulWidget {
   final String audioPath;
   final String timeLabel;
   final bool isMe;
+  final bool isRead;
+  final bool isPending;
   final bool isDark;
 
   const VoiceMessageBubble({
@@ -19,6 +21,8 @@ class VoiceMessageBubble extends StatefulWidget {
     required this.audioPath,
     required this.timeLabel,
     required this.isMe,
+    this.isRead = false,
+    this.isPending = false,
     required this.isDark,
   });
 
@@ -83,7 +87,8 @@ class _VoiceMessageBubbleState extends State<VoiceMessageBubble> {
         if (mounted) {
           setState(() {
             _isPlaying = state.playing;
-            _isLoading = state.processingState == ProcessingState.loading ||
+            _isLoading =
+                state.processingState == ProcessingState.loading ||
                 state.processingState == ProcessingState.buffering;
           });
 
@@ -145,8 +150,8 @@ class _VoiceMessageBubbleState extends State<VoiceMessageBubble> {
     final baseInk = widget.isDark ? Colors.white : Colors.black;
     final isMeColor = widget.isMe
         ? (widget.isDark
-            ? theme.colorScheme.primary.withOpacity(0.35)
-            : theme.colorScheme.primary.withOpacity(0.22))
+              ? theme.colorScheme.primary.withOpacity(0.35)
+              : theme.colorScheme.primary.withOpacity(0.22))
         : null;
 
     final progress = _duration.inMilliseconds > 0
@@ -195,9 +200,12 @@ class _VoiceMessageBubbleState extends State<VoiceMessageBubble> {
                               height: 32,
                               child: Center(
                                 child: HugeIcon(
-                                  icon: _isPlaying ? HugeIcons.strokeRoundedStop : HugeIcons.strokeRoundedPlay,
+                                  icon: _isPlaying
+                                      ? HugeIcons.strokeRoundedStop
+                                      : HugeIcons.strokeRoundedPlay,
                                   size: 18,
-                                  color: theme.colorScheme.onSurface.withOpacity(0.9),
+                                  color: theme.colorScheme.onSurface
+                                      .withOpacity(0.9),
                                 ),
                               ),
                             ),
@@ -214,9 +222,14 @@ class _VoiceMessageBubbleState extends State<VoiceMessageBubble> {
                             return GestureDetector(
                               onTapDown: (details) {
                                 if (_duration.inMilliseconds <= 0) return;
-                                final localX = details.localPosition.dx.clamp(0.0, w);
+                                final localX = details.localPosition.dx.clamp(
+                                  0.0,
+                                  w,
+                                );
                                 final seekPosition = Duration(
-                                  milliseconds: ((localX / w) * _duration.inMilliseconds).round(),
+                                  milliseconds:
+                                      ((localX / w) * _duration.inMilliseconds)
+                                          .round(),
                                 );
                                 _seekTo(seekPosition);
                               },
@@ -224,7 +237,9 @@ class _VoiceMessageBubbleState extends State<VoiceMessageBubble> {
                                 height: 22,
                                 child: Row(
                                   crossAxisAlignment: CrossAxisAlignment.center,
-                                  children: List.generate(_waveform.length, (i) {
+                                  children: List.generate(_waveform.length, (
+                                    i,
+                                  ) {
                                     final t = (i + 1) / _waveform.length;
                                     final played = t <= progress;
                                     final h = 6 + 14 * _waveform[i];
@@ -232,16 +247,23 @@ class _VoiceMessageBubbleState extends State<VoiceMessageBubble> {
                                       child: Align(
                                         alignment: Alignment.center,
                                         child: AnimatedContainer(
-                                          duration: const Duration(milliseconds: 120),
+                                          duration: const Duration(
+                                            milliseconds: 120,
+                                          ),
                                           width: 2.2,
                                           height: h,
                                           decoration: BoxDecoration(
                                             color: played
                                                 ? theme.colorScheme.primary
-                                                : theme.colorScheme.onSurface.withOpacity(
-                                                    widget.isDark ? 0.20 : 0.14,
-                                                  ),
-                                            borderRadius: BorderRadius.circular(999),
+                                                : theme.colorScheme.onSurface
+                                                      .withOpacity(
+                                                        widget.isDark
+                                                            ? 0.20
+                                                            : 0.14,
+                                                      ),
+                                            borderRadius: BorderRadius.circular(
+                                              999,
+                                            ),
                                           ),
                                         ),
                                       ),
@@ -260,7 +282,9 @@ class _VoiceMessageBubbleState extends State<VoiceMessageBubble> {
                               _formatDuration(_position),
                               style: TextStyle(
                                 fontSize: 11,
-                                color: theme.colorScheme.onSurface.withOpacity(0.7),
+                                color: theme.colorScheme.onSurface.withOpacity(
+                                  0.7,
+                                ),
                                 fontWeight: FontWeight.w500,
                               ),
                             ),
@@ -268,7 +292,9 @@ class _VoiceMessageBubbleState extends State<VoiceMessageBubble> {
                               _formatDuration(_duration),
                               style: TextStyle(
                                 fontSize: 11,
-                                color: theme.colorScheme.onSurface.withOpacity(0.7),
+                                color: theme.colorScheme.onSurface.withOpacity(
+                                  0.7,
+                                ),
                                 fontWeight: FontWeight.w500,
                               ),
                             ),
@@ -280,12 +306,35 @@ class _VoiceMessageBubbleState extends State<VoiceMessageBubble> {
                 ],
               ),
               const SizedBox(height: 4),
-              Text(
-                widget.timeLabel,
-                style: TextStyle(
-                  fontSize: 10,
-                  color: theme.colorScheme.onSurface.withOpacity(0.55),
-                ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    widget.timeLabel,
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: theme.colorScheme.onSurface.withOpacity(0.55),
+                    ),
+                  ),
+                  if (widget.isMe) ...[
+                    const SizedBox(width: 4),
+                    Icon(
+                      widget.isPending
+                          ? Icons.schedule_rounded
+                          : (widget.isRead
+                                ? Icons.done_all_rounded
+                                : Icons.done_rounded),
+                      size: 13,
+                      color: widget.isPending
+                          ? theme.colorScheme.onSurface.withOpacity(0.55)
+                          : (widget.isRead
+                                ? theme.colorScheme.primary.withOpacity(0.92)
+                                : theme.colorScheme.onSurface.withOpacity(
+                                    0.55,
+                                  )),
+                    ),
+                  ],
+                ],
               ),
             ],
           ),
