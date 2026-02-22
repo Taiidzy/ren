@@ -45,6 +45,7 @@ async fn register(
     let UserRegisterRequest {
         mut login,
         mut username,
+        nickname,
         password,
         pkebymk,
         pkebyrk,
@@ -54,6 +55,19 @@ async fn register(
 
     login = login.trim().to_string();
     username = username.trim().to_string();
+    // Если nickname не передан, устанавливаем его равным username
+    let nickname = nickname
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| username.clone());
+
+    // Валидация длины nickname (макс. 32 символа)
+    if nickname.len() > 32 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Nickname не может быть длиннее 32 символов".into(),
+        ));
+    }
 
     if login.is_empty() || username.is_empty() || password.len() < 6 {
         return Err((
@@ -76,13 +90,14 @@ async fn register(
 
     let row = sqlx::query(
         r#"
-        INSERT INTO users (login, username, password, pkebymk, pkebyrk, pubk, salt)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO users (login, username, nickname, password, pkebymk, pkebyrk, pubk, salt)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING id
         "#,
     )
     .bind(&login)
     .bind(&username)
+    .bind(&nickname)
     .bind(&password_hash)
     .bind(&pkebymk)
     .bind(&pkebyrk)
@@ -119,7 +134,7 @@ async fn register(
 
     let rec = sqlx::query_as::<_, UserAuthResponse>(
         r#"
-        SELECT id, login, username, avatar, pkebymk, pkebyrk, salt, pubk
+        SELECT id, login, username, nickname, avatar, pkebymk, pkebyrk, salt, pubk
         FROM users
         WHERE id = $1
         "#,
@@ -145,7 +160,7 @@ async fn login(
 ) -> Result<Json<LoginResponse>, (StatusCode, String)> {
     let row = sqlx::query(
         r#"
-        SELECT id, login, username, avatar, password, pkebymk, pkebyrk, salt, pubk
+        SELECT id, login, username, nickname, avatar, password, pkebymk, pkebyrk, salt, pubk
         FROM users
         WHERE login = $1
         "#,
@@ -185,6 +200,7 @@ async fn login(
         id: row.try_get("id").unwrap_or_default(),
         login: row.try_get("login").unwrap_or_default(),
         username: row.try_get("username").unwrap_or_default(),
+        nickname: row.try_get("nickname").ok(),
         avatar: row.try_get("avatar").ok(),
         pkebymk: row.try_get("pkebymk").unwrap_or_default(),
         pkebyrk: row.try_get("pkebyrk").unwrap_or_default(),
@@ -275,7 +291,8 @@ async fn refresh(
             s.user_id,
             s.remember_me,
             u.login,
-            u.username
+            u.username,
+            u.nickname
         FROM auth_sessions s
         JOIN users u ON u.id = s.user_id
         WHERE s.refresh_token_hash = $1
@@ -313,6 +330,7 @@ async fn refresh(
     let remember_me: bool = row.try_get("remember_me").unwrap_or(false);
     let login: String = row.try_get("login").unwrap_or_default();
     let username: String = row.try_get("username").unwrap_or_default();
+    let nickname: Option<String> = row.try_get("nickname").ok();
 
     let new_refresh_token = generate_refresh_token();
     let new_refresh_hash = hash_refresh_token(&state.jwt_secret, &new_refresh_token);
@@ -372,6 +390,7 @@ async fn refresh(
         id: user_id,
         login,
         username,
+        nickname,
         avatar: None,
         pkebymk: String::new(),
         pkebyrk: String::new(),
@@ -584,6 +603,7 @@ fn issue_access_token(
         token_type: "access".to_string(),
         login: user.login.clone(),
         username: user.username.clone(),
+        nickname: user.nickname.clone(),
         exp: expires_at.timestamp(),
     };
 

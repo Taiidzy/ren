@@ -55,6 +55,7 @@ struct GetMessagesQuery {
 struct ChatMember {
     user_id: i32,
     username: String,
+    nickname: Option<String>,
     avatar: Option<String>,
     role: String,
     joined_at: String,
@@ -345,6 +346,7 @@ async fn create_chat(
                 is_favorite: Some(false),
                 peer_id: None,
                 peer_username: None,
+                peer_nickname: None,
                 peer_avatar: None,
                 unread_count: Some(0),
                 my_role: Some("member".to_string()),
@@ -439,6 +441,7 @@ async fn create_chat(
                 is_favorite: Some(false),
                 peer_id: None,
                 peer_username: None,
+                peer_nickname: None,
                 peer_avatar: None,
                 unread_count: Some(0),
                 my_role: Some("member".to_string()),
@@ -578,6 +581,7 @@ async fn create_chat(
         is_favorite: Some(false),
         peer_id: None,
         peer_username: None,
+        peer_nickname: None,
         peer_avatar: None,
         unread_count: Some(0),
         my_role: Some(my_role),
@@ -642,6 +646,7 @@ async fn list_chats(
                 )
             ) AS peer_id,
             COALESCE(u.username, u.login) AS peer_username,
+            u.nickname AS peer_nickname,
             u.avatar   AS peer_avatar,
             lm.id AS last_message_id,
             lm.message AS last_message,
@@ -734,6 +739,7 @@ async fn list_chats(
                 .unwrap_or(Some(false)),
             peer_id: row.try_get("peer_id").ok(),
             peer_username: row.try_get("peer_username").ok(),
+            peer_nickname: row.try_get("peer_nickname").ok(),
             peer_avatar: row.try_get("peer_avatar").ok(),
             unread_count: row.try_get("unread_count").ok().or(Some(0)),
             my_role: row.try_get("my_role").ok(),
@@ -1089,6 +1095,7 @@ async fn list_members(
         SELECT
             cp.user_id,
             COALESCE(u.username, u.login) AS username,
+            u.nickname,
             u.avatar,
             COALESCE(cp.role, 'member') AS role,
             cp.joined_at
@@ -1113,6 +1120,7 @@ async fn list_members(
         .map(|row| ChatMember {
             user_id: row.try_get("user_id").unwrap_or_default(),
             username: row.try_get("username").unwrap_or_default(),
+            nickname: row.try_get("nickname").ok(),
             avatar: row.try_get("avatar").ok(),
             role: row
                 .try_get::<String, _>("role")

@@ -196,6 +196,7 @@ pub async fn publish_profile_updated_for_user(
         id: row.try_get("id").unwrap_or_default(),
         login: row.try_get("login").unwrap_or_default(),
         username: row.try_get("username").unwrap_or_default(),
+        nickname: row.try_get("nickname").ok(),
         avatar: row.try_get("avatar").ok(),
     };
 

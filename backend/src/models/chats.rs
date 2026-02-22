@@ -14,6 +14,7 @@ pub struct Chat {
     pub is_favorite: Option<bool>,
     pub peer_id: Option<i32>,
     pub peer_username: Option<String>,
+    pub peer_nickname: Option<String>,
     pub peer_avatar: Option<String>,
     pub unread_count: Option<i64>,
     pub my_role: Option<String>,

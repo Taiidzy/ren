@@ -78,9 +78,11 @@ class _ProfileEditContent extends StatefulWidget {
 
 class _ProfileEditContentState extends State<_ProfileEditContent> {
   final _usernameController = TextEditingController();
+  final _nicknameController = TextEditingController();
   final _picker = ImagePicker();
 
   bool _didSeedUsername = false;
+  bool _didSeedNickname = false;
 
   @override
   void initState() {
@@ -94,6 +96,7 @@ class _ProfileEditContentState extends State<_ProfileEditContent> {
   @override
   void dispose() {
     _usernameController.dispose();
+    _nicknameController.dispose();
     super.dispose();
   }
 
@@ -107,6 +110,12 @@ class _ProfileEditContentState extends State<_ProfileEditContent> {
     if (_didSeedUsername || store.user == null) return;
     _usernameController.text = store.user!.username;
     _didSeedUsername = true;
+  }
+
+  void _seedNicknameOnce(ProfileStore store) {
+    if (_didSeedNickname || store.user == null) return;
+    _nicknameController.text = store.user!.nickname ?? '';
+    _didSeedNickname = true;
   }
 
   Future<void> _pickAvatar() async {
@@ -161,6 +170,35 @@ class _ProfileEditContentState extends State<_ProfileEditContent> {
     }
   }
 
+  Future<void> _saveNickname() async {
+    final value = _nicknameController.text.trim();
+    if (value.isEmpty) {
+      showGlassSnack(
+        context,
+        'Nickname не может быть пустым',
+        kind: GlassSnackKind.error,
+      );
+      return;
+    }
+
+    if (value.length > 32) {
+      showGlassSnack(
+        context,
+        'Nickname не может быть длиннее 32 символов',
+        kind: GlassSnackKind.error,
+      );
+      return;
+    }
+
+    final ok = await context.read<ProfileStore>().changeNickname(value);
+    if (!mounted) return;
+
+    final store = context.read<ProfileStore>();
+    if (!ok && store.error != null) {
+      showGlassSnack(context, store.error!, kind: GlassSnackKind.error);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -172,6 +210,7 @@ class _ProfileEditContentState extends State<_ProfileEditContent> {
       builder: (context, store, _) {
         final user = store.user;
         _seedUsernameOnce(store);
+        _seedNicknameOnce(store);
 
         return ListView(
           controller: widget.scrollController,
@@ -327,7 +366,57 @@ class _ProfileEditContentState extends State<_ProfileEditContent> {
                       },
                       maxLength: 32,
                       decoration: InputDecoration(
-                        labelText: 'Имя (username)',
+                        labelText: 'Имя пользователя',
+                        labelStyle: TextStyle(
+                          color: theme.colorScheme.onSurface.withOpacity(0.75),
+                        ),
+                        filled: true,
+                        fillColor: Colors.transparent,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(16),
+                          borderSide: BorderSide(
+                            color: baseInk.withOpacity(isDark ? 0.28 : 0.18),
+                          ),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(16),
+                          borderSide: BorderSide(
+                            color: baseInk.withOpacity(isDark ? 0.28 : 0.18),
+                          ),
+                        ),
+                        disabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(16),
+                          borderSide: BorderSide(
+                            color: baseInk.withOpacity(isDark ? 0.18 : 0.12),
+                          ),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(16),
+                          borderSide: BorderSide(
+                            color: theme.colorScheme.primary,
+                            width: 1.5,
+                          ),
+                        ),
+                        counterText: '',
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    TextField(
+                      controller: _nicknameController,
+                      enabled: !store.isLoading,
+                      style: theme.textTheme.bodyLarge?.copyWith(
+                        color: theme.colorScheme.onSurface,
+                      ),
+                      cursorColor: theme.colorScheme.onSurface,
+                      textInputAction: TextInputAction.done,
+                      onSubmitted: (_) {
+                        if (!store.isLoading) {
+                          _saveNickname();
+                        }
+                      },
+                      maxLength: 32,
+                      decoration: InputDecoration(
+                        labelText: 'Отображаемое имя',
                         labelStyle: TextStyle(
                           color: theme.colorScheme.onSurface.withOpacity(0.75),
                         ),
@@ -367,7 +456,7 @@ class _ProfileEditContentState extends State<_ProfileEditContent> {
                       blurSigma: 12,
                       height: 46,
                       borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.10),
-                      onTap: store.isLoading ? null : _saveUsername,
+                      onTap: store.isLoading ? null : _saveNickname,
                       child: Center(
                         child: Text(
                           store.isLoading ? 'Сохранение...' : 'Сохранить',

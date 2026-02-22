@@ -8,6 +8,7 @@ use sqlx::FromRow;
 // Для регистрации используется multipart/form-data с полями:
 // - login: string
 // - username: string
+// - nickname: string (опционально, по умолчанию = username)
 // - password: string
 // - pkebymk: string (публичный ключ, зашифрованный мастер-ключом)
 // - pkebyrk: string (публичный ключ, зашифрованный ключом восстановления)
@@ -21,6 +22,7 @@ pub struct UserResponse {
     pub id: i32,
     pub login: String,
     pub username: String,
+    pub nickname: Option<String>,
     pub avatar: Option<String>,
 }
 
@@ -29,6 +31,7 @@ pub struct UserAuthResponse {
     pub id: i32,
     pub login: String,
     pub username: String,
+    pub nickname: Option<String>,
     pub avatar: Option<String>,
     pub pkebymk: String,
     pub pkebyrk: String,
@@ -40,6 +43,7 @@ pub struct UserAuthResponse {
 pub struct UserRegisterRequest {
     pub login: String,
     pub username: String,
+    pub nickname: Option<String>,
     pub password: String,
     pub pkebymk: String,
     pub pkebyrk: String,
@@ -99,5 +103,6 @@ pub struct Claims {
     pub token_type: String,
     pub login: String,
     pub username: String,
+    pub nickname: Option<String>,
     pub exp: i64,
 }

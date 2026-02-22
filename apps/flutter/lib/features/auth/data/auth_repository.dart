@@ -62,6 +62,7 @@ class AuthRepository {
       id: resp.user.id,
       login: resp.user.login,
       username: resp.user.username,
+      nickname: resp.user.nickname,
       avatar: resp.user.avatar,
       pkebymk: resp.user.pkebymk,
       pkebyrk: resp.user.pkebyrk,
@@ -76,8 +77,9 @@ class AuthRepository {
     String login,
     String password,
     String recoveryKey,
+    String? nickname,
+    String username,
   ) async {
-    final username = login;
     // Генерируем пару ключей и производные значения через публичные методы SDK
     final kp = renSdk.generateKeyPair();
     if (kp == null) {
@@ -117,6 +119,7 @@ class AuthRepository {
       pkebyrk,
       pubk,
       salt,
+      nickname,
     );
 
     return RegisterUser(
@@ -128,5 +131,13 @@ class AuthRepository {
       pubk: (json['pubk'] ?? pubk).toString(),
       salt: (json['salt'] ?? salt).toString(),
     );
+  }
+
+  Future<Map<String, dynamic>> updateNickname(String nickname) async {
+    return await api.updateNickname(nickname);
+  }
+
+  Future<List<dynamic>> searchUsers(String query, {int limit = 10}) async {
+    return await api.searchUsers(query, limit: limit);
   }
 }

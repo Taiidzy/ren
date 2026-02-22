@@ -178,7 +178,13 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
       id: chatId.toString(),
       peerId: null,
       kind: normalizedKind,
-      user: ChatUser(id: '0', name: name, avatarUrl: '', isOnline: false),
+      user: ChatUser(
+        id: '0',
+        name: name,
+        nickname: null,
+        avatarUrl: '',
+        isOnline: false,
+      ),
       isFavorite: false,
       lastMessage: '',
       lastMessageAt: DateTime.now(),
@@ -748,6 +754,7 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
             : int.tryParse('${u['id'] ?? ''}') ?? 0;
         if (uid <= 0) return;
         final username = ((u['username'] as String?) ?? '').trim();
+        final nickname = ((u['nickname'] as String?) ?? '').trim();
         final avatarRaw = ((u['avatar'] as String?) ?? '').trim();
         final avatarUrl = avatarRaw.isEmpty ? '' : _avatarUrl(avatarRaw);
         if (!mounted) return;
@@ -761,7 +768,8 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                   kind: c.kind,
                   user: ChatUser(
                     id: c.user.id,
-                    name: username.isNotEmpty ? username : c.user.name,
+                    name: nickname.isNotEmpty ? nickname : (username.isNotEmpty ? username : c.user.name),
+                    nickname: nickname.isNotEmpty ? nickname : null,
                     avatarUrl: avatarUrl.isNotEmpty
                         ? avatarUrl
                         : c.user.avatarUrl,
@@ -1014,6 +1022,7 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                       user: ChatUser(
                         id: c.user.id,
                         name: c.user.name,
+                        nickname: c.user.nickname,
                         avatarUrl: c.user.avatarUrl,
                         isOnline: _online[c.user.id] ?? c.user.isOnline,
                       ),

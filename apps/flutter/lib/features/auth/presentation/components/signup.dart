@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:hugeicons/hugeicons.dart';
 import 'package:provider/provider.dart';
@@ -21,19 +23,29 @@ class SignUpForm extends StatefulWidget {
 class _SignUpFormState extends State<SignUpForm> {
   // Контроллеры для первого шага
   final _loginController = TextEditingController();
+  final _usernameController = TextEditingController();
+  final _nicknameController = TextEditingController();
   final _passwordController = TextEditingController();
-  final _confirmPasswordController = TextEditingController();
 
   late String loginError = '';
+  late String usernameError = '';
+  late String nicknameError = '';
   late String passError = '';
-  late String confirmPassError = '';
   late String recoverykey = '';
   late String registrationError = '';
   late String registrationSuccessful = '';
   bool _isLoading = false;
 
+  // Флаги проверки доступности
+  bool _isCheckingLogin = false;
+  bool _isCheckingUsername = false;
+  bool _isLoginAvailable = false;
+  bool _isUsernameAvailable = false;
+
+  Timer? _loginDebounce;
+  Timer? _usernameDebounce;
+
   bool _obscurePassword = true;
-  bool _obscureConfirmPassword = true;
 
   // Переменная для определения текущего шага
   int reg_step = 1;
@@ -42,47 +54,106 @@ class _SignUpFormState extends State<SignUpForm> {
   void initState() {
     super.initState();
 
-    // Добавляем слушатели для очистки ошибок при вводе
+    // Добавляем слушатели для очистки ошибок и проверки доступности при вводе
     _loginController.addListener(_onLoginChanged);
+    _usernameController.addListener(_onUsernameChanged);
+    _nicknameController.addListener(_onNicknameChanged);
     _passwordController.addListener(_onPasswordChanged);
-    _confirmPasswordController.addListener(_onConfirmPasswordChanged);
+  }
+
+  // Проверка доступности логина
+  Future<void> _checkLoginAvailability(String login) async {
+    _loginDebounce?.cancel();
+    if (login.isEmpty) {
+      setState(() {
+        _isLoginAvailable = false;
+        _isCheckingLogin = false;
+      });
+      return;
+    }
+
+    _loginDebounce = Timer(const Duration(milliseconds: 500), () async {
+      setState(() => _isCheckingLogin = true);
+      try {
+        final api = context.read<AuthRepository>().api;
+        // Используем searchUsers для проверки — если найден точный match, логин занят
+        final results = await api.searchUsers(login, limit: 10);
+        final isTaken = results.any((u) =>
+            (u['username'] as String?)?.toLowerCase() == login.toLowerCase() ||
+            (u['login'] as String?)?.toLowerCase() == login.toLowerCase());
+        if (mounted) {
+          setState(() {
+            _isLoginAvailable = !isTaken;
+            _isCheckingLogin = false;
+          });
+        }
+      } catch (_) {
+        if (mounted) {
+          setState(() => _isCheckingLogin = false);
+        }
+      }
+    });
+  }
+
+  // Проверка доступности username
+  Future<void> _checkUsernameAvailability(String username) async {
+    _usernameDebounce?.cancel();
+    if (username.isEmpty) {
+      setState(() {
+        _isUsernameAvailable = false;
+        _isCheckingUsername = false;
+      });
+      return;
+    }
+
+    _usernameDebounce = Timer(const Duration(milliseconds: 500), () async {
+      setState(() => _isCheckingUsername = true);
+      try {
+        final api = context.read<AuthRepository>().api;
+        final results = await api.searchUsers(username, limit: 10);
+        final isTaken = results.any((u) =>
+            (u['username'] as String?)?.toLowerCase() == username.toLowerCase());
+        if (mounted) {
+          setState(() {
+            _isUsernameAvailable = !isTaken;
+            _isCheckingUsername = false;
+          });
+        }
+      } catch (_) {
+        if (mounted) {
+          setState(() => _isCheckingUsername = false);
+        }
+      }
+    });
   }
 
   // Очистка ошибки логина при вводе
   void _onLoginChanged() {
     if (loginError.isNotEmpty && _loginController.text.isNotEmpty) {
-      setState(() {
-        loginError = '';
-      });
+      setState(() => loginError = '');
+    }
+    _checkLoginAvailability(_loginController.text.trim());
+  }
+
+  // Очистка ошибки username при вводе
+  void _onUsernameChanged() {
+    if (usernameError.isNotEmpty && _usernameController.text.isNotEmpty) {
+      setState(() => usernameError = '');
+    }
+    _checkUsernameAvailability(_usernameController.text.trim());
+  }
+
+  // Очистка ошибки nickname при вводе
+  void _onNicknameChanged() {
+    if (nicknameError.isNotEmpty && _nicknameController.text.isNotEmpty) {
+      setState(() => nicknameError = '');
     }
   }
 
   // Очистка ошибки пароля при вводе
   void _onPasswordChanged() {
     if (passError.isNotEmpty && _passwordController.text.isNotEmpty) {
-      setState(() {
-        passError = '';
-      });
-    }
-    // Также проверяем совпадение паролей если есть ошибка подтверждения
-    if (confirmPassError.isNotEmpty &&
-        _passwordController.text.isNotEmpty &&
-        _confirmPasswordController.text.isNotEmpty &&
-        _passwordController.text == _confirmPasswordController.text) {
-      setState(() {
-        confirmPassError = '';
-      });
-    }
-  }
-
-  // Очистка ошибки подтверждения пароля при вводе
-  void _onConfirmPasswordChanged() {
-    if (confirmPassError.isNotEmpty &&
-        _confirmPasswordController.text.isNotEmpty &&
-        _passwordController.text == _confirmPasswordController.text) {
-      setState(() {
-        confirmPassError = '';
-      });
+      setState(() => passError = '');
     }
   }
 
@@ -123,8 +194,64 @@ class _SignUpFormState extends State<SignUpForm> {
             ),
           ),
           error: loginError,
+          suffixIcon: _isCheckingLogin
+              ? SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : _loginController.text.isNotEmpty
+                  ? Icon(
+                      _isLoginAvailable
+                          ? Icons.check_circle_outline
+                          : Icons.cancel_outlined,
+                      color: _isLoginAvailable ? Colors.green : Colors.red,
+                      size: 20,
+                    )
+                  : null,
         ),
-        const SizedBox(height: 10), // Уменьшенный отступ
+        const SizedBox(height: 10),
+        _buildFieldWithError(
+          field: MatteTextField(
+            controller: _usernameController,
+            hintText: 'Username',
+            prefixIcon: HugeIcon(
+              icon: HugeIcons.strokeRoundedUser,
+              color: onSurfaceFaint,
+              size: 24.0,
+            ),
+          ),
+          error: usernameError,
+          suffixIcon: _isCheckingUsername
+              ? SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : _usernameController.text.isNotEmpty
+                  ? Icon(
+                      _isUsernameAvailable
+                          ? Icons.check_circle_outline
+                          : Icons.cancel_outlined,
+                      color: _isUsernameAvailable ? Colors.green : Colors.red,
+                      size: 20,
+                    )
+                  : null,
+        ),
+        const SizedBox(height: 10),
+        _buildFieldWithError(
+          field: MatteTextField(
+            controller: _nicknameController,
+            hintText: 'Nickname (опционально)',
+            prefixIcon: HugeIcon(
+              icon: HugeIcons.strokeRoundedUser,
+              color: onSurfaceFaint,
+              size: 24.0,
+            ),
+          ),
+          error: nicknameError,
+        ),
+        const SizedBox(height: 10),
         _buildFieldWithError(
           field: MatteTextField(
             controller: _passwordController,
@@ -152,60 +279,41 @@ class _SignUpFormState extends State<SignUpForm> {
           ),
           error: passError,
         ),
-        const SizedBox(height: 10), // Уменьшенный отступ
-        _buildFieldWithError(
-          field: MatteTextField(
-            controller: _confirmPasswordController,
-            hintText: 'Подтвердить пароль',
-            prefixIcon: HugeIcon(
-              icon: HugeIcons.strokeRoundedSquareLock02,
-              color: onSurfaceFaint,
-              size: 24.0,
-            ),
-            isPassword: _obscureConfirmPassword,
-            suffixIcon: IconButton(
-              icon: Icon(
-                _obscureConfirmPassword
-                    ? Icons.visibility_outlined
-                    : Icons.visibility_off_outlined,
-                size: 20,
-                color: onSurfaceFaint,
-              ),
-              onPressed: () {
-                setState(() {
-                  _obscureConfirmPassword = !_obscureConfirmPassword;
-                });
-              },
-            ),
-          ),
-          error: confirmPassError,
-        ),
       ],
     );
   }
 
-  // Виджет для поля с ошибкой (компактная версия)
-  Widget _buildFieldWithError({required Widget field, required String error}) {
+  Widget _buildFieldWithError({
+    required Widget field,
+    required String error,
+    Widget? suffixIcon,
+  }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        field,
-        // Фиксированная высота для ошибок (избегаем скачков интерфейса)
-        SizedBox(
-          height: error.isNotEmpty ? 18 : 4, // Минимальное место под ошибку
-          child: error.isNotEmpty
-              ? Padding(
-                  padding: const EdgeInsets.only(left: 4, top: 2),
-                  child: Text(
-                    error,
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Colors.red,
-                      fontSize: 12, // Уменьшенный размер шрифта
-                    ),
-                  ),
-                )
-              : null,
+        Stack(
+          children: [
+            field,
+            if (suffixIcon != null)
+              Positioned(
+                right: 12,
+                top: 0,
+                bottom: 0,
+                child: Center(child: suffixIcon),
+              ),
+          ],
         ),
+        if (error.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              error,
+              style: TextStyle(
+                color: Colors.red,
+                fontSize: 12,
+              ),
+            ),
+          ),
       ],
     );
   }
@@ -216,9 +324,7 @@ class _SignUpFormState extends State<SignUpForm> {
       children: [
         Text(
           'Ключ восстановления аккаунта',
-          style: Theme.of(
-            context,
-          ).textTheme.headlineSmall?.copyWith(fontSize: 18),
+          style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontSize: 18),
         ),
         const SizedBox(height: 20),
         Container(
@@ -239,9 +345,9 @@ class _SignUpFormState extends State<SignUpForm> {
             recoverykey.isEmpty ? '• • • • • • ' : recoverykey,
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.titleMedium?.copyWith(
-              letterSpacing: 2,
-              fontWeight: FontWeight.w600,
-            ),
+                  letterSpacing: 2,
+                  fontWeight: FontWeight.w600,
+                ),
           ),
         ),
         Text(
@@ -282,7 +388,7 @@ class _SignUpFormState extends State<SignUpForm> {
                   },
                   text: 'Завершить регистрацию',
                 ),
-          const SizedBox(height: 10), // Уменьшенный отступ
+          const SizedBox(height: 10),
           MatteButton(
             onPressed: () {
               setState(() {
@@ -297,9 +403,9 @@ class _SignUpFormState extends State<SignUpForm> {
               child: Text(
                 registrationError,
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Colors.red,
-                  fontSize: 12,
-                ),
+                      color: Colors.red,
+                      fontSize: 12,
+                    ),
               ),
             ),
           if (registrationSuccessful.isNotEmpty)
@@ -308,9 +414,9 @@ class _SignUpFormState extends State<SignUpForm> {
               child: Text(
                 registrationSuccessful,
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Colors.green,
-                  fontSize: 12,
-                ),
+                      color: Colors.green,
+                      fontSize: 12,
+                    ),
               ),
             ),
         ],
@@ -325,13 +431,39 @@ class _SignUpFormState extends State<SignUpForm> {
     // Сбрасываем все ошибки
     setState(() {
       loginError = '';
+      usernameError = '';
+      nicknameError = '';
       passError = '';
-      confirmPassError = '';
     });
+
+    // Проверка nickname (опционально, но если введён - макс. 32 символа)
+    if (_nicknameController.text.isNotEmpty && _nicknameController.text.length > 32) {
+      setState(() {
+        nicknameError = 'Nickname не может быть длиннее 32 символов';
+      });
+      isValid = false;
+    }
 
     if (_loginController.text.isEmpty) {
       setState(() {
         loginError = 'Введите логин';
+      });
+      isValid = false;
+    } else if (!_isLoginAvailable) {
+      setState(() {
+        loginError = 'Логин уже занят';
+      });
+      isValid = false;
+    }
+
+    if (_usernameController.text.isEmpty) {
+      setState(() {
+        usernameError = 'Введите username';
+      });
+      isValid = false;
+    } else if (!_isUsernameAvailable) {
+      setState(() {
+        usernameError = 'Username уже занят';
       });
       isValid = false;
     }
@@ -341,16 +473,9 @@ class _SignUpFormState extends State<SignUpForm> {
         passError = 'Введите пароль';
       });
       isValid = false;
-    }
-
-    if (_confirmPasswordController.text.isEmpty) {
+    } else if (_passwordController.text.length < 6) {
       setState(() {
-        confirmPassError = 'Подтвердите пароль';
-      });
-      isValid = false;
-    } else if (_passwordController.text != _confirmPasswordController.text) {
-      setState(() {
-        confirmPassError = 'Пароли не совпадают';
+        passError = 'Пароль должен быть не менее 6 символов';
       });
       isValid = false;
     }
@@ -361,8 +486,12 @@ class _SignUpFormState extends State<SignUpForm> {
   // Завершение регистрации
   Future<void> _completeRegistration() async {
     final login = _loginController.text.trim();
+    final username = _usernameController.text.trim();
     final password = _passwordController.text;
     final rk = recoverykey;
+    final nickname = _nicknameController.text.trim().isEmpty
+        ? null
+        : _nicknameController.text.trim();
     setState(() {
       _isLoading = true;
       registrationError = '';
@@ -370,7 +499,7 @@ class _SignUpFormState extends State<SignUpForm> {
     });
     try {
       final repo = context.read<AuthRepository>();
-      final result = await repo.register(login, password, rk);
+      final result = await repo.register(login, password, rk, nickname, username);
       if (result.id.isNotEmpty) {
         setState(() {
           registrationSuccessful = 'Регистрация успешно завершена';
@@ -392,15 +521,16 @@ class _SignUpFormState extends State<SignUpForm> {
 
   @override
   void dispose() {
-    // Удаляем слушатели перед освобождением ресурсов
+    _loginDebounce?.cancel();
+    _usernameDebounce?.cancel();
     _loginController.removeListener(_onLoginChanged);
+    _usernameController.removeListener(_onUsernameChanged);
+    _nicknameController.removeListener(_onNicknameChanged);
     _passwordController.removeListener(_onPasswordChanged);
-    _confirmPasswordController.removeListener(_onConfirmPasswordChanged);
-
-    // Освобождаем ресурсы
     _loginController.dispose();
+    _usernameController.dispose();
+    _nicknameController.dispose();
     _passwordController.dispose();
-    _confirmPasswordController.dispose();
     super.dispose();
   }
 }

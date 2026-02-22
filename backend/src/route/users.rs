@@ -21,6 +21,7 @@ use tokio::io::AsyncWriteExt;
 // Конструктор роутера для users: подключаем маршруты профиля
 // - GET /users/me       — вернуть текущего пользователя
 // - PATCH /users/username — сменить имя пользователя
+// - PATCH /users/nickname — сменить отображаемое имя (nickname)
 // - PATCH /users/avatar   — обновить аватар (можно null)
 // - DELETE /users/me      — удалить аккаунт
 // - GET /users/{id}/public-key — получить публичный ключ пользователя (для E2EE)
@@ -29,6 +30,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/users/me", get(me).delete(delete_me))
         .route("/users/username", patch(update_username))
+        .route("/users/nickname", patch(update_nickname))
         .route("/users/avatar", patch(update_avatar).post(update_avatar))
         .route("/users/search", get(search_users))
         .route("/users/:id/public-key", get(get_public_key))
@@ -58,7 +60,7 @@ async fn search_users(
 
     let rows = sqlx::query(
         r#"
-        SELECT id, login, username, avatar
+        SELECT id, login, username, nickname, avatar
         FROM users
         WHERE id <> $3
           AND (
@@ -90,6 +92,7 @@ async fn search_users(
             id: row.try_get("id").unwrap_or_default(),
             login: row.try_get("login").unwrap_or_default(),
             username: row.try_get("username").unwrap_or_default(),
+            nickname: row.try_get("nickname").ok(),
             avatar: row.try_get("avatar").ok(),
         });
     }
@@ -108,7 +111,7 @@ async fn me(
     // Загружаем пользователя из БД по id (берём из JWT через CurrentUser)
     let row = sqlx::query(
         r#"
-        SELECT id, login, username, avatar
+        SELECT id, login, username, nickname, avatar
         FROM users
         WHERE id = $1
         "#,
@@ -132,6 +135,7 @@ async fn me(
         id: row.try_get("id").unwrap_or_default(),
         login: row.try_get("login").unwrap_or_default(),
         username: row.try_get("username").unwrap_or_default(),
+        nickname: row.try_get("nickname").ok(),
         avatar: row.try_get("avatar").ok(),
     };
 
@@ -163,7 +167,7 @@ async fn update_username(
         UPDATE users
         SET username = $1
         WHERE id = $2
-        RETURNING id, login, username, avatar
+        RETURNING id, login, username, nickname, avatar
         "#,
     )
     .bind(&payload.username)
@@ -191,6 +195,66 @@ async fn update_username(
         id: row.try_get("id").unwrap_or_default(),
         login: row.try_get("login").unwrap_or_default(),
         username: row.try_get("username").unwrap_or_default(),
+        nickname: row.try_get("nickname").ok(),
+        avatar: row.try_get("avatar").ok(),
+    };
+
+    let _ = publish_profile_updated_for_user(&state, id).await;
+
+    Ok(Json(user))
+}
+
+// Тело запроса для смены nickname
+#[derive(Deserialize)]
+struct UpdateNicknameRequest {
+    nickname: String,
+}
+
+async fn update_nickname(
+    State(state): State<AppState>,
+    CurrentUser { id, .. }: CurrentUser,
+    Json(payload): Json<UpdateNicknameRequest>,
+) -> Result<Json<UserResponse>, (StatusCode, String)> {
+    // Валидация: nickname не должен быть длиннее 32 символов
+    if payload.nickname.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Nickname не может быть пустым".into(),
+        ));
+    }
+
+    if payload.nickname.len() > 32 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Nickname не может быть длиннее 32 символов".into(),
+        ));
+    }
+
+    // Обновляем nickname; nickname не уникален, поэтому конфликтов не будет
+    let row = sqlx::query(
+        r#"
+        UPDATE users
+        SET nickname = $1
+        WHERE id = $2
+        RETURNING id, login, username, nickname, avatar
+        "#,
+    )
+    .bind(&payload.nickname)
+    .bind(id)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Ошибка БД: {}", e),
+        )
+    })?;
+
+    let user = UserResponse {
+        id: row.try_get("id").unwrap_or_default(),
+        login: row.try_get("login").unwrap_or_default(),
+        username: row.try_get("username").unwrap_or_default(),
+        nickname: row.try_get("nickname").ok(),
         avatar: row.try_get("avatar").ok(),
     };
 
@@ -344,7 +408,7 @@ async fn update_avatar(
         UPDATE users
         SET avatar = $1
         WHERE id = $2
-        RETURNING id, login, username, avatar
+        RETURNING id, login, username, nickname, avatar
         "#,
     )
     .bind(&new_avatar_path)
@@ -362,6 +426,7 @@ async fn update_avatar(
         id: row.try_get("id").unwrap_or_default(),
         login: row.try_get("login").unwrap_or_default(),
         username: row.try_get("username").unwrap_or_default(),
+        nickname: row.try_get("nickname").ok(),
         avatar: row.try_get("avatar").ok(),
     };
 

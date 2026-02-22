@@ -1,12 +1,14 @@
 class ChatUser {
   final String id;
   final String name;
+  final String? nickname;
   final String avatarUrl;
   final bool isOnline;
 
   const ChatUser({
     required this.id,
     required this.name,
+    this.nickname,
     required this.avatarUrl,
     required this.isOnline,
   });
@@ -92,6 +94,7 @@ class ChatPreview {
 class ChatMember {
   final int userId;
   final String username;
+  final String? nickname;
   final String avatarUrl;
   final String role;
   final DateTime joinedAt;
@@ -99,6 +102,7 @@ class ChatMember {
   const ChatMember({
     required this.userId,
     required this.username,
+    this.nickname,
     required this.avatarUrl,
     required this.role,
     required this.joinedAt,
