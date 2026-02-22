@@ -4,6 +4,37 @@
 
 ### Flutter App (`apps/flutter`)
 
+#### User nickname support
+- Добавлена поддержка nickname (отображаемого имени) пользователя:
+  - модели `AuthUser`, `ApiUser`, `ProfileUser`, `ChatUser`, `ChatMember` — поле `nickname`;
+  - поиск пользователей по `username` с отображением `nickname` в результатах;
+  - отображение `nickname` вместо `username` в чатах и сообщениях;
+  - если `nickname` пуст — отображается `username`.
+- Обновлена регистрация:
+  - убрано подтверждение пароля;
+  - добавлены обязательное поле `username` и опциональное `nickname`;
+  - проверка доступности логина и username в реальном времени (on-the-fly);
+  - визуальная индикация: зелёная галочка если доступно, красный крест если занято.
+- Обновлён профиль:
+  - редактирование `nickname` в `profile_edit_sheet.dart`;
+  - валидация: не пустое, максимум 32 символа;
+  - отдельная кнопка сохранения для nickname.
+- Файлы:
+  - `apps/flutter/lib/features/auth/domain/auth_user.dart`
+  - `apps/flutter/lib/features/auth/domain/auth_models.dart`
+  - `apps/flutter/lib/features/auth/data/auth_api.dart`
+  - `apps/flutter/lib/features/auth/data/auth_repository.dart`
+  - `apps/flutter/lib/features/auth/presentation/components/signup.dart`
+  - `apps/flutter/lib/features/chats/domain/chat_models.dart`
+  - `apps/flutter/lib/features/chats/data/chats_repository.dart`
+  - `apps/flutter/lib/features/chats/presentation/chats_page.dart`
+  - `apps/flutter/lib/features/profile/domain/profile_user.dart`
+  - `apps/flutter/lib/features/profile/data/profile_api.dart`
+  - `apps/flutter/lib/features/profile/data/profile_repository.dart`
+  - `apps/flutter/lib/features/profile/presentation/profile_store.dart`
+  - `apps/flutter/lib/features/profile/presentation/widgets/profile_edit_sheet.dart`
+  - `apps/flutter/lib/core/cache/chats_local_cache.dart`
+
 #### Reconnect strategy for realtime (WebSocket)
 - Обновлена политика переподключения WS-клиента при недоступности сервера:
   - 1-я повторная попытка через 10 секунд;

@@ -76,6 +76,22 @@ class ProfileStore extends ChangeNotifier {
     }
   }
 
+  Future<bool> changeNickname(String nickname) async {
+    isLoading = true;
+    error = null;
+    notifyListeners();
+    try {
+      user = await repo.updateNickname(nickname);
+      return true;
+    } catch (e) {
+      error = e.toString();
+      return false;
+    } finally {
+      isLoading = false;
+      notifyListeners();
+    }
+  }
+
   Future<bool> setAvatar(File file) async {
     isLoading = true;
     error = null;

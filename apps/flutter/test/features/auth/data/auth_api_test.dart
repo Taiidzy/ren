@@ -121,7 +121,7 @@ void main() {
       final api = AuthApi(dio);
 
       expect(
-        () => api.register('alice', 'secret', 'alice', 'a', 'b', 'c', 'salt'),
+        () => api.register('alice', 'secret', 'alice', 'a', 'b', 'c', 'salt', null),
         throwsA(
           isA<ApiException>().having(
             (e) => e.message,

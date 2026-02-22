@@ -121,6 +121,7 @@ class ChatsLocalCache {
       user: ChatUser(
         id: '${um['id'] ?? ''}',
         name: (um['name'] as String?) ?? 'User',
+        nickname: (um['nickname'] as String?),
         avatarUrl: (um['avatarUrl'] as String?) ?? '',
         isOnline: um['isOnline'] == true,
       ),

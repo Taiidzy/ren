@@ -20,6 +20,11 @@ class ProfileRepository {
     return _normalize(ProfileUser.fromMap(json));
   }
 
+  Future<ProfileUser> updateNickname(String nickname) async {
+    final json = await api.updateNickname(nickname);
+    return _normalize(ProfileUser.fromMap(json));
+  }
+
   Future<ProfileUser> uploadAvatar(File file) async {
     final json = await api.uploadAvatar(file);
     return _normalize(ProfileUser.fromMap(json));
@@ -57,6 +62,7 @@ class ProfileRepository {
       id: u.id,
       login: u.login,
       username: u.username,
+      nickname: u.nickname,
       avatar: normalizedAvatar,
     );
   }

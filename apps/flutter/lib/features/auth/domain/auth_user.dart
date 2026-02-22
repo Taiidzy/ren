@@ -2,6 +2,7 @@ class AuthUser {
   final int id;
   final String login;
   final String? username;
+  final String? nickname;
   final String? avatar;
   final String? pkebymk;
   final String? pkebyrk;
@@ -14,6 +15,7 @@ class AuthUser {
     required this.id,
     required this.login,
     this.username,
+    this.nickname,
     this.avatar,
     this.pkebymk,
     this.pkebyrk,

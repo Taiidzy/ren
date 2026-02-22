@@ -223,6 +223,7 @@ class ChatsRepository {
           ? m['peer_id'] as int
           : int.tryParse('${m['peer_id']}');
       final peerUsername = (m['peer_username'] as String?) ?? '';
+      final peerNickname = (m['peer_nickname'] as String?) ?? '';
       final peerAvatar = (m['peer_avatar'] as String?) ?? '';
       final title = ((m['title'] as String?) ?? '').trim();
       final kind = ((m['kind'] as String?) ?? 'private').trim().toLowerCase();
@@ -250,11 +251,12 @@ class ChatsRepository {
       final lastMessageAt = DateTime.tryParse(lastMessageAtStr) ?? updatedAt;
 
       final userName = _isPrivateKind(kind)
-          ? (peerUsername.isNotEmpty ? peerUsername : 'User')
+          ? (peerNickname.isNotEmpty ? peerNickname : (peerUsername.isNotEmpty ? peerUsername : 'User'))
           : (title.isNotEmpty ? title : 'Chat');
       final user = ChatUser(
         id: (peerId ?? 0).toString(),
         name: userName,
+        nickname: peerNickname.isNotEmpty ? peerNickname : null,
         avatarUrl: _avatarUrl(peerAvatar),
         isOnline: false,
       );
@@ -387,12 +389,14 @@ class ChatsRepository {
           ? m['id'] as int
           : int.tryParse('${m['id']}') ?? 0;
       final username = (m['username'] as String?) ?? '';
+      final nickname = (m['nickname'] as String?) ?? '';
       final avatar = (m['avatar'] as String?) ?? '';
       if (id <= 0) continue;
       out.add(
         ChatUser(
           id: id.toString(),
-          name: username.isNotEmpty ? username : 'User',
+          name: nickname.isNotEmpty ? nickname : (username.isNotEmpty ? username : 'User'),
+          nickname: nickname.isNotEmpty ? nickname : null,
           avatarUrl: _avatarUrl(avatar),
           isOnline: false,
         ),
@@ -808,10 +812,13 @@ class ChatsRepository {
         (json['is_favorite'] == true) || (json['isFavorite'] == true);
 
     final peerUsername = ((json['peer_username'] as String?) ?? '').trim();
+    final peerNickname = ((json['peer_nickname'] as String?) ?? '').trim();
     final fallbackName = (fallbackPeerName ?? '').trim();
-    final resolvedName = peerUsername.isNotEmpty
-        ? peerUsername
-        : (fallbackName.isNotEmpty ? fallbackName : 'User');
+    final resolvedName = peerNickname.isNotEmpty
+        ? peerNickname
+        : (peerUsername.isNotEmpty
+            ? peerUsername
+            : (fallbackName.isNotEmpty ? fallbackName : 'User'));
 
     final peerAvatar = ((json['peer_avatar'] as String?) ?? '').trim();
     final fallbackAvatar = (fallbackPeerAvatarUrl ?? '').trim();
@@ -826,6 +833,7 @@ class ChatsRepository {
       user: ChatUser(
         id: peerId.toString(),
         name: resolvedName,
+        nickname: peerNickname.isNotEmpty ? peerNickname : null,
         avatarUrl: resolvedAvatar,
         isOnline: false,
       ),
@@ -869,6 +877,7 @@ class ChatsRepository {
       user: ChatUser(
         id: (peerId ?? 0).toString(),
         name: name,
+        nickname: null,
         avatarUrl: '',
         isOnline: false,
       ),
@@ -939,6 +948,7 @@ class ChatsRepository {
           : int.tryParse('${m['user_id'] ?? ''}') ?? 0;
       if (userId <= 0) continue;
       final username = ((m['username'] as String?) ?? '').trim();
+      final nickname = ((m['nickname'] as String?) ?? '').trim();
       final avatarRaw = ((m['avatar'] as String?) ?? '').trim();
       final role = ((m['role'] as String?) ?? 'member').trim();
       final joinedAt =
@@ -948,6 +958,7 @@ class ChatsRepository {
         ChatMember(
           userId: userId,
           username: username.isEmpty ? 'User' : username,
+          nickname: nickname.isNotEmpty ? nickname : null,
           avatarUrl: _avatarUrl(avatarRaw),
           role: role.isEmpty ? 'member' : role,
           joinedAt: joinedAt,

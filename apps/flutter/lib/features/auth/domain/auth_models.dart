@@ -2,6 +2,7 @@ class ApiUser {
   final int id;
   final String login;
   final String? username;
+  final String? nickname;
   final String? avatar;
   final String? pkebymk;
   final String? pkebyrk;
@@ -12,6 +13,7 @@ class ApiUser {
     required this.id,
     required this.login,
     this.username,
+    this.nickname,
     this.avatar,
     this.pkebymk,
     this.pkebyrk,
@@ -25,6 +27,7 @@ class ApiUser {
       id: m['id'] is int ? m['id'] as int : int.tryParse('${m['id']}') ?? 0,
       login: m['login'] as String? ?? '',
       username: m['username'] as String?,
+      nickname: m['nickname'] as String?,
       avatar: m['avatar'] as String?,
       pkebymk: m['pkebymk'] as String?,
       pkebyrk: m['pkebyrk'] as String?,

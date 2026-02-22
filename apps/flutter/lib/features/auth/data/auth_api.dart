@@ -3,6 +3,8 @@ import 'package:flutter/foundation.dart';
 
 import 'package:ren/core/constants/api_url.dart';
 import 'package:ren/core/sdk/ren_sdk.dart';
+import 'package:ren/core/secure/secure_storage.dart';
+import 'package:ren/core/constants/keys.dart';
 
 class ApiException implements Exception {
   final String message;
@@ -96,6 +98,7 @@ class AuthApi {
     String pkebyrk,
     String pubk,
     String salt,
+    String? nickname,
   ) async {
     try {
       final response = await dio.post(
@@ -104,6 +107,7 @@ class AuthApi {
           'login': login,
           'password': password,
           'username': username,
+          'nickname': nickname,
           'pkebymk': pkebymk,
           'pkebyrk': pkebyrk,
           'pubk': pubk,
@@ -153,5 +157,58 @@ class AuthApi {
     }
   }
 
+  Future<List<dynamic>> searchUsers(String query, {int limit = 10}) async {
+    try {
+      final token = await SecureStorage.readKey(Keys.token);
+      if (token == null || token.isEmpty) {
+        return const [];
+      }
+      final response = await dio.get(
+        '${Apiurl.api}/users/search',
+        queryParameters: {'q': query, 'limit': limit},
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+      return (response.data as List<dynamic>?) ?? const [];
+    } on DioException catch (_) {
+      return const [];
+    }
+  }
+
   Future<void> recovery() async {}
+
+  Future<Map<String, dynamic>> updateNickname(String nickname) async {
+    try {
+      final response = await dio.patch(
+        '${Apiurl.api}/users/nickname',
+        data: {'nickname': nickname},
+      );
+      return response.data;
+    } on DioException catch (e) {
+      final status = e.response?.statusCode;
+      if (e.response == null) {
+        throw ApiException(
+          'Сетевая ошибка (${e.type.name}). Проверьте интернет/VPN и доступ к API.',
+        );
+      }
+      switch (status) {
+        case 400:
+          throw ApiException(
+            _extractServerMessage(e.response?.data) ??
+                'Некорректные данные (400).',
+          );
+        case 500:
+          throw ApiException('Ошибка сервера. Попробуйте позже.');
+        default:
+          final serverMessage = _extractServerMessage(e.response?.data);
+          throw ApiException(
+            serverMessage ??
+                'Ошибка обновления nickname${status != null ? ' ($status)' : ''}.',
+          );
+      }
+    } catch (_) {
+      throw ApiException(
+        'Не удалось подключиться к серверу. Проверьте соединение.',
+      );
+    }
+  }
 }

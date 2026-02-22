@@ -68,6 +68,25 @@ class ProfileApi {
     }
   }
 
+  Future<Map<String, dynamic>> updateNickname(String nickname) async {
+    final token = await _requireToken();
+    try {
+      final resp = await dio.patch(
+        '${Apiurl.api}/users/nickname',
+        data: {'nickname': nickname},
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+      return (resp.data as Map<String, dynamic>?) ?? <String, dynamic>{};
+    } on DioException catch (e) {
+      throw ApiException(
+        (e.response?.data is String)
+            ? e.response?.data as String
+            : 'Ошибка обновления nickname',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
   Future<Map<String, dynamic>> uploadAvatar(File file) async {
     final token = await _requireToken();
     var attempt = 0;
