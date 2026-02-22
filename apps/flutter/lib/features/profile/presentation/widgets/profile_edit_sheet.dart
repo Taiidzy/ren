@@ -315,6 +315,10 @@ class _ProfileEditContentState extends State<_ProfileEditContent> {
                     TextField(
                       controller: _usernameController,
                       enabled: !store.isLoading,
+                      style: theme.textTheme.bodyLarge?.copyWith(
+                        color: theme.colorScheme.onSurface,
+                      ),
+                      cursorColor: theme.colorScheme.onSurface,
                       textInputAction: TextInputAction.done,
                       onSubmitted: (_) {
                         if (!store.isLoading) {
@@ -322,9 +326,38 @@ class _ProfileEditContentState extends State<_ProfileEditContent> {
                         }
                       },
                       maxLength: 32,
-                      decoration: const InputDecoration(
+                      decoration: InputDecoration(
                         labelText: 'Имя (username)',
-                        border: OutlineInputBorder(),
+                        labelStyle: TextStyle(
+                          color: theme.colorScheme.onSurface.withOpacity(0.75),
+                        ),
+                        filled: true,
+                        fillColor: Colors.transparent,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(16),
+                          borderSide: BorderSide(
+                            color: baseInk.withOpacity(isDark ? 0.28 : 0.18),
+                          ),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(16),
+                          borderSide: BorderSide(
+                            color: baseInk.withOpacity(isDark ? 0.28 : 0.18),
+                          ),
+                        ),
+                        disabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(16),
+                          borderSide: BorderSide(
+                            color: baseInk.withOpacity(isDark ? 0.18 : 0.12),
+                          ),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(16),
+                          borderSide: BorderSide(
+                            color: theme.colorScheme.primary,
+                            width: 1.5,
+                          ),
+                        ),
                         counterText: '',
                       ),
                     ),

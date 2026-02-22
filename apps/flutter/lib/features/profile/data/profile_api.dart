@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:convert';
+import 'dart:async';
 
 import 'package:dio/dio.dart';
 import 'package:http/http.dart' as http;
@@ -69,41 +70,51 @@ class ProfileApi {
 
   Future<Map<String, dynamic>> uploadAvatar(File file) async {
     final token = await _requireToken();
+    var attempt = 0;
+    while (true) {
+      attempt += 1;
+      try {
+        final uri = Uri.parse('${Apiurl.api}/users/avatar');
+        final request = http.MultipartRequest('POST', uri);
 
-    final uri = Uri.parse('${Apiurl.api}/users/avatar');
-    final request = http.MultipartRequest('POST', uri);
+        request.headers['Authorization'] = 'Bearer $token';
+        final sdkFingerprint = currentSdkFingerprint();
+        if (sdkFingerprint.isNotEmpty) {
+          request.headers['X-SDK-Fingerprint'] = sdkFingerprint;
+        }
 
-    // ❗ ТОЛЬКО Authorization
-    request.headers['Authorization'] = 'Bearer $token';
-    final sdkFingerprint = currentSdkFingerprint();
-    if (sdkFingerprint.isNotEmpty) {
-      request.headers['X-SDK-Fingerprint'] = sdkFingerprint;
+        final filename = file.uri.pathSegments.isNotEmpty
+            ? file.uri.pathSegments.last
+            : 'avatar.jpg';
+
+        request.files.add(
+          await http.MultipartFile.fromPath(
+            'avatar',
+            file.path,
+            filename: filename,
+          ),
+        );
+
+        final streamedResponse = await request.send();
+        final response = await http.Response.fromStream(streamedResponse);
+
+        if (response.statusCode >= 200 && response.statusCode < 300) {
+          if (response.body.isEmpty) return {};
+          return json.decode(response.body) as Map<String, dynamic>;
+        }
+
+        throw ApiException(
+          response.body.isNotEmpty ? response.body : 'Ошибка загрузки аватара',
+          statusCode: response.statusCode,
+        );
+      } on SocketException {
+        await Future<void>.delayed(_delayForAttempt(attempt));
+      } on HttpException {
+        await Future<void>.delayed(_delayForAttempt(attempt));
+      } on TimeoutException {
+        await Future<void>.delayed(_delayForAttempt(attempt));
+      }
     }
-
-    final filename = file.uri.pathSegments.isNotEmpty
-        ? file.uri.pathSegments.last
-        : 'avatar.jpg';
-
-    request.files.add(
-      await http.MultipartFile.fromPath(
-        'avatar',
-        file.path,
-        filename: filename,
-      ),
-    );
-
-    final streamedResponse = await request.send();
-    final response = await http.Response.fromStream(streamedResponse);
-
-    if (response.statusCode >= 200 && response.statusCode < 300) {
-      if (response.body.isEmpty) return {};
-      return json.decode(response.body) as Map<String, dynamic>;
-    }
-
-    throw ApiException(
-      response.body.isNotEmpty ? response.body : 'Ошибка загрузки аватара',
-      statusCode: response.statusCode,
-    );
   }
 
   Future<Map<String, dynamic>> removeAvatar() async {
@@ -194,4 +205,10 @@ class ProfileApi {
       );
     }
   }
+}
+
+Duration _delayForAttempt(int attempt) {
+  if (attempt <= 1) return const Duration(seconds: 10);
+  if (attempt == 2) return const Duration(seconds: 30);
+  return const Duration(minutes: 1);
 }

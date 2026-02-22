@@ -33,6 +33,7 @@ import 'package:ren/features/profile/presentation/profile_store.dart';
 import 'package:ren/core/realtime/realtime_client.dart';
 import 'package:ren/core/notifications/local_notifications.dart';
 import 'package:ren/core/network/auth_session_interceptor.dart';
+import 'package:ren/core/network/server_retry_interceptor.dart';
 import 'package:ren/core/security/privacy_protection.dart';
 import 'package:ren/shared/widgets/adaptive_page_route.dart';
 
@@ -134,6 +135,7 @@ class _MyAppState extends State<MyApp> {
         Provider<Dio>(
           create: (_) {
             final dio = Dio();
+            dio.interceptors.add(ServerRetryInterceptor(dio));
             dio.interceptors.add(
               AuthSessionInterceptor(
                 dio,
