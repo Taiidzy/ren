@@ -16,6 +16,13 @@ pub struct Chat {
     pub peer_username: Option<String>,
     pub peer_avatar: Option<String>,
     pub unread_count: Option<i64>,
+    pub last_message_id: Option<i64>,
+    pub last_message: Option<String>,
+    pub last_message_type: Option<String>,
+    pub last_message_created_at: Option<String>,
+    pub last_message_is_outgoing: Option<bool>,
+    pub last_message_is_delivered: Option<bool>,
+    pub last_message_is_read: Option<bool>,
 }
 
 // Конверт для E2EE (зашифрованный ключ для конкретного пользователя)
@@ -58,6 +65,7 @@ pub struct Message {
     pub deleted_at: Option<String>,
     pub deleted_by: Option<i64>,
     pub is_read: bool,
+    pub is_delivered: bool,
     pub has_files: Option<bool>, // опционально, для обратной совместимости
     pub metadata: Option<Vec<FileMetadata>>, // метаданные файлов
     pub envelopes: Option<Value>, // JSON объект: {"userId": Envelope}

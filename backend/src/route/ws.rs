@@ -380,6 +380,23 @@ pub fn publish_message_read(
     publish_payload_to_users(state, recipients, payload);
 }
 
+pub fn publish_message_delivered(
+    state: &AppState,
+    recipients: &[i32],
+    chat_id: i32,
+    user_id: i32,
+    last_delivered_message_id: i64,
+) {
+    let payload = json!({
+        "type": "message_delivered",
+        "chat_id": chat_id,
+        "user_id": user_id,
+        "last_delivered_message_id": last_delivered_message_id
+    })
+    .to_string();
+    publish_payload_to_users(state, recipients, payload);
+}
+
 async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
     // Канал для записи в websocket из разных задач
     let (out_tx, mut out_rx) = mpsc::unbounded_channel::<WsMessage>();
@@ -654,6 +671,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                                 deleted_at,
                                 deleted_by::INT8 AS deleted_by,
                                 is_read,
+                                is_delivered,
                                 envelopes,
                                 metadata
                             "#,
@@ -712,6 +730,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                                 .map(|t| t.to_rfc3339()),
                             deleted_by: row.try_get("deleted_by").ok(),
                             is_read: row.try_get("is_read").unwrap_or(false),
+                            is_delivered: row.try_get("is_delivered").unwrap_or(false),
                             has_files,
                             metadata: metadata_vec,
                             envelopes: envelopes_value,
@@ -810,6 +829,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                                 deleted_at,
                                 deleted_by::INT8 AS deleted_by,
                                 is_read,
+                                is_delivered,
                                 envelopes,
                                 metadata
                             "#,
@@ -876,6 +896,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                                 .ok()
                                 .map(|t| t.to_rfc3339()),
                             is_read: row.try_get("is_read").unwrap_or(false),
+                            is_delivered: row.try_get("is_delivered").unwrap_or(false),
                             reply_to_message_id: row.try_get("reply_to_message_id").ok(),
                             forwarded_from_message_id: row
                                 .try_get("forwarded_from_message_id")
@@ -1173,6 +1194,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                                 deleted_at,
                                 deleted_by::INT8 AS deleted_by,
                                 is_read,
+                                is_delivered,
                                 envelopes,
                                 metadata
                             "#,
@@ -1240,6 +1262,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                                 .map(|t| t.to_rfc3339()),
                             deleted_by: row.try_get("deleted_by").ok(),
                             is_read: row.try_get("is_read").unwrap_or(false),
+                            is_delivered: row.try_get("is_delivered").unwrap_or(false),
                             has_files,
                             metadata: metadata_vec,
                             envelopes: envelopes_value,

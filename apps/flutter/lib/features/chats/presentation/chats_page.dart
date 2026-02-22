@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'package:hugeicons/hugeicons.dart';
 import 'package:provider/provider.dart';
@@ -12,6 +13,7 @@ import 'package:ren/features/profile/presentation/profile_menu_page.dart';
 
 import 'package:ren/core/constants/api_url.dart';
 import 'package:ren/core/constants/keys.dart';
+import 'package:ren/core/providers/notifications_settings.dart';
 import 'package:ren/core/realtime/realtime_client.dart';
 import 'package:ren/core/secure/secure_storage.dart';
 import 'package:ren/core/notifications/local_notifications.dart';
@@ -146,6 +148,46 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
     return '${Apiurl.api}/avatars/$normalized';
   }
 
+  void _rebuildChatIndexFromCurrentChats() {
+    _chatIndex
+      ..clear()
+      ..addEntries(
+        _chats
+            .map((c) => MapEntry(int.tryParse(c.id) ?? 0, c))
+            .where((e) => e.key > 0),
+      );
+  }
+
+  ChatPreview _placeholderChatFromRealtime({
+    required int chatId,
+    required String kind,
+    String? title,
+  }) {
+    final normalizedKind = kind.trim().toLowerCase().isEmpty
+        ? 'group'
+        : kind.trim().toLowerCase();
+    final rawTitle = (title ?? '').trim();
+    final name = rawTitle.isNotEmpty
+        ? rawTitle
+        : (normalizedKind == 'channel'
+              ? 'Новый канал'
+              : (normalizedKind == 'private' ? 'Новый чат' : 'Новая группа'));
+    return ChatPreview(
+      id: chatId.toString(),
+      peerId: null,
+      kind: normalizedKind,
+      user: ChatUser(id: '0', name: name, avatarUrl: '', isOnline: false),
+      isFavorite: false,
+      lastMessage: '',
+      lastMessageAt: DateTime.now(),
+      unreadCount: 0,
+      lastMessageIsMine: false,
+      lastMessageIsPending: false,
+      lastMessageIsDelivered: false,
+      lastMessageIsRead: false,
+    );
+  }
+
   bool _isChatsDifferent(List<ChatPreview> a, List<ChatPreview> b) {
     if (identical(a, b)) return false;
     if (a.length != b.length) return true;
@@ -159,6 +201,10 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
           x.lastMessage != y.lastMessage ||
           x.isFavorite != y.isFavorite ||
           x.unreadCount != y.unreadCount ||
+          x.lastMessageIsMine != y.lastMessageIsMine ||
+          x.lastMessageIsPending != y.lastMessageIsPending ||
+          x.lastMessageIsDelivered != y.lastMessageIsDelivered ||
+          x.lastMessageIsRead != y.lastMessageIsRead ||
           x.lastMessageAt.millisecondsSinceEpoch !=
               y.lastMessageAt.millisecondsSinceEpoch) {
         return true;
@@ -183,6 +229,10 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                       lastMessage: c.lastMessage,
                       lastMessageAt: c.lastMessageAt,
                       unreadCount: 0,
+                      lastMessageIsMine: c.lastMessageIsMine,
+                      lastMessageIsPending: c.lastMessageIsPending,
+                      lastMessageIsDelivered: c.lastMessageIsDelivered,
+                      lastMessageIsRead: c.lastMessageIsRead,
                     )
                   : c,
             )
@@ -733,12 +783,96 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
       if (evt.type == 'message_new' ||
           evt.type == 'message_updated' ||
           evt.type == 'message_deleted' ||
-          evt.type == 'message_read' ||
-          evt.type == 'chat_created' ||
-          evt.type == 'member_added' ||
+          evt.type == 'message_delivered' ||
+          evt.type == 'message_read') {
+        unawaited(_syncChats());
+      }
+
+      if (evt.type == 'chat_created') {
+        final chatId = int.tryParse(
+          '${evt.data['chat_id'] ?? evt.data['chatId'] ?? 0}',
+        );
+        final kind = '${evt.data['kind'] ?? 'group'}';
+        final title = (evt.data['title'] as String?)?.trim();
+        final createdBy = int.tryParse(
+          '${evt.data['created_by'] ?? evt.data['createdBy'] ?? 0}',
+        );
+        if (chatId != null && chatId > 0 && _chatIndex[chatId] == null) {
+          if (!mounted) return;
+          setState(() {
+            final preview = _placeholderChatFromRealtime(
+              chatId: chatId,
+              kind: kind,
+              title: title,
+            );
+            _chats = [preview, ..._chats];
+            _rebuildChatIndexFromCurrentChats();
+          });
+        }
+        if ((createdBy ?? 0) != _myUserId && mounted) {
+          showGlassSnack(
+            context,
+            'Добавлен новый чат: ${(title != null && title.isNotEmpty) ? title : "Без названия"}',
+            kind: GlassSnackKind.info,
+          );
+        }
+        unawaited(_syncChats());
+        return;
+      }
+
+      if (evt.type == 'member_added' ||
           evt.type == 'member_removed' ||
           evt.type == 'member_role_changed') {
+        final chatId = int.tryParse(
+          '${evt.data['chat_id'] ?? evt.data['chatId'] ?? 0}',
+        );
+        final targetUserId = int.tryParse(
+          '${evt.data['user_id'] ?? evt.data['userId'] ?? 0}',
+        );
+        if (!mounted) return;
+        if (chatId != null &&
+            chatId > 0 &&
+            targetUserId != null &&
+            targetUserId == _myUserId) {
+          if (evt.type == 'member_added' && _chatIndex[chatId] == null) {
+            if (!mounted) return;
+            setState(() {
+              final preview = _placeholderChatFromRealtime(
+                chatId: chatId,
+                kind: 'group',
+                title: null,
+              );
+              _chats = [preview, ..._chats];
+              _rebuildChatIndexFromCurrentChats();
+            });
+            showGlassSnack(
+              context,
+              'Вас добавили в чат',
+              kind: GlassSnackKind.info,
+            );
+          } else if (evt.type == 'member_removed') {
+            if (!mounted) return;
+            setState(() {
+              _chats = _chats
+                  .where((c) => (int.tryParse(c.id) ?? 0) != chatId)
+                  .toList(growable: false);
+              _rebuildChatIndexFromCurrentChats();
+            });
+            showGlassSnack(
+              context,
+              'Вас удалили из чата',
+              kind: GlassSnackKind.info,
+            );
+          } else if (evt.type == 'member_role_changed') {
+            showGlassSnack(
+              context,
+              'Ваша роль в чате обновлена',
+              kind: GlassSnackKind.info,
+            );
+          }
+        }
         unawaited(_syncChats());
+        return;
       }
 
       if (evt.type == 'profile_updated') {
@@ -777,16 +911,14 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                   lastMessage: c.lastMessage,
                   lastMessageAt: c.lastMessageAt,
                   unreadCount: c.unreadCount,
+                  lastMessageIsMine: c.lastMessageIsMine,
+                  lastMessageIsPending: c.lastMessageIsPending,
+                  lastMessageIsDelivered: c.lastMessageIsDelivered,
+                  lastMessageIsRead: c.lastMessageIsRead,
                 );
               })
               .toList(growable: false);
-          _chatIndex
-            ..clear()
-            ..addEntries(
-              _chats
-                  .map((c) => MapEntry(int.tryParse(c.id) ?? 0, c))
-                  .where((e) => e.key > 0),
-            );
+          _rebuildChatIndexFromCurrentChats();
         });
         return;
       }
@@ -826,19 +958,25 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
             : (hasAttachments ? 'Вложение' : 'Сообщение');
 
         if (!mounted) return;
+        final notificationsSettings = context.read<NotificationsSettings>();
 
         if (_isForeground) {
-          _showTopGlassBanner(
-            title: title,
-            body: body,
-            avatarUrl: chat?.user.avatarUrl ?? '',
-            avatarName: chat?.user.name ?? title,
-            onTap: () {
-              final c = _chatIndex[chatId];
-              if (c == null) return;
-              _openChat(c);
-            },
-          );
+          if (notificationsSettings.inAppSoundEnabled) {
+            SystemSound.play(SystemSoundType.click);
+          }
+          if (notificationsSettings.inAppBannersEnabled) {
+            _showTopGlassBanner(
+              title: title,
+              body: body,
+              avatarUrl: chat?.user.avatarUrl ?? '',
+              avatarName: chat?.user.name ?? title,
+              onTap: () {
+                final c = _chatIndex[chatId];
+                if (c == null) return;
+                _openChat(c);
+              },
+            );
+          }
         } else {
           await LocalNotifications.instance.showMessageNotification(
             chatId: chatId,
@@ -1025,6 +1163,10 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                       lastMessage: c.lastMessage,
                       lastMessageAt: c.lastMessageAt,
                       unreadCount: c.unreadCount,
+                      lastMessageIsMine: c.lastMessageIsMine,
+                      lastMessageIsPending: c.lastMessageIsPending,
+                      lastMessageIsDelivered: c.lastMessageIsDelivered,
+                      lastMessageIsRead: c.lastMessageIsRead,
                     ),
                   )
                   .toList();
@@ -1465,14 +1607,46 @@ class _ChatTile extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 2),
-                  Text(
-                    chat.lastMessage,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: theme.colorScheme.onSurface.withOpacity(0.70),
-                    ),
+                  Row(
+                    children: [
+                      if (chat.lastMessageIsMine || chat.lastMessageIsPending)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 4),
+                          child: Icon(
+                            chat.lastMessageIsPending
+                                ? Icons.schedule_rounded
+                                : (chat.lastMessageIsRead ||
+                                          chat.lastMessageIsDelivered
+                                      ? Icons.done_all_rounded
+                                      : Icons.done_rounded),
+                            size: 13,
+                            color: chat.lastMessageIsPending
+                                ? theme.colorScheme.onSurface.withOpacity(0.55)
+                                : (chat.lastMessageIsRead
+                                      ? theme.colorScheme.primary.withOpacity(
+                                          0.92,
+                                        )
+                                      : (chat.lastMessageIsDelivered
+                                            ? theme.colorScheme.onSurface
+                                                  .withOpacity(0.65)
+                                            : theme.colorScheme.onSurface
+                                                  .withOpacity(0.55))),
+                          ),
+                        ),
+                      Expanded(
+                        child: Text(
+                          chat.lastMessage,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: theme.colorScheme.onSurface.withOpacity(
+                              0.70,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),

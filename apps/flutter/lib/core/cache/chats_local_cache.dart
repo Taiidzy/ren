@@ -91,6 +91,10 @@ class ChatsLocalCache {
       'lastMessage': c.lastMessage,
       'lastMessageAt': c.lastMessageAt.toIso8601String(),
       'unreadCount': c.unreadCount,
+      'lastMessageIsMine': c.lastMessageIsMine,
+      'lastMessageIsPending': c.lastMessageIsPending,
+      'lastMessageIsDelivered': c.lastMessageIsDelivered,
+      'lastMessageIsRead': c.lastMessageIsRead,
       'user': {
         'id': c.user.id,
         'name': c.user.name,
@@ -126,6 +130,10 @@ class ChatsLocalCache {
       unreadCount: (m['unreadCount'] is int)
           ? m['unreadCount'] as int
           : int.tryParse('${m['unreadCount'] ?? ''}') ?? 0,
+      lastMessageIsMine: m['lastMessageIsMine'] == true,
+      lastMessageIsPending: m['lastMessageIsPending'] == true,
+      lastMessageIsDelivered: m['lastMessageIsDelivered'] == true,
+      lastMessageIsRead: m['lastMessageIsRead'] == true,
     );
   }
 
@@ -137,6 +145,7 @@ class ChatsLocalCache {
       'text': m.text,
       'sentAt': m.sentAt.toIso8601String(),
       'replyToMessageId': m.replyToMessageId,
+      'isDelivered': m.isDelivered,
       'isRead': m.isRead,
       'attachments': m.attachments
           .map(
@@ -181,6 +190,7 @@ class ChatsLocalCache {
       attachments: attachments,
       sentAt: DateTime.tryParse('${m['sentAt'] ?? ''}') ?? DateTime.now(),
       replyToMessageId: (m['replyToMessageId'] as String?),
+      isDelivered: m['isDelivered'] == true,
       isRead: m['isRead'] == true,
     );
   }

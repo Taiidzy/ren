@@ -13,6 +13,7 @@ class SquareVideoBubble extends StatefulWidget {
   final String videoPath;
   final String timeLabel;
   final bool isMe;
+  final bool isDelivered;
   final bool isRead;
   final bool isPending;
   final bool isDark;
@@ -22,6 +23,7 @@ class SquareVideoBubble extends StatefulWidget {
     required this.videoPath,
     required this.timeLabel,
     required this.isMe,
+    this.isDelivered = false,
     this.isRead = false,
     this.isPending = false,
     required this.isDark,
@@ -303,7 +305,7 @@ class _SquareVideoBubbleState extends State<SquareVideoBubble> {
                           Icon(
                             widget.isPending
                                 ? Icons.schedule_rounded
-                                : (widget.isRead
+                                : (widget.isRead || widget.isDelivered
                                       ? Icons.done_all_rounded
                                       : Icons.done_rounded),
                             size: 13,
@@ -313,9 +315,11 @@ class _SquareVideoBubbleState extends State<SquareVideoBubble> {
                                       ? theme.colorScheme.primary.withOpacity(
                                           0.92,
                                         )
-                                      : theme.colorScheme.onSurface.withOpacity(
-                                          0.55,
-                                        )),
+                                      : (widget.isDelivered
+                                            ? theme.colorScheme.onSurface
+                                                  .withOpacity(0.65)
+                                            : theme.colorScheme.onSurface
+                                                  .withOpacity(0.55))),
                           ),
                         ],
                       ],

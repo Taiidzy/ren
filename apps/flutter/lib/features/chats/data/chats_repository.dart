@@ -232,8 +232,20 @@ class ChatsRepository {
           ? m['unread_count'] as int
           : int.tryParse('${m['unread_count'] ?? ''}') ?? 0;
       final updatedAtStr = (m['updated_at'] as String?) ?? '';
+      final lastMessageId = (m['last_message_id'] is int)
+          ? m['last_message_id'] as int
+          : int.tryParse('${m['last_message_id'] ?? ''}') ?? 0;
+      final lastMessageRaw = (m['last_message'] as String?) ?? '';
+      final lastMessageType = ((m['last_message_type'] as String?) ?? '')
+          .trim()
+          .toLowerCase();
+      final lastMessageOutgoing = m['last_message_is_outgoing'] == true;
+      final lastMessageDelivered = m['last_message_is_delivered'] == true;
+      final lastMessageRead = m['last_message_is_read'] == true;
+      final lastMessageAtStr = (m['last_message_created_at'] as String?) ?? '';
 
       final updatedAt = DateTime.tryParse(updatedAtStr) ?? DateTime.now();
+      final lastMessageAt = DateTime.tryParse(lastMessageAtStr) ?? updatedAt;
 
       final userName = _isPrivateKind(kind)
           ? (peerUsername.isNotEmpty ? peerUsername : 'User')
@@ -252,15 +264,89 @@ class ChatsRepository {
           kind: kind,
           user: user,
           isFavorite: isFavorite,
-          lastMessage: '',
-          lastMessageAt: updatedAt,
+          lastMessage: _buildChatListMessagePreview(
+            kind: kind,
+            messageId: lastMessageId,
+            rawMessage: lastMessageRaw,
+            messageType: lastMessageType,
+          ),
+          lastMessageAt: lastMessageAt,
           unreadCount: unreadCount < 0 ? 0 : unreadCount,
+          lastMessageIsMine: lastMessageOutgoing,
+          lastMessageIsPending: false,
+          lastMessageIsDelivered: lastMessageDelivered,
+          lastMessageIsRead: lastMessageRead,
         ),
       );
     }
 
-    items.sort((a, b) => b.lastMessageAt.compareTo(a.lastMessageAt));
-    return items;
+    final withPending = await _applyLocalPendingLastMessage(items);
+    withPending.sort((a, b) => b.lastMessageAt.compareTo(a.lastMessageAt));
+    return withPending;
+  }
+
+  String _buildChatListMessagePreview({
+    required String kind,
+    required int messageId,
+    required String rawMessage,
+    required String messageType,
+  }) {
+    if (messageId <= 0) return '';
+    if (messageType == 'voice_message') return 'Голосовое сообщение';
+    if (messageType == 'video_message') return 'Видео';
+    if (messageType == 'image' || messageType == 'photo') return 'Фото';
+    if (messageType == 'file') return 'Файл';
+
+    final trimmed = rawMessage.trim();
+    if (trimmed.isEmpty) return 'Сообщение';
+
+    // В private чатах сообщение обычно E2EE: не показываем ciphertext в списке.
+    if (_isPrivateKind(kind)) return 'Сообщение';
+    return trimmed;
+  }
+
+  String _localPendingPreview(ChatMessage message) {
+    final text = message.text.trim();
+    if (text.isNotEmpty) return text;
+    if (message.attachments.isNotEmpty) {
+      final first = message.attachments.first;
+      if (first.isImage) return 'Фото';
+      if (first.isVideo) return 'Видео';
+      if (first.mimetype.startsWith('audio/')) return 'Голосовое сообщение';
+      return 'Файл';
+    }
+    return 'Сообщение';
+  }
+
+  Future<List<ChatPreview>> _applyLocalPendingLastMessage(
+    List<ChatPreview> source,
+  ) async {
+    if (source.isEmpty) return source;
+    final out = List<ChatPreview>.from(source);
+    for (var i = 0; i < out.length; i++) {
+      final chat = out[i];
+      final chatId = int.tryParse(chat.id) ?? 0;
+      if (chatId <= 0) continue;
+      final local = await _localCache.readMessages(chatId);
+      if (local.isEmpty) continue;
+      final latest = local.last;
+      if (!latest.isMe || !latest.id.startsWith('local_')) continue;
+      out[i] = ChatPreview(
+        id: chat.id,
+        peerId: chat.peerId,
+        kind: chat.kind,
+        user: chat.user,
+        isFavorite: chat.isFavorite,
+        lastMessage: _localPendingPreview(latest),
+        lastMessageAt: latest.sentAt,
+        unreadCount: chat.unreadCount,
+        lastMessageIsMine: true,
+        lastMessageIsPending: true,
+        lastMessageIsDelivered: false,
+        lastMessageIsRead: false,
+      );
+    }
+    return out;
   }
 
   Future<List<ChatPreview>> getCachedChats() async {
@@ -355,6 +441,7 @@ class ChatsRepository {
       final senderId = (m['sender_id'] is int)
           ? m['sender_id'] as int
           : int.tryParse('${m['sender_id']}') ?? 0;
+      final isDelivered = m['is_delivered'] == true || m['isDelivered'] == true;
       final isRead = m['is_read'] == true || m['isRead'] == true;
 
       final replyDyn = m['reply_to_message_id'] ?? m['replyToMessageId'];
@@ -399,6 +486,7 @@ class ChatsRepository {
           replyToMessageId: (replyId != null && replyId > 0)
               ? replyId.toString()
               : null,
+          isDelivered: isDelivered,
           isRead: isRead,
         ),
       );
@@ -741,6 +829,10 @@ class ChatsRepository {
       lastMessage: '',
       lastMessageAt: DateTime.now(),
       unreadCount: 0,
+      lastMessageIsMine: false,
+      lastMessageIsPending: false,
+      lastMessageIsDelivered: false,
+      lastMessageIsRead: false,
     );
   }
 
@@ -777,6 +869,10 @@ class ChatsRepository {
       lastMessage: '',
       lastMessageAt: DateTime.now(),
       unreadCount: 0,
+      lastMessageIsMine: false,
+      lastMessageIsPending: false,
+      lastMessageIsDelivered: false,
+      lastMessageIsRead: false,
     );
   }
 
@@ -881,6 +977,14 @@ class ChatsRepository {
         ? json['last_read_message_id'] as int
         : int.tryParse('${json['last_read_message_id'] ?? ''}') ?? 0;
     return lastRead;
+  }
+
+  Future<int> markChatDelivered(int chatId, {int? messageId}) async {
+    final json = await api.markChatDelivered(chatId, messageId: messageId);
+    final lastDelivered = (json['last_delivered_message_id'] is int)
+        ? json['last_delivered_message_id'] as int
+        : int.tryParse('${json['last_delivered_message_id'] ?? ''}') ?? 0;
+    return lastDelivered;
   }
 
   Future<Map<String, dynamic>> buildOutgoingWsTextMessage({

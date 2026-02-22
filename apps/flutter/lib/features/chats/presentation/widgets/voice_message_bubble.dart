@@ -12,6 +12,7 @@ class VoiceMessageBubble extends StatefulWidget {
   final String audioPath;
   final String timeLabel;
   final bool isMe;
+  final bool isDelivered;
   final bool isRead;
   final bool isPending;
   final bool isDark;
@@ -21,6 +22,7 @@ class VoiceMessageBubble extends StatefulWidget {
     required this.audioPath,
     required this.timeLabel,
     required this.isMe,
+    this.isDelivered = false,
     this.isRead = false,
     this.isPending = false,
     required this.isDark,
@@ -321,7 +323,7 @@ class _VoiceMessageBubbleState extends State<VoiceMessageBubble> {
                     Icon(
                       widget.isPending
                           ? Icons.schedule_rounded
-                          : (widget.isRead
+                          : (widget.isRead || widget.isDelivered
                                 ? Icons.done_all_rounded
                                 : Icons.done_rounded),
                       size: 13,
@@ -329,9 +331,13 @@ class _VoiceMessageBubbleState extends State<VoiceMessageBubble> {
                           ? theme.colorScheme.onSurface.withOpacity(0.55)
                           : (widget.isRead
                                 ? theme.colorScheme.primary.withOpacity(0.92)
-                                : theme.colorScheme.onSurface.withOpacity(
-                                    0.55,
-                                  )),
+                                : (widget.isDelivered
+                                      ? theme.colorScheme.onSurface.withOpacity(
+                                          0.65,
+                                        )
+                                      : theme.colorScheme.onSurface.withOpacity(
+                                          0.55,
+                                        ))),
                     ),
                   ],
                 ],

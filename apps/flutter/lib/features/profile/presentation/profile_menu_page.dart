@@ -8,6 +8,7 @@ import 'package:ren/features/chats/data/chats_repository.dart';
 import 'package:ren/features/profile/presentation/widgets/personalization_sheet.dart';
 import 'package:ren/features/profile/presentation/widgets/profile_edit_sheet.dart';
 import 'package:ren/features/profile/presentation/widgets/storage_sheet.dart';
+import 'package:ren/features/profile/presentation/widgets/notifications_sheet.dart';
 import 'package:ren/features/profile/data/profile_repository.dart';
 import 'package:ren/features/profile/presentation/profile_store.dart';
 import 'package:ren/features/profile/presentation/widgets/security_sheet.dart';
@@ -250,7 +251,9 @@ class ProfileMenuPage extends StatelessWidget {
                       _MenuItem(
                         icon: HugeIcons.strokeRoundedNotification01,
                         title: 'Уведомления',
-                        onTap: () {},
+                        onTap: () {
+                          NotificationsSheet.show(context);
+                        },
                       ),
                       const SizedBox(height: 10),
                       _MenuItem(

@@ -15,7 +15,8 @@ use crate::middleware::ensure_member;
 use crate::models::chats::{Chat, CreateChatRequest, FileMetadata, Message};
 use crate::route::ws::{
     publish_chat_created, publish_member_added, publish_member_removed,
-    publish_member_role_changed, publish_message_read, publish_payload_to_users,
+    publish_member_role_changed, publish_message_delivered, publish_message_read,
+    publish_payload_to_users,
 };
 
 // Модели вынесены в crate::models::chats
@@ -30,6 +31,7 @@ pub fn router() -> Router<AppState> {
         .route("/chats", post(create_chat).get(list_chats))
         .route("/chats/:chat_id/messages", get(get_messages))
         .route("/chats/:id/read", post(mark_chat_read))
+        .route("/chats/:id/delivered", post(mark_chat_delivered))
         .route("/chats/:id/members", get(list_members).post(add_member))
         .route(
             "/chats/:id/members/:user_id",
@@ -77,6 +79,16 @@ struct MarkReadRequest {
 #[derive(Serialize)]
 struct MarkReadResponse {
     last_read_message_id: i64,
+}
+
+#[derive(Deserialize)]
+struct MarkDeliveredRequest {
+    message_id: Option<i64>,
+}
+
+#[derive(Serialize)]
+struct MarkDeliveredResponse {
+    last_delivered_message_id: i64,
 }
 
 fn normalize_member_role(kind: &str, role: Option<&str>) -> Result<String, (StatusCode, String)> {
@@ -179,6 +191,7 @@ async fn create_system_message_and_publish(
             deleted_at,
             deleted_by::INT8 AS deleted_by,
             is_read,
+            is_delivered,
             envelopes,
             metadata
         "#,
@@ -221,6 +234,7 @@ async fn create_system_message_and_publish(
             .map(|t| t.to_rfc3339()),
         deleted_by: row.try_get("deleted_by").ok(),
         is_read: row.try_get("is_read").unwrap_or(false),
+        is_delivered: row.try_get("is_delivered").unwrap_or(false),
         has_files: Some(false),
         metadata: None,
         envelopes: None,
@@ -333,6 +347,13 @@ async fn create_chat(
                 peer_username: None,
                 peer_avatar: None,
                 unread_count: Some(0),
+                last_message_id: None,
+                last_message: None,
+                last_message_type: None,
+                last_message_created_at: None,
+                last_message_is_outgoing: None,
+                last_message_is_delivered: None,
+                last_message_is_read: None,
             };
             // Гарантируем, что текущий пользователь числится участником (если выходил ранее — вернём в чат)
             sqlx::query(
@@ -419,6 +440,13 @@ async fn create_chat(
                 peer_username: None,
                 peer_avatar: None,
                 unread_count: Some(0),
+                last_message_id: None,
+                last_message: None,
+                last_message_type: None,
+                last_message_created_at: None,
+                last_message_is_outgoing: None,
+                last_message_is_delivered: None,
+                last_message_is_read: None,
             };
             tx.commit().await.ok();
             return Ok(Json(chat));
@@ -543,6 +571,13 @@ async fn create_chat(
         peer_username: None,
         peer_avatar: None,
         unread_count: Some(0),
+        last_message_id: None,
+        last_message: None,
+        last_message_type: None,
+        last_message_created_at: None,
+        last_message_is_outgoing: None,
+        last_message_is_delivered: None,
+        last_message_is_read: None,
     };
 
     let recipients = inserted_users.into_iter().collect::<Vec<_>>();
@@ -597,6 +632,23 @@ async fn list_chats(
             ) AS peer_id,
             COALESCE(u.username, u.login) AS peer_username,
             u.avatar   AS peer_avatar,
+            lm.id AS last_message_id,
+            lm.message AS last_message,
+            lm.message_type AS last_message_type,
+            lm.created_at AS last_message_created_at,
+            CASE
+                WHEN lm.sender_id IS NULL THEN NULL
+                WHEN lm.sender_id = $1 THEN TRUE
+                ELSE FALSE
+            END AS last_message_is_outgoing,
+            CASE
+                WHEN lm.id IS NULL THEN NULL
+                ELSE COALESCE(lm.is_delivered, FALSE)
+            END AS last_message_is_delivered,
+            CASE
+                WHEN lm.id IS NULL THEN NULL
+                ELSE COALESCE(lm.is_read, FALSE)
+            END AS last_message_is_read,
             (
                 SELECT COUNT(*)::INT8
                 FROM messages m
@@ -607,6 +659,21 @@ async fn list_chats(
             ) AS unread_count
         FROM chats c
         JOIN chat_participants p ON p.chat_id = c.id
+        LEFT JOIN LATERAL (
+            SELECT
+                m.id,
+                m.sender_id,
+                m.message,
+                m.message_type,
+                m.created_at,
+                m.is_delivered,
+                m.is_read
+            FROM messages m
+            WHERE m.chat_id = c.id
+              AND m.deleted_at IS NULL
+            ORDER BY m.id DESC
+            LIMIT 1
+        ) lm ON TRUE
         LEFT JOIN users u ON u.id = COALESCE(
             CASE
                 WHEN c.kind = 'private' AND c.user_a = $1 THEN c.user_b
@@ -658,6 +725,16 @@ async fn list_chats(
             peer_username: row.try_get("peer_username").ok(),
             peer_avatar: row.try_get("peer_avatar").ok(),
             unread_count: row.try_get("unread_count").ok().or(Some(0)),
+            last_message_id: row.try_get("last_message_id").ok(),
+            last_message: row.try_get("last_message").ok(),
+            last_message_type: row.try_get("last_message_type").ok(),
+            last_message_created_at: row
+                .try_get::<chrono::DateTime<chrono::Utc>, _>("last_message_created_at")
+                .map(|t| t.to_rfc3339())
+                .ok(),
+            last_message_is_outgoing: row.try_get("last_message_is_outgoing").ok(),
+            last_message_is_delivered: row.try_get("last_message_is_delivered").ok(),
+            last_message_is_read: row.try_get("last_message_is_read").ok(),
         })
         .collect();
 
@@ -701,6 +778,7 @@ async fn get_messages(
                 deleted_at,
                 deleted_by::INT8 AS deleted_by,
                 COALESCE(is_read, false) AS is_read,
+                COALESCE(is_delivered, false) AS is_delivered,
                 envelopes,
                 metadata
             FROM messages
@@ -762,6 +840,7 @@ async fn get_messages(
                     .map(|t| t.to_rfc3339()),
                 deleted_by: row.try_get("deleted_by").ok(),
                 is_read: row.try_get("is_read").unwrap_or(false),
+                is_delivered: row.try_get("is_delivered").unwrap_or(false),
                 has_files,
                 metadata: metadata_vec,
                 envelopes: row.try_get("envelopes").ok().flatten(),
@@ -787,6 +866,19 @@ async fn mark_chat_read(
 ) -> Result<Json<MarkReadResponse>, (StatusCode, String)> {
     ensure_member(&state, id, current_user_id).await?;
 
+    let prev_last_read: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COALESCE(last_read_message_id::INT8, 0)
+        FROM chat_participants
+        WHERE chat_id = $1 AND user_id = $2
+        "#,
+    )
+    .bind(id)
+    .bind(current_user_id)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(0);
+
     let max_message_id: i64 = sqlx::query_scalar(
         r#"
         SELECT COALESCE(MAX(id)::INT8, 0)
@@ -808,19 +900,25 @@ async fn mark_chat_read(
     let requested = body.message_id.unwrap_or(max_message_id).max(0);
     let target = requested.min(max_message_id);
     let target_i32 = target.min(i32::MAX as i64) as i32;
+    let effective_target = target_i32 as i64;
 
-    let updated_last_read: i64 = sqlx::query_scalar(
+    if effective_target <= prev_last_read {
+        return Ok(Json(MarkReadResponse {
+            last_read_message_id: prev_last_read,
+        }));
+    }
+
+    sqlx::query(
         r#"
         UPDATE chat_participants
-        SET last_read_message_id = GREATEST(COALESCE(last_read_message_id, 0), $3)
+        SET last_read_message_id = $3
         WHERE chat_id = $1 AND user_id = $2
-        RETURNING COALESCE(last_read_message_id::INT8, 0)
         "#,
     )
     .bind(id)
     .bind(current_user_id)
     .bind(target_i32)
-    .fetch_one(&state.pool)
+    .execute(&state.pool)
     .await
     .map_err(|e| {
         (
@@ -835,11 +933,12 @@ async fn mark_chat_read(
         .await
         .unwrap_or_else(|_| "private".to_string());
 
-    if kind == "private" && updated_last_read > 0 {
+    if kind == "private" && effective_target > 0 {
         let _ = sqlx::query(
             r#"
             UPDATE messages
-            SET is_read = TRUE
+            SET is_read = TRUE,
+                is_delivered = TRUE
             WHERE chat_id = $1
               AND sender_id <> $2
               AND id::INT8 <= $3
@@ -847,16 +946,122 @@ async fn mark_chat_read(
         )
         .bind(id)
         .bind(current_user_id)
-        .bind(updated_last_read)
+        .bind(effective_target)
         .execute(&state.pool)
         .await;
     }
 
     let recipients = load_chat_recipients(&state, id).await?;
-    publish_message_read(&state, &recipients, id, current_user_id, updated_last_read);
+    publish_message_read(
+        &state,
+        &recipients,
+        id,
+        current_user_id,
+        effective_target,
+    );
 
     Ok(Json(MarkReadResponse {
-        last_read_message_id: updated_last_read,
+        last_read_message_id: effective_target,
+    }))
+}
+
+// ---------------------------
+// POST /chats/{id}/delivered — отметить сообщения как доставленные до message_id (или до последнего)
+// ---------------------------
+async fn mark_chat_delivered(
+    State(state): State<AppState>,
+    CurrentUser {
+        id: current_user_id,
+        ..
+    }: CurrentUser,
+    Path(id): Path<i32>,
+    Json(body): Json<MarkDeliveredRequest>,
+) -> Result<Json<MarkDeliveredResponse>, (StatusCode, String)> {
+    ensure_member(&state, id, current_user_id).await?;
+
+    let prev_last_delivered: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COALESCE(MAX(id)::INT8, 0)
+        FROM messages
+        WHERE chat_id = $1
+          AND sender_id <> $2
+          AND deleted_at IS NULL
+          AND is_delivered = TRUE
+        "#,
+    )
+    .bind(id)
+    .bind(current_user_id)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(0);
+
+    let max_message_id: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COALESCE(MAX(id)::INT8, 0)
+        FROM messages
+        WHERE chat_id = $1
+          AND deleted_at IS NULL
+        "#,
+    )
+    .bind(id)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Ошибка БД: {}", e),
+        )
+    })?;
+
+    let requested = body.message_id.unwrap_or(max_message_id).max(0);
+    let target = requested.min(max_message_id);
+
+    if target <= prev_last_delivered {
+        return Ok(Json(MarkDeliveredResponse {
+            last_delivered_message_id: prev_last_delivered,
+        }));
+    }
+
+    let _ = sqlx::query(
+        r#"
+        UPDATE messages
+        SET is_delivered = TRUE
+        WHERE chat_id = $1
+          AND sender_id <> $2
+          AND id::INT8 <= $3
+          AND deleted_at IS NULL
+          AND COALESCE(is_delivered, FALSE) = FALSE
+        "#,
+    )
+    .bind(id)
+    .bind(current_user_id)
+    .bind(target)
+    .execute(&state.pool)
+    .await;
+
+    let delivered_cursor: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COALESCE(MAX(id)::INT8, 0)
+        FROM messages
+        WHERE chat_id = $1
+          AND sender_id <> $2
+          AND deleted_at IS NULL
+          AND is_delivered = TRUE
+        "#,
+    )
+    .bind(id)
+    .bind(current_user_id)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(prev_last_delivered);
+
+    let recipients = load_chat_recipients(&state, id).await?;
+    if delivered_cursor > prev_last_delivered {
+        publish_message_delivered(&state, &recipients, id, current_user_id, delivered_cursor);
+    }
+
+    Ok(Json(MarkDeliveredResponse {
+        last_delivered_message_id: delivered_cursor,
     }))
 }
 
@@ -965,13 +1170,36 @@ async fn add_member(
     if exists_user.is_none() {
         return Err((StatusCode::NOT_FOUND, "Пользователь не найден".into()));
     }
+    if body.user_id == current_user_id {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Нельзя добавить самого себя через этот endpoint".into(),
+        ));
+    }
+
+    let exists_member: Option<String> = sqlx::query_scalar(
+        "SELECT role FROM chat_participants WHERE chat_id = $1 AND user_id = $2 LIMIT 1",
+    )
+    .bind(id)
+    .bind(body.user_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Ошибка БД: {}", e),
+        )
+    })?;
+    if exists_member.is_some() {
+        return Ok(StatusCode::NO_CONTENT);
+    }
 
     let role = normalize_member_role(&kind, body.role.as_deref())?;
-    sqlx::query(
+    let inserted = sqlx::query(
         r#"
         INSERT INTO chat_participants (chat_id, user_id, role)
         VALUES ($1, $2, $3)
-        ON CONFLICT (chat_id, user_id) DO UPDATE SET role = EXCLUDED.role
+        ON CONFLICT (chat_id, user_id) DO NOTHING
         "#,
     )
     .bind(id)
@@ -985,6 +1213,9 @@ async fn add_member(
             format!("Ошибка БД: {}", e),
         )
     })?;
+    if inserted.rows_affected() == 0 {
+        return Ok(StatusCode::NO_CONTENT);
+    }
 
     let recipients = load_chat_recipients(&state, id).await?;
     publish_member_added(
@@ -1065,6 +1296,9 @@ async fn update_member_role(
     }
 
     let role = normalize_member_role(&kind, Some(body.role.as_str()))?;
+    if role == target_role {
+        return Ok(StatusCode::NO_CONTENT);
+    }
     let updated =
         sqlx::query("UPDATE chat_participants SET role = $1 WHERE chat_id = $2 AND user_id = $3")
             .bind(role.clone())
@@ -1158,7 +1392,7 @@ async fn remove_member(
         )
     })?;
     let Some(target_role) = target_role else {
-        return Err((StatusCode::NOT_FOUND, "Участник не найден".into()));
+        return Ok(StatusCode::NO_CONTENT);
     };
     if target_role == "owner" {
         return Err((StatusCode::BAD_REQUEST, "Нельзя удалить owner".into()));
@@ -1386,4 +1620,35 @@ async fn remove_favorite(
 #[derive(Deserialize)]
 struct DeleteOptions {
     for_all: Option<bool>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_member_role;
+    use axum::http::StatusCode;
+
+    #[test]
+    fn normalize_role_defaults_to_member() {
+        let role = normalize_member_role("group", None).expect("role");
+        assert_eq!(role, "member");
+    }
+
+    #[test]
+    fn normalize_role_rejects_owner_for_group() {
+        let err = normalize_member_role("group", Some("owner"))
+            .expect_err("owner should be rejected for group");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn normalize_role_accepts_admin_for_channel() {
+        let role = normalize_member_role("channel", Some("admin")).expect("role");
+        assert_eq!(role, "admin");
+    }
+
+    #[test]
+    fn normalize_role_trims_and_lowercases() {
+        let role = normalize_member_role("channel", Some("  MEMBER  ")).expect("role");
+        assert_eq!(role, "member");
+    }
 }

@@ -15,6 +15,7 @@ import 'package:camera/camera.dart';
 
 import 'package:ren/core/constants/api_url.dart';
 import 'package:ren/core/constants/keys.dart';
+import 'package:ren/core/providers/notifications_settings.dart';
 import 'package:ren/core/secure/secure_storage.dart';
 import 'package:ren/features/chats/data/chats_repository.dart';
 import 'package:ren/features/chats/domain/chat_models.dart';
@@ -50,6 +51,7 @@ class _ChatPageState extends State<ChatPage>
     with TickerProviderStateMixin, WidgetsBindingObserver {
   static const int _maxSingleAttachmentBytes = 25 * 1024 * 1024;
   static const int _maxPendingAttachmentsBytes = 80 * 1024 * 1024;
+  static const Duration _newAwayHapticThrottle = Duration(milliseconds: 900);
 
   final _controller = TextEditingController();
   final _focusNode = FocusNode();
@@ -95,9 +97,15 @@ class _ChatPageState extends State<ChatPage>
   bool _canSendInCurrentChat = true;
   Timer? _typingDebounce;
   Timer? _markReadDebounce;
+  Timer? _markDeliveredDebounce;
   int _lastReadMarkedMessageId = 0;
+  int _lastDeliveredMarkedMessageId = 0;
+  String? _firstUnreadMessageId;
+  bool _didInitUnreadDividerAnchor = false;
 
   bool _isAtBottom = true;
+  int _newMessagesWhileAway = 0;
+  DateTime _lastAwayHapticAt = DateTime.fromMillisecondsSinceEpoch(0);
 
   int _scrollToBottomRequestId = 0;
 
@@ -124,6 +132,7 @@ class _ChatPageState extends State<ChatPage>
   late final AnimationController _videoProgressController;
   late final AnimationController _videoLockedTransition;
   late final AnimationController _videoPulse;
+  late final AnimationController _jumpBadgePulse;
 
   void _setVideoRecordingOverlay({required bool show}) {
     if (_showVideoRecordingOverlay == show) return;
@@ -338,6 +347,42 @@ class _ChatPageState extends State<ChatPage>
     _messageItemKeys.removeWhere((id, _) => !ids.contains(id));
   }
 
+  void _recomputeUnreadDividerAnchor() {
+    final unread = widget.chat.unreadCount;
+    if (unread <= 0 || _messages.isEmpty) {
+      _firstUnreadMessageId = null;
+      return;
+    }
+
+    final startIndex = (_messages.length - unread).clamp(
+      0,
+      _messages.length - 1,
+    );
+    for (var i = startIndex; i < _messages.length; i++) {
+      final mid = int.tryParse(_messages[i].id) ?? 0;
+      if (mid > 0) {
+        _firstUnreadMessageId = _messages[i].id;
+        return;
+      }
+    }
+
+    _firstUnreadMessageId = null;
+  }
+
+  void _clearUnreadDividerIfCoveredByReadCursor(int lastReadMessageId) {
+    final anchorId = int.tryParse(_firstUnreadMessageId ?? '') ?? 0;
+    if (anchorId <= 0) return;
+    if (lastReadMessageId >= anchorId) {
+      _firstUnreadMessageId = null;
+    }
+  }
+
+  void _initUnreadDividerAnchorOnce() {
+    if (_didInitUnreadDividerAnchor) return;
+    _didInitUnreadDividerAnchor = true;
+    _recomputeUnreadDividerAnchor();
+  }
+
   String _messageSummary(ChatMessage m) {
     final t = m.text.trim();
     if (t.isNotEmpty) return t;
@@ -399,6 +444,7 @@ class _ChatPageState extends State<ChatPage>
         audioPath: audioPath,
         timeLabel: _formatTime(msg.sentAt),
         isMe: msg.isMe,
+        isDelivered: msg.isDelivered,
         isRead: msg.isRead,
         isPending: msg.id.startsWith('local_'),
         isDark: isDark,
@@ -411,6 +457,7 @@ class _ChatPageState extends State<ChatPage>
         videoPath: videoPath,
         timeLabel: _formatTime(msg.sentAt),
         isMe: msg.isMe,
+        isDelivered: msg.isDelivered,
         isRead: msg.isRead,
         isPending: msg.id.startsWith('local_'),
         isDark: isDark,
@@ -425,6 +472,7 @@ class _ChatPageState extends State<ChatPage>
       attachments: msg.attachments,
       timeLabel: _formatTime(msg.sentAt),
       isMe: msg.isMe,
+      isDelivered: msg.isDelivered,
       isRead: msg.isRead,
       isPending: msg.id.startsWith('local_'),
       isDark: isDark,
@@ -543,6 +591,10 @@ class _ChatPageState extends State<ChatPage>
       vsync: this,
       duration: const Duration(milliseconds: 920),
     )..repeat();
+    _jumpBadgePulse = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 420),
+    );
     _peerOnline = widget.chat.user.isOnline;
     _peerName = widget.chat.user.name;
     _peerAvatarUrl = widget.chat.user.avatarUrl;
@@ -576,6 +628,11 @@ class _ChatPageState extends State<ChatPage>
   }
 
   void _scheduleScrollToBottom({required bool animated}) {
+    if (_newMessagesWhileAway > 0 && mounted) {
+      setState(() {
+        _newMessagesWhileAway = 0;
+      });
+    }
     _scrollToBottomRequestId++;
     final reqId = _scrollToBottomRequestId;
 
@@ -610,6 +667,9 @@ class _ChatPageState extends State<ChatPage>
     if (atBottom != _isAtBottom && mounted) {
       setState(() {
         _isAtBottom = atBottom;
+        if (atBottom) {
+          _newMessagesWhileAway = 0;
+        }
       });
     }
 
@@ -789,13 +849,65 @@ class _ChatPageState extends State<ChatPage>
     return maxVisibleId;
   }
 
+  int _latestIncomingRemoteMessageId() {
+    var maxId = 0;
+    for (final msg in _messages) {
+      if (msg.isMe) continue;
+      final id = int.tryParse(msg.id) ?? 0;
+      if (id > maxId) {
+        maxId = id;
+      }
+    }
+    return maxId;
+  }
+
+  bool _tryApplyUnreadAnchorInitialPosition() {
+    final anchorId = _firstUnreadMessageId;
+    if (anchorId == null || anchorId.isEmpty) return false;
+    final anchorIndex = _messages.indexWhere((m) => m.id == anchorId);
+    if (anchorIndex < 0 || _messages.length <= 1) return false;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scrollController.hasClients) return;
+      final pos = _scrollController.position;
+      final ratio = anchorIndex / (_messages.length - 1);
+      final coarse = (pos.maxScrollExtent * ratio).clamp(
+        0.0,
+        pos.maxScrollExtent,
+      );
+      _scrollController.jumpTo(coarse);
+
+      final anchorCtx = _messageItemKeys[anchorId]?.currentContext;
+      if (anchorCtx != null) {
+        Scrollable.ensureVisible(
+          anchorCtx,
+          alignment: 0.18,
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOut,
+        );
+      }
+
+      final dist = pos.maxScrollExtent - _scrollController.offset;
+      final atBottom = dist < 120;
+      if (atBottom != _isAtBottom && mounted) {
+        setState(() {
+          _isAtBottom = atBottom;
+        });
+      }
+    });
+    return true;
+  }
+
   void _applyInitialScrollPosition() {
     if (_didApplyInitialScroll) return;
     _didApplyInitialScroll = true;
 
     final savedOffset = _savedScrollOffsetByChatId[widget.chat.id];
     if (savedOffset == null) {
-      _scheduleScrollToBottom(animated: false);
+      final anchored = _tryApplyUnreadAnchorInitialPosition();
+      if (!anchored) {
+        _scheduleScrollToBottom(animated: false);
+      }
       return;
     }
 
@@ -814,6 +926,25 @@ class _ChatPageState extends State<ChatPage>
     });
   }
 
+  void _scheduleInitialReadAndDelivered() {
+    Future.delayed(const Duration(milliseconds: 260), () {
+      if (!mounted) return;
+      _scheduleMarkDelivered();
+      _scheduleMarkRead();
+    });
+  }
+
+  void _notifyNewIncomingWhileAway() {
+    final notificationsSettings = context.read<NotificationsSettings>();
+    if (!notificationsSettings.hapticEnabled) return;
+    final now = DateTime.now();
+    if (now.difference(_lastAwayHapticAt) < _newAwayHapticThrottle) {
+      return;
+    }
+    _lastAwayHapticAt = now;
+    HapticFeedback.selectionClick();
+  }
+
   Future<void> _markChatReadUpToLatest() async {
     final chatId = int.tryParse(widget.chat.id) ?? 0;
     if (chatId <= 0) return;
@@ -828,9 +959,39 @@ class _ChatPageState extends State<ChatPage>
       );
       if (acknowledged > _lastReadMarkedMessageId) {
         _lastReadMarkedMessageId = acknowledged;
+        if (mounted) {
+          setState(() {
+            _clearUnreadDividerIfCoveredByReadCursor(acknowledged);
+          });
+        } else {
+          _clearUnreadDividerIfCoveredByReadCursor(acknowledged);
+        }
       }
     } catch (_) {
       // ignore transient read sync failures
+    }
+  }
+
+  Future<void> _markChatDeliveredUpToLatestIncoming() async {
+    final chatId = int.tryParse(widget.chat.id) ?? 0;
+    if (chatId <= 0) return;
+
+    final latestIncomingId = _latestIncomingRemoteMessageId();
+    if (latestIncomingId <= 0 ||
+        latestIncomingId <= _lastDeliveredMarkedMessageId) {
+      return;
+    }
+
+    try {
+      final acknowledged = await _repo.markChatDelivered(
+        chatId,
+        messageId: latestIncomingId,
+      );
+      if (acknowledged > _lastDeliveredMarkedMessageId) {
+        _lastDeliveredMarkedMessageId = acknowledged;
+      }
+    } catch (_) {
+      // ignore transient delivery sync failures
     }
   }
 
@@ -839,6 +1000,14 @@ class _ChatPageState extends State<ChatPage>
     _markReadDebounce = Timer(const Duration(milliseconds: 220), () {
       if (!mounted) return;
       unawaited(_markChatReadUpToLatest());
+    });
+  }
+
+  void _scheduleMarkDelivered() {
+    _markDeliveredDebounce?.cancel();
+    _markDeliveredDebounce = Timer(const Duration(milliseconds: 180), () {
+      if (!mounted) return;
+      unawaited(_markChatDeliveredUpToLatestIncoming());
     });
   }
 
@@ -889,7 +1058,7 @@ class _ChatPageState extends State<ChatPage>
         _hasMore = true;
       });
       _applyInitialScrollPosition();
-      _scheduleMarkRead();
+      _scheduleInitialReadAndDelivered();
     }
 
     try {
@@ -900,14 +1069,16 @@ class _ChatPageState extends State<ChatPage>
           ..clear()
           ..addAll(list);
         _reindexMessages();
+        _initUnreadDividerAnchorOnce();
         _loading = false;
         _hasMore = true;
       });
       _applyInitialScrollPosition();
-      _scheduleMarkRead();
+      _scheduleInitialReadAndDelivered();
     } catch (_) {
       if (!mounted) return;
       setState(() {
+        _initUnreadDividerAnchorOnce();
         _loading = false;
       });
     }
@@ -930,6 +1101,7 @@ class _ChatPageState extends State<ChatPage>
         _reindexMessages();
       });
       _scheduleMarkRead();
+      _scheduleMarkDelivered();
     } catch (_) {
       // ignore transient reconnect sync errors
     }
@@ -1045,6 +1217,46 @@ class _ChatPageState extends State<ChatPage>
         return;
       }
 
+      if (evt.type == 'message_delivered') {
+        final evtChatId = _asInt(evt.data['chat_id'] ?? evt.data['chatId']);
+        if (evtChatId != chatId) return;
+        final userId = _asInt(evt.data['user_id'] ?? evt.data['userId']);
+        final lastDelivered = _asInt(
+          evt.data['last_delivered_message_id'] ??
+              evt.data['lastDeliveredMessageId'],
+        );
+        final myId = _myUserId ?? 0;
+        if (userId == myId && lastDelivered > _lastDeliveredMarkedMessageId) {
+          _lastDeliveredMarkedMessageId = lastDelivered;
+          return;
+        }
+
+        if (_isPrivateChat && userId != myId && lastDelivered > 0 && mounted) {
+          setState(() {
+            for (var i = 0; i < _messages.length; i++) {
+              final msg = _messages[i];
+              if (!msg.isMe || msg.isDelivered) continue;
+              final mid = int.tryParse(msg.id) ?? 0;
+              if (mid <= 0 || mid > lastDelivered) continue;
+              final updated = ChatMessage(
+                id: msg.id,
+                chatId: msg.chatId,
+                isMe: msg.isMe,
+                text: msg.text,
+                attachments: msg.attachments,
+                sentAt: msg.sentAt,
+                replyToMessageId: msg.replyToMessageId,
+                isDelivered: true,
+                isRead: msg.isRead,
+              );
+              _messages[i] = updated;
+              _messageById[msg.id] = updated;
+            }
+          });
+        }
+        return;
+      }
+
       if (evt.type == 'message_read') {
         final evtChatId = _asInt(evt.data['chat_id'] ?? evt.data['chatId']);
         if (evtChatId != chatId) return;
@@ -1055,6 +1267,13 @@ class _ChatPageState extends State<ChatPage>
         final myId = _myUserId ?? 0;
         if (userId == myId && lastRead > _lastReadMarkedMessageId) {
           _lastReadMarkedMessageId = lastRead;
+          if (mounted) {
+            setState(() {
+              _clearUnreadDividerIfCoveredByReadCursor(lastRead);
+            });
+          } else {
+            _clearUnreadDividerIfCoveredByReadCursor(lastRead);
+          }
           return;
         }
 
@@ -1073,6 +1292,7 @@ class _ChatPageState extends State<ChatPage>
                 attachments: msg.attachments,
                 sentAt: msg.sentAt,
                 replyToMessageId: msg.replyToMessageId,
+                isDelivered: true,
                 isRead: true,
               );
               _messages[i] = updated;
@@ -1119,6 +1339,7 @@ class _ChatPageState extends State<ChatPage>
             attachments: old.attachments,
             sentAt: old.sentAt,
             replyToMessageId: old.replyToMessageId,
+            isDelivered: old.isDelivered,
             isRead: old.isRead,
           );
 
@@ -1243,6 +1464,7 @@ class _ChatPageState extends State<ChatPage>
           replyToMessageId: (replyId != null && replyId > 0)
               ? replyId.toString()
               : null,
+          isDelivered: m['is_delivered'] == true || m['isDelivered'] == true,
           isRead: m['is_read'] == true || m['isRead'] == true,
         );
         _messages.add(created);
@@ -1253,6 +1475,16 @@ class _ChatPageState extends State<ChatPage>
         _scheduleScrollToBottom(animated: true);
       }
       if (!isMe) {
+        if (!_isAtBottom) {
+          setState(() {
+            _newMessagesWhileAway += 1;
+          });
+          _jumpBadgePulse
+            ..stop()
+            ..forward(from: 0);
+          _notifyNewIncomingWhileAway();
+        }
+        _scheduleMarkDelivered();
         _scheduleMarkRead();
       }
     });
@@ -1321,6 +1553,7 @@ class _ChatPageState extends State<ChatPage>
               attachments: old.attachments,
               sentAt: old.sentAt,
               replyToMessageId: old.replyToMessageId,
+              isDelivered: old.isDelivered,
               isRead: old.isRead,
             );
 
@@ -1375,6 +1608,8 @@ class _ChatPageState extends State<ChatPage>
             attachments: optimisticAtt,
             sentAt: DateTime.now(),
             replyToMessageId: replyTo?.id,
+            isDelivered: false,
+            isRead: false,
           ),
         );
 
@@ -1523,6 +1758,8 @@ class _ChatPageState extends State<ChatPage>
             ],
             sentAt: DateTime.now(),
             replyToMessageId: replyTo?.id,
+            isDelivered: false,
+            isRead: false,
           ),
         );
         _reindexMessages();
@@ -1615,6 +1852,8 @@ class _ChatPageState extends State<ChatPage>
             ],
             sentAt: DateTime.now(),
             replyToMessageId: replyTo?.id,
+            isDelivered: false,
+            isRead: false,
           ),
         );
         _reindexMessages();
@@ -1791,6 +2030,7 @@ class _ChatPageState extends State<ChatPage>
     _videoProgressController.dispose();
     _videoLockedTransition.dispose();
     _videoPulse.dispose();
+    _jumpBadgePulse.dispose();
     _pressedMessageIdN.dispose();
     _selectionModeN.dispose();
     _selectedMessageIdsN.dispose();
@@ -1798,6 +2038,8 @@ class _ChatPageState extends State<ChatPage>
     _typingDebounce = null;
     _markReadDebounce?.cancel();
     _markReadDebounce = null;
+    _markDeliveredDebounce?.cancel();
+    _markDeliveredDebounce = null;
     _loadOlderDebounce?.cancel();
     _loadOlderDebounce = null;
     _rt?.typing(chatId, false);
@@ -1811,6 +2053,40 @@ class _ChatPageState extends State<ChatPage>
     _focusNode.dispose();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  Widget _buildUnreadDivider(ThemeData theme) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        children: [
+          Expanded(
+            child: Divider(
+              height: 1,
+              thickness: 1,
+              color: theme.colorScheme.primary.withOpacity(0.30),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            child: Text(
+              'Новые сообщения',
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: theme.colorScheme.primary.withOpacity(0.92),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Divider(
+              height: 1,
+              thickness: 1,
+              color: theme.colorScheme.primary.withOpacity(0.30),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildMessagesPane({
@@ -1843,7 +2119,7 @@ class _ChatPageState extends State<ChatPage>
                 );
               },
             )
-          : ListView.separated(
+          : ListView.builder(
               controller: _scrollController,
               padding: EdgeInsets.fromLTRB(
                 horizontalPadding,
@@ -1852,7 +2128,6 @@ class _ChatPageState extends State<ChatPage>
                 listBottomPadding,
               ),
               itemCount: _messages.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 10),
               itemBuilder: (context, index) {
                 final msg = _messages[index];
                 final replyToId = msg.replyToMessageId;
@@ -1863,203 +2138,233 @@ class _ChatPageState extends State<ChatPage>
                     ? null
                     : _messageSummary(replied);
                 final selected = selectionMode && selectedIds.contains(msg.id);
-                return Align(
-                  alignment: msg.isMe
-                      ? Alignment.centerRight
-                      : Alignment.centerLeft,
-                  child: Dismissible(
-                    key: ValueKey('reply_${msg.id}'),
-                    direction: selectionMode
-                        ? DismissDirection.none
-                        : (msg.isMe
-                              ? DismissDirection.endToStart
-                              : DismissDirection.startToEnd),
-                    movementDuration: const Duration(milliseconds: 260),
-                    dismissThresholds: {
-                      DismissDirection.startToEnd: 0.22,
-                      DismissDirection.endToStart: 0.22,
-                    },
-                    confirmDismiss: (_) async {
-                      if (selectionMode) return false;
-                      HapticFeedback.selectionClick();
-                      if (!mounted) return false;
-                      setState(() {
-                        _replyTo = msg;
-                        _editing = null;
-                      });
-                      _focusNode.requestFocus();
-                      return false;
-                    },
-                    background: Align(
+                final showUnreadDivider = _firstUnreadMessageId == msg.id;
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (showUnreadDivider) _buildUnreadDivider(theme),
+                    Align(
                       alignment: msg.isMe
                           ? Alignment.centerRight
                           : Alignment.centerLeft,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        child: Icon(
-                          Icons.reply,
-                          size: 18,
-                          color: theme.colorScheme.onSurface.withOpacity(0.55),
-                        ),
-                      ),
-                    ),
-                    secondaryBackground: Align(
-                      alignment: msg.isMe
-                          ? Alignment.centerRight
-                          : Alignment.centerLeft,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        child: Icon(
-                          Icons.reply,
-                          size: 18,
-                          color: theme.colorScheme.onSurface.withOpacity(0.55),
-                        ),
-                      ),
-                    ),
-                    child: Container(
-                      key: _messageKey(msg.id),
-                      child: GestureDetector(
-                        onTapDown: (_) {
-                          if (!mounted) return;
-                          if (_pressedMessageIdN.value == msg.id) {
-                            return;
-                          }
-                          _pressedMessageIdN.value = msg.id;
+                      child: Dismissible(
+                        key: ValueKey('reply_${msg.id}'),
+                        direction: selectionMode
+                            ? DismissDirection.none
+                            : (msg.isMe
+                                  ? DismissDirection.endToStart
+                                  : DismissDirection.startToEnd),
+                        movementDuration: const Duration(milliseconds: 260),
+                        dismissThresholds: {
+                          DismissDirection.startToEnd: 0.22,
+                          DismissDirection.endToStart: 0.22,
                         },
-                        onTapCancel: () {
-                          if (!mounted) return;
-                          if (_pressedMessageIdN.value != msg.id) {
-                            return;
-                          }
-                          _pressedMessageIdN.value = null;
-                        },
-                        onTapUp: (_) {
-                          if (!mounted) return;
-                          if (_pressedMessageIdN.value != msg.id) {
-                            return;
-                          }
-                          _pressedMessageIdN.value = null;
-                        },
-                        onTap: () {
-                          if (selectionMode) {
-                            _toggleSelected(msg);
-                          }
-                        },
-                        onLongPressStart: (d) async {
+                        confirmDismiss: (_) async {
+                          if (selectionMode) return false;
                           HapticFeedback.selectionClick();
-                          if (mounted && _pressedMessageIdN.value != msg.id) {
-                            _pressedMessageIdN.value = msg.id;
-                          }
-                          if (selectionMode) {
-                            _toggleSelected(msg);
-                          } else {
-                            await _showMessageContextMenu(
-                              msg,
-                              d.globalPosition,
-                            );
-                          }
+                          if (!mounted) return false;
+                          setState(() {
+                            _replyTo = msg;
+                            _editing = null;
+                          });
+                          _focusNode.requestFocus();
+                          return false;
+                        },
+                        background: Align(
+                          alignment: msg.isMe
+                              ? Alignment.centerRight
+                              : Alignment.centerLeft,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            child: Icon(
+                              Icons.reply,
+                              size: 18,
+                              color: theme.colorScheme.onSurface.withOpacity(
+                                0.55,
+                              ),
+                            ),
+                          ),
+                        ),
+                        secondaryBackground: Align(
+                          alignment: msg.isMe
+                              ? Alignment.centerRight
+                              : Alignment.centerLeft,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            child: Icon(
+                              Icons.reply,
+                              size: 18,
+                              color: theme.colorScheme.onSurface.withOpacity(
+                                0.55,
+                              ),
+                            ),
+                          ),
+                        ),
+                        child: Container(
+                          key: _messageKey(msg.id),
+                          child: GestureDetector(
+                            onTapDown: (_) {
+                              if (!mounted) return;
+                              if (_pressedMessageIdN.value == msg.id) {
+                                return;
+                              }
+                              _pressedMessageIdN.value = msg.id;
+                            },
+                            onTapCancel: () {
+                              if (!mounted) return;
+                              if (_pressedMessageIdN.value != msg.id) {
+                                return;
+                              }
+                              _pressedMessageIdN.value = null;
+                            },
+                            onTapUp: (_) {
+                              if (!mounted) return;
+                              if (_pressedMessageIdN.value != msg.id) {
+                                return;
+                              }
+                              _pressedMessageIdN.value = null;
+                            },
+                            onTap: () {
+                              if (selectionMode) {
+                                _toggleSelected(msg);
+                              }
+                            },
+                            onLongPressStart: (d) async {
+                              HapticFeedback.selectionClick();
+                              if (mounted &&
+                                  _pressedMessageIdN.value != msg.id) {
+                                _pressedMessageIdN.value = msg.id;
+                              }
+                              if (selectionMode) {
+                                _toggleSelected(msg);
+                              } else {
+                                await _showMessageContextMenu(
+                                  msg,
+                                  d.globalPosition,
+                                );
+                              }
 
-                          if (mounted && _pressedMessageIdN.value == msg.id) {
-                            _pressedMessageIdN.value = null;
-                          }
-                        },
-                        onLongPressEnd: (_) {
-                          if (!mounted) return;
-                          if (_pressedMessageIdN.value != msg.id) {
-                            return;
-                          }
-                          _pressedMessageIdN.value = null;
-                        },
-                        child: ValueListenableBuilder<String?>(
-                          valueListenable: _pressedMessageIdN,
-                          builder: (context, pressedId, child) {
-                            final pressed = pressedId == msg.id;
-                            return AnimatedScale(
-                              scale: pressed ? 0.985 : (selected ? 1.05 : 1.0),
-                              duration: const Duration(milliseconds: 110),
-                              curve: Curves.easeOut,
-                              child: Stack(
-                                clipBehavior: Clip.none,
-                                children: [
-                                  AnimatedContainer(
-                                    duration: const Duration(milliseconds: 110),
-                                    curve: Curves.easeOut,
-                                    decoration: BoxDecoration(
-                                      borderRadius: BorderRadius.circular(16),
-                                      color: pressed
-                                          ? theme.colorScheme.onSurface
-                                                .withOpacity(
-                                                  isDark ? 0.10 : 0.06,
-                                                )
-                                          : (selected
-                                                ? theme.colorScheme.primary
-                                                      .withOpacity(
-                                                        isDark ? 0.12 : 0.10,
-                                                      )
-                                                : Colors.transparent),
-                                      border: selected
-                                          ? Border.all(
-                                              color: theme.colorScheme.primary
-                                                  .withOpacity(0.8),
-                                              width: 1.2,
-                                            )
-                                          : null,
-                                    ),
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(2),
-                                      child: RepaintBoundary(
-                                        child: _buildMessageBubble(
-                                          msg: msg,
-                                          replyPreview: replyPreview,
-                                          isDark: isDark,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                  Positioned(
-                                    right: -6,
-                                    top: -6,
-                                    child: AnimatedOpacity(
-                                      opacity: selected ? 1 : 0,
-                                      duration: const Duration(
-                                        milliseconds: 120,
-                                      ),
-                                      curve: Curves.easeOut,
-                                      child: AnimatedScale(
-                                        scale: selected ? 1 : 0.9,
+                              if (mounted &&
+                                  _pressedMessageIdN.value == msg.id) {
+                                _pressedMessageIdN.value = null;
+                              }
+                            },
+                            onLongPressEnd: (_) {
+                              if (!mounted) return;
+                              if (_pressedMessageIdN.value != msg.id) {
+                                return;
+                              }
+                              _pressedMessageIdN.value = null;
+                            },
+                            child: ValueListenableBuilder<String?>(
+                              valueListenable: _pressedMessageIdN,
+                              builder: (context, pressedId, child) {
+                                final pressed = pressedId == msg.id;
+                                return AnimatedScale(
+                                  scale: pressed
+                                      ? 0.985
+                                      : (selected ? 1.05 : 1.0),
+                                  duration: const Duration(milliseconds: 110),
+                                  curve: Curves.easeOut,
+                                  child: Stack(
+                                    clipBehavior: Clip.none,
+                                    children: [
+                                      AnimatedContainer(
                                         duration: const Duration(
-                                          milliseconds: 120,
+                                          milliseconds: 110,
                                         ),
                                         curve: Curves.easeOut,
-                                        child: Container(
-                                          width: 20,
-                                          height: 20,
-                                          decoration: BoxDecoration(
-                                            color: theme.colorScheme.primary,
-                                            shape: BoxShape.circle,
-                                            border: Border.all(
-                                              color: theme.colorScheme.surface
-                                                  .withOpacity(0.9),
-                                              width: 1,
-                                            ),
+                                        decoration: BoxDecoration(
+                                          borderRadius: BorderRadius.circular(
+                                            16,
                                           ),
-                                          child: Icon(
-                                            Icons.check,
-                                            size: 14,
-                                            color: theme.colorScheme.onPrimary,
+                                          color: pressed
+                                              ? theme.colorScheme.onSurface
+                                                    .withOpacity(
+                                                      isDark ? 0.10 : 0.06,
+                                                    )
+                                              : (selected
+                                                    ? theme.colorScheme.primary
+                                                          .withOpacity(
+                                                            isDark
+                                                                ? 0.12
+                                                                : 0.10,
+                                                          )
+                                                    : Colors.transparent),
+                                          border: selected
+                                              ? Border.all(
+                                                  color: theme
+                                                      .colorScheme
+                                                      .primary
+                                                      .withOpacity(0.8),
+                                                  width: 1.2,
+                                                )
+                                              : null,
+                                        ),
+                                        child: Padding(
+                                          padding: const EdgeInsets.all(2),
+                                          child: RepaintBoundary(
+                                            child: _buildMessageBubble(
+                                              msg: msg,
+                                              replyPreview: replyPreview,
+                                              isDark: isDark,
+                                            ),
                                           ),
                                         ),
                                       ),
-                                    ),
+                                      Positioned(
+                                        right: -6,
+                                        top: -6,
+                                        child: AnimatedOpacity(
+                                          opacity: selected ? 1 : 0,
+                                          duration: const Duration(
+                                            milliseconds: 120,
+                                          ),
+                                          curve: Curves.easeOut,
+                                          child: AnimatedScale(
+                                            scale: selected ? 1 : 0.9,
+                                            duration: const Duration(
+                                              milliseconds: 120,
+                                            ),
+                                            curve: Curves.easeOut,
+                                            child: Container(
+                                              width: 20,
+                                              height: 20,
+                                              decoration: BoxDecoration(
+                                                color:
+                                                    theme.colorScheme.primary,
+                                                shape: BoxShape.circle,
+                                                border: Border.all(
+                                                  color: theme
+                                                      .colorScheme
+                                                      .surface
+                                                      .withOpacity(0.9),
+                                                  width: 1,
+                                                ),
+                                              ),
+                                              child: Icon(
+                                                Icons.check,
+                                                size: 14,
+                                                color:
+                                                    theme.colorScheme.onPrimary,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
                                   ),
-                                ],
-                              ),
-                            );
-                          },
+                                );
+                              },
+                            ),
+                          ),
                         ),
                       ),
                     ),
-                  ),
+                    if (index != _messages.length - 1)
+                      const SizedBox(height: 10),
+                  ],
                 );
               },
             ),
@@ -2203,6 +2508,100 @@ class _ChatPageState extends State<ChatPage>
     );
   }
 
+  Widget _buildJumpToBottomButton({
+    required MediaQueryData media,
+    required ThemeData theme,
+  }) {
+    final show = !_isAtBottom && media.viewInsets.bottom <= 0;
+    const double inputHeight = 44;
+    const double verticalPadding = 14;
+    final bottomOffset =
+        media.padding.bottom +
+        media.viewInsets.bottom +
+        inputHeight +
+        verticalPadding +
+        10;
+
+    return Positioned(
+      right: 14,
+      bottom: bottomOffset,
+      child: AnimatedSlide(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOut,
+        offset: show ? Offset.zero : const Offset(0, 0.35),
+        child: AnimatedOpacity(
+          duration: const Duration(milliseconds: 180),
+          opacity: show ? 1 : 0,
+          child: IgnorePointer(
+            ignoring: !show,
+            child: GestureDetector(
+              onTap: () {
+                _scheduleScrollToBottom(animated: true);
+                _scheduleMarkDelivered();
+                _scheduleMarkRead();
+              },
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  GlassSurface(
+                    borderRadius: 999,
+                    blurSigma: 12,
+                    padding: const EdgeInsets.all(10),
+                    child: HugeIcon(
+                      icon: HugeIcons.strokeRoundedArrowDown01,
+                      size: 22,
+                      color: theme.colorScheme.onSurface.withOpacity(0.88),
+                    ),
+                  ),
+                  if (_newMessagesWhileAway > 0)
+                    Positioned(
+                      right: -4,
+                      top: -4,
+                      child: AnimatedBuilder(
+                        animation: _jumpBadgePulse,
+                        builder: (context, child) {
+                          final t = Curves.easeOutBack.transform(
+                            _jumpBadgePulse.value,
+                          );
+                          final scale = 1 + (0.16 * (1 - (t - 1).abs()));
+                          return Transform.scale(
+                            scale: scale.clamp(1.0, 1.16),
+                            child: child,
+                          );
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.primary.withOpacity(0.96),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          constraints: const BoxConstraints(minWidth: 18),
+                          alignment: Alignment.center,
+                          child: Text(
+                            _newMessagesWhileAway > 99
+                                ? '99+'
+                                : '$_newMessagesWhileAway',
+                            style: TextStyle(
+                              color: theme.colorScheme.onPrimary,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -2291,6 +2690,7 @@ class _ChatPageState extends State<ChatPage>
                           isDark: isDark,
                           replyText: replyText,
                         ),
+                        _buildJumpToBottomButton(media: media, theme: theme),
 
                         if (_showVideoRecordingOverlay)
                           Positioned.fill(

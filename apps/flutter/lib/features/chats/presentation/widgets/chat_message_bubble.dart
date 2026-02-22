@@ -12,6 +12,7 @@ class ChatMessageBubble extends StatelessWidget {
   final List<ChatAttachment> attachments;
   final String timeLabel;
   final bool isMe;
+  final bool isDelivered;
   final bool isRead;
   final bool isPending;
   final bool isDark;
@@ -24,6 +25,7 @@ class ChatMessageBubble extends StatelessWidget {
     this.attachments = const [],
     required this.timeLabel,
     required this.isMe,
+    this.isDelivered = false,
     this.isRead = false,
     this.isPending = false,
     required this.isDark,
@@ -215,7 +217,7 @@ class ChatMessageBubble extends StatelessWidget {
                     Icon(
                       isPending
                           ? Icons.schedule_rounded
-                          : (isRead
+                          : (isRead || isDelivered
                                 ? Icons.done_all_rounded
                                 : Icons.done_rounded),
                       size: 13,
@@ -223,9 +225,13 @@ class ChatMessageBubble extends StatelessWidget {
                           ? theme.colorScheme.onSurface.withOpacity(0.55)
                           : (isRead
                                 ? theme.colorScheme.primary.withOpacity(0.92)
-                                : theme.colorScheme.onSurface.withOpacity(
-                                    0.55,
-                                  )),
+                                : (isDelivered
+                                      ? theme.colorScheme.onSurface.withOpacity(
+                                          0.65,
+                                        )
+                                      : theme.colorScheme.onSurface.withOpacity(
+                                          0.55,
+                                        ))),
                     ),
                   ],
                 ],
