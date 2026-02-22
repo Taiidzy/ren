@@ -14,6 +14,7 @@ import 'package:ren/features/profile/presentation/profile_store.dart';
 import 'package:ren/features/profile/presentation/widgets/security_sheet.dart';
 import 'package:ren/shared/widgets/adaptive_page_route.dart';
 import 'package:ren/shared/widgets/background.dart';
+import 'package:ren/shared/widgets/glass_confirm_dialog.dart';
 import 'package:ren/shared/widgets/glass_overlays.dart';
 import 'package:ren/shared/widgets/glass_surface.dart';
 
@@ -28,100 +29,20 @@ class ProfileMenuPage extends StatelessWidget {
 
   Future<void> _confirmAndLogout(BuildContext context) async {
     final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final baseInk = isDark ? Colors.white : Colors.black;
 
     final shouldLogout = await GlassOverlays.showGlassDialog<bool>(
       context,
       builder: (dialogContext) {
-        return Dialog(
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          insetPadding: const EdgeInsets.symmetric(
-            horizontal: 18,
-            vertical: 24,
-          ),
-          child: GlassSurface(
-            borderRadius: 22,
-            blurSigma: 14,
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
-            borderColor: baseInk.withOpacity(isDark ? 0.22 : 0.12),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    HugeIcon(
-                      icon: HugeIcons.strokeRoundedLogout01,
-                      color: theme.colorScheme.onSurface.withOpacity(0.9),
-                      size: 22,
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        'Выйти из аккаунта?',
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          color: theme.colorScheme.onSurface,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  'Мы очистим защищённое хранилище и вернём тебя на экран авторизации.',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: theme.colorScheme.onSurface.withOpacity(0.75),
-                    height: 1.25,
-                  ),
-                ),
-                const SizedBox(height: 14),
-                Row(
-                  children: [
-                    Expanded(
-                      child: GlassSurface(
-                        borderRadius: 14,
-                        blurSigma: 12,
-                        height: 44,
-                        borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.10),
-                        onTap: () => Navigator.of(dialogContext).pop(false),
-                        child: Center(
-                          child: Text(
-                            'Отмена',
-                            style: theme.textTheme.titleSmall?.copyWith(
-                              color: theme.colorScheme.onSurface,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: GlassSurface(
-                        borderRadius: 14,
-                        blurSigma: 12,
-                        height: 44,
-                        color: const Color(0xFF991B1B).withOpacity(0.55),
-                        borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.10),
-                        onTap: () => Navigator.of(dialogContext).pop(true),
-                        child: Center(
-                          child: Text(
-                            'Выйти',
-                            style: theme.textTheme.titleSmall?.copyWith(
-                              color: theme.colorScheme.onSurface,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
+        return GlassConfirmDialog(
+          title: 'Выйти из аккаунта?',
+          text:
+              'Мы очистим защищённое хранилище и вернём тебя на экран авторизации.',
+          confirmLabel: 'Выйти',
+          onConfirm: () => Navigator.of(dialogContext).pop(true),
+          titleLeading: HugeIcon(
+            icon: HugeIcons.strokeRoundedLogout01,
+            color: theme.colorScheme.onSurface.withOpacity(0.9),
+            size: 22,
           ),
         );
       },

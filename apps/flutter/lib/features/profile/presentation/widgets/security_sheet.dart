@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 
 import 'package:ren/features/profile/data/profile_repository.dart';
 import 'package:ren/features/profile/domain/security_session.dart';
+import 'package:ren/shared/widgets/glass_confirm_dialog.dart';
 import 'package:ren/shared/widgets/glass_overlays.dart';
 import 'package:ren/shared/widgets/glass_surface.dart';
 
@@ -67,11 +68,11 @@ class _SecuritySheetBodyState extends State<_SecuritySheetBody> {
     final shouldDelete = await GlassOverlays.showGlassDialog<bool>(
       context,
       builder: (dialogContext) {
-        return _ConfirmDialog(
+        return GlassConfirmDialog(
           title: 'Завершить сессию?',
           text:
               'Устройство "${session.deviceName}" выйдет из аккаунта и потребует повторный вход.',
-          actionLabel: 'Завершить',
+          confirmLabel: 'Завершить',
           onConfirm: () => Navigator.of(dialogContext).pop(true),
         );
       },
@@ -97,10 +98,10 @@ class _SecuritySheetBodyState extends State<_SecuritySheetBody> {
     final shouldDelete = await GlassOverlays.showGlassDialog<bool>(
       context,
       builder: (dialogContext) {
-        return _ConfirmDialog(
+        return GlassConfirmDialog(
           title: 'Выйти из других устройств?',
           text: 'Все остальные активные сессии будут завершены.',
-          actionLabel: 'Выйти везде',
+          confirmLabel: 'Выйти везде',
           onConfirm: () => Navigator.of(dialogContext).pop(true),
         );
       },
@@ -488,103 +489,6 @@ class _SectionTitle extends StatelessWidget {
       style: theme.textTheme.titleMedium?.copyWith(
         fontWeight: FontWeight.w700,
         color: theme.colorScheme.onSurface,
-      ),
-    );
-  }
-}
-
-class _ConfirmDialog extends StatelessWidget {
-  final String title;
-  final String text;
-  final String actionLabel;
-  final VoidCallback onConfirm;
-
-  const _ConfirmDialog({
-    required this.title,
-    required this.text,
-    required this.actionLabel,
-    required this.onConfirm,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final baseInk = isDark ? Colors.white : Colors.black;
-
-    return Dialog(
-      backgroundColor: Colors.transparent,
-      elevation: 0,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 24),
-      child: GlassSurface(
-        borderRadius: 22,
-        blurSigma: 14,
-        padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
-        borderColor: baseInk.withOpacity(isDark ? 0.22 : 0.12),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              title,
-              style: theme.textTheme.titleMedium?.copyWith(
-                color: theme.colorScheme.onSurface,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            const SizedBox(height: 10),
-            Text(
-              text,
-              style: theme.textTheme.bodyMedium?.copyWith(
-                color: theme.colorScheme.onSurface.withOpacity(0.75),
-                height: 1.25,
-              ),
-            ),
-            const SizedBox(height: 14),
-            Row(
-              children: [
-                Expanded(
-                  child: GlassSurface(
-                    borderRadius: 14,
-                    blurSigma: 12,
-                    height: 44,
-                    borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.10),
-                    onTap: () => Navigator.of(context).pop(false),
-                    child: Center(
-                      child: Text(
-                        'Отмена',
-                        style: theme.textTheme.titleSmall?.copyWith(
-                          color: theme.colorScheme.onSurface,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: GlassSurface(
-                    borderRadius: 14,
-                    blurSigma: 12,
-                    height: 44,
-                    color: const Color(0xFF991B1B).withOpacity(0.55),
-                    borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.10),
-                    onTap: onConfirm,
-                    child: Center(
-                      child: Text(
-                        actionLabel,
-                        style: theme.textTheme.titleSmall?.copyWith(
-                          color: theme.colorScheme.onSurface,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
       ),
     );
   }
