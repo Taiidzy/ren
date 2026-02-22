@@ -14,7 +14,7 @@
  
  - Chat
    - id: number
-   - kind: string ("private" | "group")
+   - kind: string ("private" | "group" | "channel")
    - title: string|null
    - created_at: string (ISO)
    - updated_at: string (ISO)
@@ -203,14 +203,23 @@
  ### POST /chats
  - Описание: создать чат.
    - group: создаёт новый групповой чат и добавляет участников.
+   - channel: создаёт канал и добавляет участников (создатель получает роль `owner`).
    - private: используется каноническая пара `user_a <= user_b` (уникальный индекс). Если такой чат уже есть, возвращается существующий и текущий пользователь повторно добавляется в участники (если ранее вышел). Для старых данных есть fallback по участникам с одноразовым проставлением `user_a/user_b`.
  - Заголовки
    - Authorization: Bearer <JWT>
  - Тело запроса (group)
+  ```json
+  {
+    "kind": "group",
+    "title": "My Group",
+    "user_ids": [1,2,3]
+  }
+  ```
+ - Тело запроса (channel)
    ```json
    {
-     "kind": "group",
-     "title": "My Group",
+     "kind": "channel",
+     "title": "My Channel",
      "user_ids": [1,2,3]
    }
    ```
@@ -223,6 +232,7 @@
    ```
  - Правила
    - private: ровно 2 пользователя; текущий пользователь обязан входить в список.
+   - group/channel: обязателен непустой `title`.
  - Ответ 200
    ```json
    { /* Chat */ }
@@ -268,8 +278,8 @@
  - Query-параметры
    - for_all: boolean (опционально)
  - Поведение
-   - kind=group:
-     - Требуется роль admin (ensure_admin). Полное удаление чата.
+   - kind=group/channel:
+     - Требуется роль admin/owner (ensure_admin). Полное удаление чата.
    - kind=private:
      - for_all=true → удаляет чат целиком (у всех). Инициатор должен быть участником.
      - иначе → удаляет только участие инициатора; если участников не остаётся — чат удаляется.
@@ -279,6 +289,47 @@
    - 403 Нет прав (для group) / Не участник (для private)
    - 404 Чат не найден
    - 500 Ошибка БД/удаления
+
+### GET /chats/{id}/members
+- Описание: получить список участников чата (доступно участнику чата).
+- Заголовки
+  - Authorization: Bearer <JWT>
+- Ответ 200
+  ```json
+  [
+    {
+      "user_id": 1,
+      "username": "alice",
+      "avatar": "avatars/u1.jpg",
+      "role": "owner",
+      "joined_at": "2026-02-22T08:00:00Z"
+    }
+  ]
+  ```
+
+### POST /chats/{id}/members
+- Описание: добавить участника в `group/channel` (только admin/owner).
+- Тело запроса
+  ```json
+  { "user_id": 2, "role": "member" }
+  ```
+- Допустимые роли:
+  - group: `member`, `admin`
+  - channel: `member`, `admin`
+
+### PATCH /chats/{id}/members/{user_id}
+- Описание: изменить роль участника в `group/channel` (только admin/owner).
+- Тело запроса
+  ```json
+  { "role": "admin" }
+  ```
+- Примечание: роль `owner` этим endpoint менять нельзя.
+
+### DELETE /chats/{id}/members/{user_id}
+- Описание: удалить участника из `group/channel` (только admin/owner).
+- Ограничения:
+  - нельзя удалить `owner`;
+  - нельзя удалить самого себя через этот endpoint.
  
  ---
  
@@ -435,6 +486,7 @@ Typing индикатор (рассылка всем подписчикам ча
  - chats(id SERIAL, kind, title, created_at, updated_at, is_archived, user_a?, user_b?)
    - UNIQUE (user_a, user_b) WHERE kind = 'private'
  - chat_participants(chat_id, user_id, joined_at, role, last_read_message_id, is_muted)
+   - role: member | admin | owner
    - PK(chat_id, user_id)
    - FK chat_id → chats(id) ON DELETE CASCADE
    - FK user_id → users(id)
@@ -455,7 +507,7 @@ Typing индикатор (рассылка всем подписчикам ча
    ```
  - 403
    ```json
-   {"error":"Недостаточно прав (нужна роль admin)"}
+  {"error":"Недостаточно прав (нужна роль admin/owner)"}
    ```
  - 404
    ```json

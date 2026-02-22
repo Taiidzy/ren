@@ -2,9 +2,9 @@ use axum::{
     Json, Router,
     extract::{Path, Query, State},
     http::StatusCode,
-    routing::{delete, get, post},
+    routing::{delete, get, patch, post},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{Postgres, Row, Transaction};
 
@@ -24,6 +24,11 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/chats", post(create_chat).get(list_chats))
         .route("/chats/:chat_id/messages", get(get_messages))
+        .route("/chats/:id/members", get(list_members).post(add_member))
+        .route(
+            "/chats/:id/members/:user_id",
+            patch(update_member_role).delete(remove_member),
+        )
         .route(
             "/chats/:id/favorite",
             post(add_favorite).delete(remove_favorite),
@@ -38,6 +43,57 @@ struct GetMessagesQuery {
     after_id: Option<i64>,
 }
 
+#[derive(Serialize)]
+struct ChatMember {
+    user_id: i32,
+    username: String,
+    avatar: Option<String>,
+    role: String,
+    joined_at: String,
+}
+
+#[derive(Deserialize)]
+struct AddMemberRequest {
+    user_id: i32,
+    role: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct UpdateMemberRoleRequest {
+    role: String,
+}
+
+fn normalize_member_role(kind: &str, role: Option<&str>) -> Result<String, (StatusCode, String)> {
+    let normalized = role.unwrap_or("member").trim().to_lowercase();
+    if normalized.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "Роль не может быть пустой".into()));
+    }
+
+    match kind {
+        "group" => {
+            if normalized == "member" || normalized == "admin" {
+                Ok(normalized)
+            } else {
+                Err((
+                    StatusCode::BAD_REQUEST,
+                    "Для group допустимы роли: member, admin".into(),
+                ))
+            }
+        }
+        "channel" => {
+            if normalized == "member" || normalized == "admin" {
+                Ok(normalized)
+            } else {
+                Err((
+                    StatusCode::BAD_REQUEST,
+                    "Для channel допустимы роли: member, admin".into(),
+                ))
+            }
+        }
+        _ => Err((StatusCode::BAD_REQUEST, "Операция недоступна".into())),
+    }
+}
+
 // ---------------------------
 // POST /chats — создать чат
 // ---------------------------
@@ -50,11 +106,30 @@ async fn create_chat(
     Json(body): Json<CreateChatRequest>,
 ) -> Result<Json<Chat>, (StatusCode, String)> {
     // Простые проверки
-    if body.kind == "private" {
-        if body.user_ids.len() != 2 || !body.user_ids.contains(&current_user_id) {
+    match body.kind.as_str() {
+        "private" => {
+            if body.user_ids.len() != 2 || !body.user_ids.contains(&current_user_id) {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "Для private-чата нужно ровно 2 участника, включая текущего пользователя"
+                        .into(),
+                ));
+            }
+        }
+        "group" => {
+            if body.title.as_deref().unwrap_or("").trim().is_empty() {
+                return Err((StatusCode::BAD_REQUEST, "Для group обязателен title".into()));
+            }
+        }
+        "channel" => {
+            if body.title.as_deref().unwrap_or("").trim().is_empty() {
+                return Err((StatusCode::BAD_REQUEST, "Для channel обязателен title".into()));
+            }
+        }
+        _ => {
             return Err((
                 StatusCode::BAD_REQUEST,
-                "Для private-чата нужно ровно 2 участника, включая текущего пользователя".into(),
+                "kind должен быть одним из: private, group, channel".into(),
             ));
         }
     }
@@ -259,7 +334,17 @@ async fn create_chat(
             )
             .bind(chat_id)
             .bind(uid)
-            .bind(if body.kind == "group" && uid == current_user_id { "admin" } else { "member" })
+            .bind(if uid == current_user_id {
+                if body.kind == "group" {
+                    "admin"
+                } else if body.kind == "channel" {
+                    "owner"
+                } else {
+                    "member"
+                }
+            } else {
+                "member"
+            })
             .execute(&mut *tx)
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка добавления участника: {}", e)))?;
@@ -269,10 +354,17 @@ async fn create_chat(
     // На всякий случай убеждаемся, что текущий пользователь участник
     if !inserted_users.contains(&current_user_id) {
         sqlx::query(
-            r#"INSERT INTO chat_participants (chat_id, user_id, role) VALUES ($1, $2, 'member') ON CONFLICT DO NOTHING"#,
+            r#"INSERT INTO chat_participants (chat_id, user_id, role) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING"#,
         )
         .bind(chat_id)
         .bind(current_user_id)
+        .bind(if body.kind == "group" {
+            "admin"
+        } else if body.kind == "channel" {
+            "owner"
+        } else {
+            "member"
+        })
         .execute(&mut *tx)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Ошибка добавления текущего пользователя: {}", e)))?;
@@ -514,8 +606,298 @@ async fn get_messages(
 }
 
 // ---------------------------
+// GET /chats/{id}/members — список участников (для участников чата)
+// ---------------------------
+async fn list_members(
+    State(state): State<AppState>,
+    CurrentUser {
+        id: current_user_id,
+        ..
+    }: CurrentUser,
+    Path(id): Path<i32>,
+) -> Result<Json<Vec<ChatMember>>, (StatusCode, String)> {
+    ensure_member(&state, id, current_user_id).await?;
+
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            cp.user_id,
+            COALESCE(u.username, u.login) AS username,
+            u.avatar,
+            COALESCE(cp.role, 'member') AS role,
+            cp.joined_at
+        FROM chat_participants cp
+        JOIN users u ON u.id = cp.user_id
+        WHERE cp.chat_id = $1
+        ORDER BY cp.joined_at ASC, cp.user_id ASC
+        "#,
+    )
+    .bind(id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Ошибка БД: {}", e),
+        )
+    })?;
+
+    let members = rows
+        .into_iter()
+        .map(|row| ChatMember {
+            user_id: row.try_get("user_id").unwrap_or_default(),
+            username: row.try_get("username").unwrap_or_default(),
+            avatar: row.try_get("avatar").ok(),
+            role: row
+                .try_get::<String, _>("role")
+                .unwrap_or_else(|_| "member".to_string()),
+            joined_at: row
+                .try_get::<chrono::DateTime<chrono::Utc>, _>("joined_at")
+                .map(|t| t.to_rfc3339())
+                .unwrap_or_default(),
+        })
+        .collect::<Vec<_>>();
+
+    Ok(Json(members))
+}
+
+// ---------------------------
+// POST /chats/{id}/members — добавить участника в group/channel (admin/owner)
+// ---------------------------
+async fn add_member(
+    State(state): State<AppState>,
+    CurrentUser {
+        id: current_user_id,
+        ..
+    }: CurrentUser,
+    Path(id): Path<i32>,
+    Json(body): Json<AddMemberRequest>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    crate::middleware::ensure_admin(&state, id, current_user_id).await?;
+
+    let chat_row = sqlx::query("SELECT kind FROM chats WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Ошибка БД: {}", e),
+            )
+        })?;
+
+    let Some(chat_row) = chat_row else {
+        return Err((StatusCode::NOT_FOUND, "Чат не найден".into()));
+    };
+    let kind: String = chat_row.try_get("kind").unwrap_or_default();
+    if kind == "private" {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Нельзя управлять участниками private-чата".into(),
+        ));
+    }
+
+    let exists_user: Option<i32> = sqlx::query_scalar("SELECT 1 FROM users WHERE id = $1 LIMIT 1")
+        .bind(body.user_id)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Ошибка БД: {}", e),
+            )
+        })?;
+    if exists_user.is_none() {
+        return Err((StatusCode::NOT_FOUND, "Пользователь не найден".into()));
+    }
+
+    let role = normalize_member_role(&kind, body.role.as_deref())?;
+    sqlx::query(
+        r#"
+        INSERT INTO chat_participants (chat_id, user_id, role)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (chat_id, user_id) DO UPDATE SET role = EXCLUDED.role
+        "#,
+    )
+    .bind(id)
+    .bind(body.user_id)
+    .bind(role)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Ошибка БД: {}", e),
+        )
+    })?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ---------------------------
+// PATCH /chats/{id}/members/{user_id} — смена роли участника (admin/owner)
+// ---------------------------
+async fn update_member_role(
+    State(state): State<AppState>,
+    CurrentUser {
+        id: current_user_id,
+        ..
+    }: CurrentUser,
+    Path((id, user_id)): Path<(i32, i32)>,
+    Json(body): Json<UpdateMemberRoleRequest>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    crate::middleware::ensure_admin(&state, id, current_user_id).await?;
+
+    let chat_row = sqlx::query("SELECT kind FROM chats WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Ошибка БД: {}", e),
+            )
+        })?;
+    let Some(chat_row) = chat_row else {
+        return Err((StatusCode::NOT_FOUND, "Чат не найден".into()));
+    };
+    let kind: String = chat_row.try_get("kind").unwrap_or_default();
+    if kind == "private" {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Нельзя менять роли в private-чате".into(),
+        ));
+    }
+
+    let target_role: Option<String> = sqlx::query_scalar(
+        "SELECT role FROM chat_participants WHERE chat_id = $1 AND user_id = $2 LIMIT 1",
+    )
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Ошибка БД: {}", e),
+        )
+    })?;
+    let Some(target_role) = target_role else {
+        return Err((StatusCode::NOT_FOUND, "Участник не найден".into()));
+    };
+    if target_role == "owner" {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Нельзя менять роль owner через этот endpoint".into(),
+        ));
+    }
+
+    let role = normalize_member_role(&kind, Some(body.role.as_str()))?;
+    let updated = sqlx::query(
+        "UPDATE chat_participants SET role = $1 WHERE chat_id = $2 AND user_id = $3",
+    )
+    .bind(role)
+    .bind(id)
+    .bind(user_id)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Ошибка БД: {}", e),
+        )
+    })?;
+
+    if updated.rows_affected() == 0 {
+        return Err((StatusCode::NOT_FOUND, "Участник не найден".into()));
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ---------------------------
+// DELETE /chats/{id}/members/{user_id} — удалить участника из group/channel
+// ---------------------------
+async fn remove_member(
+    State(state): State<AppState>,
+    CurrentUser {
+        id: current_user_id,
+        ..
+    }: CurrentUser,
+    Path((id, user_id)): Path<(i32, i32)>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    crate::middleware::ensure_admin(&state, id, current_user_id).await?;
+
+    let chat_row = sqlx::query("SELECT kind FROM chats WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Ошибка БД: {}", e),
+            )
+        })?;
+    let Some(chat_row) = chat_row else {
+        return Err((StatusCode::NOT_FOUND, "Чат не найден".into()));
+    };
+    let kind: String = chat_row.try_get("kind").unwrap_or_default();
+    if kind == "private" {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Нельзя удалять участников из private-чата".into(),
+        ));
+    }
+
+    if user_id == current_user_id {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Нельзя удалить самого себя через этот endpoint".into(),
+        ));
+    }
+
+    let target_role: Option<String> = sqlx::query_scalar(
+        "SELECT role FROM chat_participants WHERE chat_id = $1 AND user_id = $2 LIMIT 1",
+    )
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Ошибка БД: {}", e),
+        )
+    })?;
+    let Some(target_role) = target_role else {
+        return Err((StatusCode::NOT_FOUND, "Участник не найден".into()));
+    };
+    if target_role == "owner" {
+        return Err((StatusCode::BAD_REQUEST, "Нельзя удалить owner".into()));
+    }
+
+    let deleted = sqlx::query("DELETE FROM chat_participants WHERE chat_id = $1 AND user_id = $2")
+        .bind(id)
+        .bind(user_id)
+        .execute(&state.pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Ошибка БД: {}", e),
+            )
+        })?;
+
+    if deleted.rows_affected() == 0 {
+        return Err((StatusCode::NOT_FOUND, "Участник не найден".into()));
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ---------------------------
 // DELETE /chats/{id}
-// Группы: только admin может удалить чат (полностью). Private: выходим из чата (удаляем участника).
+// Group/channel: только admin/owner может удалить чат (полностью). Private: выходим из чата.
 // ---------------------------
 async fn delete_or_leave_chat(
     State(state): State<AppState>,
@@ -552,8 +934,8 @@ async fn delete_or_leave_chat(
     let kind: String = row.try_get("kind").unwrap_or_default();
     let _role: String = row.try_get("role").unwrap_or_else(|_| "member".to_string());
 
-    if kind == "group" {
-        // Удалять весь чат может только администратор — проверяем через общую утилиту
+    if kind == "group" || kind == "channel" {
+        // Удалять весь group/channel может только admin/owner.
         crate::middleware::ensure_admin(&state, id, current_user_id).await?;
         sqlx::query("DELETE FROM chats WHERE id = $1")
             .bind(id)

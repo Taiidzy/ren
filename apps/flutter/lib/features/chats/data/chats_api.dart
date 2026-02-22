@@ -50,10 +50,7 @@ class ChatsApi {
     try {
       final resp = await dio.get(
         '${Apiurl.api}/users/search',
-        queryParameters: {
-          'q': query,
-          'limit': limit,
-        },
+        queryParameters: {'q': query, 'limit': limit},
         options: Options(headers: {'Authorization': 'Bearer $token'}),
       );
       return (resp.data as List<dynamic>?) ?? const [];
@@ -138,11 +135,7 @@ class ChatsApi {
     try {
       final resp = await dio.post(
         '${Apiurl.api}/chats',
-        data: {
-          'kind': kind,
-          'title': title,
-          'user_ids': userIds,
-        },
+        data: {'kind': kind, 'title': title, 'user_ids': userIds},
         options: Options(headers: {'Authorization': 'Bearer $token'}),
       );
       return (resp.data as Map<String, dynamic>?) ?? <String, dynamic>{};
@@ -169,6 +162,88 @@ class ChatsApi {
         (e.response?.data is String)
             ? e.response?.data as String
             : 'Ошибка удаления чата',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
+  Future<List<dynamic>> listMembers(int chatId) async {
+    final token = await _requireToken();
+    try {
+      final resp = await dio.get(
+        '${Apiurl.api}/chats/$chatId/members',
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+      return (resp.data as List<dynamic>?) ?? const [];
+    } on DioException catch (e) {
+      throw ApiException(
+        (e.response?.data is String)
+            ? e.response?.data as String
+            : 'Ошибка загрузки участников',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
+  Future<void> addMember(
+    int chatId, {
+    required int userId,
+    String? role,
+  }) async {
+    final token = await _requireToken();
+    try {
+      await dio.post(
+        '${Apiurl.api}/chats/$chatId/members',
+        data: {
+          'user_id': userId,
+          if (role != null && role.trim().isNotEmpty) 'role': role.trim(),
+        },
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+    } on DioException catch (e) {
+      throw ApiException(
+        (e.response?.data is String)
+            ? e.response?.data as String
+            : 'Ошибка добавления участника',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
+  Future<void> updateMemberRole(
+    int chatId, {
+    required int userId,
+    required String role,
+  }) async {
+    final token = await _requireToken();
+    try {
+      await dio.patch(
+        '${Apiurl.api}/chats/$chatId/members/$userId',
+        data: {'role': role},
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+    } on DioException catch (e) {
+      throw ApiException(
+        (e.response?.data is String)
+            ? e.response?.data as String
+            : 'Ошибка изменения роли участника',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
+  Future<void> removeMember(int chatId, {required int userId}) async {
+    final token = await _requireToken();
+    try {
+      await dio.delete(
+        '${Apiurl.api}/chats/$chatId/members/$userId',
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+    } on DioException catch (e) {
+      throw ApiException(
+        (e.response?.data is String)
+            ? e.response?.data as String
+            : 'Ошибка удаления участника',
         statusCode: e.response?.statusCode,
       );
     }
@@ -209,10 +284,7 @@ class ChatsApi {
         'chat_id': chatId,
         'filename': filename,
         'mimetype': mimetype,
-        'file': MultipartFile.fromBytes(
-          ciphertextBytes,
-          filename: filename,
-        ),
+        'file': MultipartFile.fromBytes(ciphertextBytes, filename: filename),
       });
 
       final resp = await dio.post(

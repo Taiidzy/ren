@@ -20,6 +20,7 @@ import 'package:ren/features/chats/data/chats_repository.dart';
 import 'package:ren/features/chats/domain/chat_models.dart';
 import 'package:ren/core/realtime/realtime_client.dart';
 import 'package:ren/shared/widgets/background.dart';
+import 'package:ren/shared/widgets/avatar.dart';
 import 'package:ren/shared/widgets/glass_overlays.dart';
 import 'package:ren/shared/widgets/glass_surface.dart';
 import 'package:ren/shared/widgets/glass_snackbar.dart';
@@ -100,6 +101,7 @@ class _ChatPageState extends State<ChatPage>
   Timer? _loadOlderDebounce;
   late final ValueNotifier<bool> _messagesSyncingN;
   late final ChatsRepository _repo;
+  bool get _isPrivateChat => widget.chat.kind.trim().toLowerCase() == 'private';
 
   bool _showVideoRecordingOverlay = false;
   String _videoRecordingDurationText = '0:00';
@@ -435,6 +437,32 @@ class _ChatPageState extends State<ChatPage>
     );
   }
 
+  Future<void> _openMembersSheet() async {
+    final chatId = int.tryParse(widget.chat.id) ?? 0;
+    if (chatId <= 0) return;
+    final kind = widget.chat.kind.trim().toLowerCase();
+    if (kind == 'private') {
+      showGlassSnack(
+        context,
+        'Для private-чата список участников недоступен',
+        kind: GlassSnackKind.info,
+      );
+      return;
+    }
+
+    final myId = _myUserId ?? await _readMyUserId();
+    if (!mounted) return;
+    await GlassOverlays.showGlassBottomSheet<void>(
+      context,
+      builder: (_) => _ChatMembersSheetBody(
+        chatId: chatId,
+        chatKind: kind,
+        myUserId: myId,
+        repo: _repo,
+      ),
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -727,7 +755,7 @@ class _ChatPageState extends State<ChatPage>
       await rt.connect();
     }
 
-    if (peerId > 0) {
+    if (_isPrivateChat && peerId > 0) {
       rt.addContacts([peerId]);
     }
 
@@ -735,6 +763,7 @@ class _ChatPageState extends State<ChatPage>
 
     _rtSub ??= rt.events.listen((evt) async {
       if (evt.type == 'presence') {
+        if (!_isPrivateChat) return;
         final peerId = widget.chat.peerId ?? 0;
         final userId =
             evt.data['user_id'] ?? evt.data['userId'] ?? evt.data['id'];
@@ -768,6 +797,7 @@ class _ChatPageState extends State<ChatPage>
       }
 
       if (evt.type == 'profile_updated') {
+        if (!_isPrivateChat) return;
         final userDyn = evt.data['user'];
         if (userDyn is! Map) return;
         final u = (userDyn is Map<String, dynamic>)
@@ -921,7 +951,7 @@ class _ChatPageState extends State<ChatPage>
           : int.tryParse('${replyDyn ?? ''}');
 
       final myId = _myUserId ?? 0;
-      final isMe = (myId > 0) ? senderId == myId : senderId != peerId;
+      final isMe = (myId > 0) ? senderId == myId : false;
 
       if (kDebugMode) {
         debugPrint('WS message_new routing resolved (isMe=$isMe)');
@@ -978,7 +1008,7 @@ class _ChatPageState extends State<ChatPage>
     final pendingIds = pendingToSend.map((p) => p.clientId).toSet();
     final hasAttachments = pendingToSend.isNotEmpty;
     if (text.isEmpty && !hasAttachments) return;
-    if (peerId <= 0) return;
+    if (_isPrivateChat && peerId <= 0) return;
 
     final repo = context.read<ChatsRepository>();
     _rt ??= context.read<RealtimeClient>();
@@ -1025,9 +1055,10 @@ class _ChatPageState extends State<ChatPage>
           }
         });
 
-        final payload = await repo.buildEncryptedWsMessage(
+        final payload = await repo.buildOutgoingWsTextMessage(
           chatId: chatId,
-          peerId: peerId,
+          chatKind: widget.chat.kind,
+          peerId: peerId > 0 ? peerId : null,
           plaintext: text,
         );
 
@@ -1094,15 +1125,17 @@ class _ChatPageState extends State<ChatPage>
       }
 
       final payload = hasAttachments
-          ? await repo.buildEncryptedWsMediaMessage(
+          ? await repo.buildOutgoingWsMediaMessage(
               chatId: chatId,
-              peerId: peerId,
+              chatKind: widget.chat.kind,
+              peerId: peerId > 0 ? peerId : null,
               caption: text,
               attachments: outgoingAttachments,
             )
-          : await repo.buildEncryptedWsMessage(
+          : await repo.buildOutgoingWsTextMessage(
               chatId: chatId,
-              peerId: peerId,
+              chatKind: widget.chat.kind,
+              peerId: peerId > 0 ? peerId : null,
               plaintext: text,
             );
 
@@ -1176,7 +1209,7 @@ class _ChatPageState extends State<ChatPage>
   Future<void> _sendRecordedVoice(PendingChatAttachment attachment) async {
     final chatId = int.tryParse(widget.chat.id) ?? 0;
     final peerId = widget.chat.peerId ?? 0;
-    if (chatId <= 0 || peerId <= 0) return;
+    if (chatId <= 0 || !_isPrivateChat || peerId <= 0) return;
     if (!_canAttachFileSize(attachment.sizeBytes)) return;
 
     final repo = context.read<ChatsRepository>();
@@ -1216,8 +1249,9 @@ class _ChatPageState extends State<ChatPage>
     _scheduleScrollToBottom(animated: true);
 
     try {
-      final payload = await repo.buildEncryptedWsMediaMessage(
+      final payload = await repo.buildOutgoingWsMediaMessage(
         chatId: chatId,
+        chatKind: widget.chat.kind,
         peerId: peerId,
         caption: '',
         attachments: [
@@ -1258,7 +1292,7 @@ class _ChatPageState extends State<ChatPage>
   Future<void> _sendRecordedVideo(PendingChatAttachment attachment) async {
     final chatId = int.tryParse(widget.chat.id) ?? 0;
     final peerId = widget.chat.peerId ?? 0;
-    if (chatId <= 0 || peerId <= 0) return;
+    if (chatId <= 0 || !_isPrivateChat || peerId <= 0) return;
     if (!_canAttachFileSize(attachment.sizeBytes)) return;
 
     final repo = context.read<ChatsRepository>();
@@ -1298,8 +1332,9 @@ class _ChatPageState extends State<ChatPage>
     _scheduleScrollToBottom(animated: true);
 
     try {
-      final payload = await repo.buildEncryptedWsMediaMessage(
+      final payload = await repo.buildOutgoingWsMediaMessage(
         chatId: chatId,
+        chatKind: widget.chat.kind,
         peerId: peerId,
         caption: '',
         attachments: [
@@ -1864,7 +1899,7 @@ class _ChatPageState extends State<ChatPage>
                     _deleteByIds(ids);
                     _deleteRemote(ids);
                   },
-                  onMenu: () {},
+                  onMenu: _openMembersSheet,
                 ),
                 body: Builder(
                   builder: (context) {
@@ -2579,12 +2614,7 @@ class _ChatPageState extends State<ChatPage>
 
     final toChatId = int.tryParse(selectedChat.id) ?? 0;
     final toPeerId = selectedChat.peerId ?? 0;
-    if (toChatId <= 0 || toPeerId <= 0) {
-      showGlassSnack(
-        context,
-        'Пересылка поддерживается только для private чатов',
-        kind: GlassSnackKind.info,
-      );
+    if (toChatId <= 0) {
       return;
     }
 
@@ -2603,9 +2633,10 @@ class _ChatPageState extends State<ChatPage>
           .firstWhere((m) => m != null, orElse: () => null);
       if (msg == null) continue;
       if (msg.attachments.isNotEmpty) continue;
-      final payload = await repo.buildEncryptedWsMessage(
+      final payload = await repo.buildOutgoingWsTextMessage(
         chatId: toChatId,
-        peerId: toPeerId,
+        chatKind: selectedChat.kind,
+        peerId: toPeerId > 0 ? toPeerId : null,
         plaintext: msg.text,
       );
       rt.forwardMessage(
@@ -2732,5 +2763,581 @@ class _ChatPageState extends State<ChatPage>
       default:
         break;
     }
+  }
+}
+
+class _ChatMembersSheetBody extends StatefulWidget {
+  final int chatId;
+  final String chatKind;
+  final int myUserId;
+  final ChatsRepository repo;
+
+  const _ChatMembersSheetBody({
+    required this.chatId,
+    required this.chatKind,
+    required this.myUserId,
+    required this.repo,
+  });
+
+  @override
+  State<_ChatMembersSheetBody> createState() => _ChatMembersSheetBodyState();
+}
+
+class _ChatMembersSheetBodyState extends State<_ChatMembersSheetBody> {
+  bool _loading = true;
+  bool _busy = false;
+  String? _error;
+  List<ChatMember> _members = const [];
+
+  final TextEditingController _memberIdCtrl = TextEditingController();
+  final TextEditingController _memberSearchCtrl = TextEditingController();
+  String _newMemberRole = 'member';
+  Timer? _memberSearchDebounce;
+  int _memberSearchSeq = 0;
+  bool _memberSearching = false;
+  String? _memberSearchError;
+  List<ChatUser> _memberSearchResults = const [];
+
+  bool get _canManage {
+    final me = _members
+        .where((m) => m.userId == widget.myUserId)
+        .cast<ChatMember?>()
+        .firstWhere((m) => m != null, orElse: () => null);
+    if (me == null) return false;
+    final role = me.role.trim().toLowerCase();
+    return role == 'owner' || role == 'admin';
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _reload();
+  }
+
+  @override
+  void dispose() {
+    _memberSearchDebounce?.cancel();
+    _memberSearchCtrl.dispose();
+    _memberIdCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _reload() async {
+    if (!mounted) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final members = await widget.repo.listMembers(widget.chatId);
+      if (!mounted) return;
+      setState(() {
+        _members = members;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = '$e';
+      });
+    }
+  }
+
+  Set<int> _existingMemberIds() {
+    return _members.map((m) => m.userId).toSet();
+  }
+
+  void _runMemberSearch(String query) {
+    final q = query.trim();
+    final seq = ++_memberSearchSeq;
+    if (q.isEmpty) {
+      setState(() {
+        _memberSearching = false;
+        _memberSearchError = null;
+        _memberSearchResults = const [];
+      });
+      return;
+    }
+
+    setState(() {
+      _memberSearching = true;
+      _memberSearchError = null;
+    });
+
+    widget.repo
+        .searchUsers(q)
+        .then((users) {
+          if (!mounted || seq != _memberSearchSeq) return;
+          final existing = _existingMemberIds();
+          final filtered = users
+              .where((u) => !existing.contains(int.tryParse(u.id) ?? 0))
+              .toList(growable: false);
+          setState(() {
+            _memberSearching = false;
+            _memberSearchError = null;
+            _memberSearchResults = filtered;
+          });
+        })
+        .catchError((e) {
+          if (!mounted || seq != _memberSearchSeq) return;
+          setState(() {
+            _memberSearching = false;
+            _memberSearchError = e.toString();
+            _memberSearchResults = const [];
+          });
+        });
+  }
+
+  void _scheduleMemberSearch(String query) {
+    _memberSearchDebounce?.cancel();
+    _memberSearchDebounce = Timer(const Duration(milliseconds: 260), () {
+      if (!mounted) return;
+      _runMemberSearch(query);
+    });
+  }
+
+  Future<void> _addMember() async {
+    if (!_canManage || _busy) return;
+    final userId = int.tryParse(_memberIdCtrl.text.trim()) ?? 0;
+    if (userId <= 0) {
+      showGlassSnack(
+        context,
+        'Укажите корректный ID пользователя',
+        kind: GlassSnackKind.error,
+      );
+      return;
+    }
+
+    setState(() {
+      _busy = true;
+    });
+    try {
+      await widget.repo.addMember(
+        widget.chatId,
+        userId: userId,
+        role: _newMemberRole,
+      );
+      _memberIdCtrl.clear();
+      _memberSearchCtrl.clear();
+      _memberSearchResults = const [];
+      _memberSearchError = null;
+      await _reload();
+      if (!mounted) return;
+      showGlassSnack(
+        context,
+        'Участник добавлен',
+        kind: GlassSnackKind.success,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      showGlassSnack(context, '$e', kind: GlassSnackKind.error);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _setRole(ChatMember member, String role) async {
+    if (!_canManage || _busy) return;
+    setState(() {
+      _busy = true;
+    });
+    try {
+      await widget.repo.updateMemberRole(
+        widget.chatId,
+        userId: member.userId,
+        role: role,
+      );
+      await _reload();
+      if (!mounted) return;
+      showGlassSnack(
+        context,
+        'Роль обновлена (${member.username})',
+        kind: GlassSnackKind.success,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      showGlassSnack(context, '$e', kind: GlassSnackKind.error);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _removeMember(ChatMember member) async {
+    if (!_canManage || _busy) return;
+    if (member.userId == widget.myUserId) {
+      showGlassSnack(
+        context,
+        'Себя через этот sheet удалить нельзя',
+        kind: GlassSnackKind.info,
+      );
+      return;
+    }
+
+    setState(() {
+      _busy = true;
+    });
+    try {
+      await widget.repo.removeMember(widget.chatId, userId: member.userId);
+      await _reload();
+      if (!mounted) return;
+      showGlassSnack(
+        context,
+        'Участник удалён (${member.username})',
+        kind: GlassSnackKind.success,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      showGlassSnack(context, '$e', kind: GlassSnackKind.error);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+        });
+      }
+    }
+  }
+
+  String _roleLabel(String role) {
+    switch (role.trim().toLowerCase()) {
+      case 'owner':
+        return 'Owner';
+      case 'admin':
+        return 'Admin';
+      default:
+        return 'Member';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final baseInk = isDark ? Colors.white : Colors.black;
+
+    return DraggableScrollableSheet(
+      initialChildSize: 0.74,
+      minChildSize: 0.45,
+      maxChildSize: 0.95,
+      builder: (context, scrollController) {
+        return GlassSurface(
+          blurSigma: 16,
+          borderRadiusGeometry: const BorderRadius.only(
+            topLeft: Radius.circular(26),
+            topRight: Radius.circular(26),
+          ),
+          borderColor: baseInk.withOpacity(isDark ? 0.22 : 0.12),
+          child: ListView(
+            controller: scrollController,
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 18),
+            children: [
+              Center(
+                child: Container(
+                  width: 44,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: theme.colorScheme.onSurface.withOpacity(0.25),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                widget.chatKind == 'channel'
+                    ? 'Участники канала'
+                    : 'Участники группы',
+                style: theme.textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Всего: ${_members.length} • '
+                '${_canManage ? "у вас есть права управления" : "только просмотр"}',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurface.withOpacity(0.72),
+                ),
+              ),
+              const SizedBox(height: 12),
+              if (_canManage) ...[
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _memberIdCtrl,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: 'ID участника',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    DropdownButton<String>(
+                      value: _newMemberRole,
+                      items: const [
+                        DropdownMenuItem(
+                          value: 'member',
+                          child: Text('member'),
+                        ),
+                        DropdownMenuItem(value: 'admin', child: Text('admin')),
+                      ],
+                      onChanged: _busy
+                          ? null
+                          : (v) {
+                              if (v == null) return;
+                              setState(() {
+                                _newMemberRole = v;
+                              });
+                            },
+                    ),
+                    const SizedBox(width: 8),
+                    FilledButton(
+                      onPressed: _busy ? null : _addMember,
+                      child: const Text('Добавить'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _memberSearchCtrl,
+                  onChanged: _scheduleMemberSearch,
+                  decoration: InputDecoration(
+                    labelText: 'Поиск пользователя (username / ID)',
+                    suffixIcon: _memberSearchCtrl.text.trim().isEmpty
+                        ? null
+                        : IconButton(
+                            onPressed: _busy
+                                ? null
+                                : () {
+                                    _memberSearchCtrl.clear();
+                                    _memberSearchDebounce?.cancel();
+                                    setState(() {
+                                      _memberSearching = false;
+                                      _memberSearchError = null;
+                                      _memberSearchResults = const [];
+                                    });
+                                  },
+                            icon: const Icon(Icons.close_rounded),
+                          ),
+                  ),
+                ),
+                if (_memberSearching)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 8),
+                    child: LinearProgressIndicator(minHeight: 2),
+                  )
+                else if (_memberSearchError != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      _memberSearchError!.replaceFirst('Exception: ', ''),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.error,
+                      ),
+                    ),
+                  )
+                else if (_memberSearchResults.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Column(
+                      children: _memberSearchResults
+                          .map((u) {
+                            final uid = int.tryParse(u.id) ?? 0;
+                            if (uid <= 0) return const SizedBox.shrink();
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: GlassSurface(
+                                borderRadius: 14,
+                                blurSigma: 8,
+                                borderColor: baseInk.withOpacity(
+                                  isDark ? 0.14 : 0.08,
+                                ),
+                                padding: const EdgeInsets.fromLTRB(
+                                  10,
+                                  8,
+                                  10,
+                                  8,
+                                ),
+                                child: Row(
+                                  children: [
+                                    RenAvatar(
+                                      url: u.avatarUrl,
+                                      name: u.name,
+                                      isOnline: false,
+                                      size: 34,
+                                      onlineDotSize: 0,
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            u.name,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: theme.textTheme.titleSmall
+                                                ?.copyWith(
+                                                  fontWeight: FontWeight.w700,
+                                                ),
+                                          ),
+                                          Text(
+                                            'ID: $uid',
+                                            style: theme.textTheme.bodySmall
+                                                ?.copyWith(
+                                                  color: theme
+                                                      .colorScheme
+                                                      .onSurface
+                                                      .withOpacity(0.7),
+                                                ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    FilledButton(
+                                      onPressed: _busy
+                                          ? null
+                                          : () async {
+                                              _memberIdCtrl.text = '$uid';
+                                              await _addMember();
+                                            },
+                                      child: const Text('Add'),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          })
+                          .toList(growable: false),
+                    ),
+                  ),
+                const SizedBox(height: 12),
+              ],
+              if (_loading)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 30),
+                  child: Center(
+                    child: SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  ),
+                )
+              else if (_error != null)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  child: Text(
+                    _error!.replaceFirst('Exception: ', ''),
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.error,
+                    ),
+                  ),
+                )
+              else if (_members.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  child: Text(
+                    'Список участников пуст',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurface.withOpacity(0.7),
+                    ),
+                  ),
+                )
+              else
+                ..._members.map((member) {
+                  final role = member.role.trim().toLowerCase();
+                  final canChangeRole =
+                      _canManage &&
+                      member.userId != widget.myUserId &&
+                      role != 'owner';
+                  final canRemove = canChangeRole;
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: GlassSurface(
+                      borderRadius: 16,
+                      blurSigma: 10,
+                      borderColor: baseInk.withOpacity(isDark ? 0.16 : 0.09),
+                      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                      child: Row(
+                        children: [
+                          RenAvatar(
+                            url: member.avatarUrl,
+                            name: member.username,
+                            isOnline: false,
+                            size: 38,
+                            onlineDotSize: 0,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  member.username,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: theme.textTheme.titleSmall?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  'ID: ${member.userId} • ${_roleLabel(member.role)}',
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: theme.colorScheme.onSurface
+                                        .withOpacity(0.72),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          if (canChangeRole)
+                            PopupMenuButton<String>(
+                              icon: const Icon(Icons.more_vert_rounded),
+                              onSelected: (value) async {
+                                if (value == 'remove') {
+                                  await _removeMember(member);
+                                  return;
+                                }
+                                await _setRole(member, value);
+                              },
+                              itemBuilder: (_) => [
+                                if (role != 'admin')
+                                  const PopupMenuItem<String>(
+                                    value: 'admin',
+                                    child: Text('Сделать admin'),
+                                  ),
+                                if (role != 'member')
+                                  const PopupMenuItem<String>(
+                                    value: 'member',
+                                    child: Text('Сделать member'),
+                                  ),
+                                if (canRemove)
+                                  const PopupMenuItem<String>(
+                                    value: 'remove',
+                                    child: Text('Удалить из чата'),
+                                  ),
+                              ],
+                            ),
+                        ],
+                      ),
+                    ),
+                  );
+                }),
+            ],
+          ),
+        );
+      },
+    );
   }
 }

@@ -72,7 +72,7 @@ impl Message {
 
 #[derive(Deserialize, Clone)]
 pub struct CreateChatRequest {
-    pub kind: String,          // 'private' | 'group'
+    pub kind: String,          // 'private' | 'group' | 'channel'
     pub title: Option<String>, // только для групп
     pub user_ids: Vec<i32>,    // участники (включая текущего пользователя)
 }

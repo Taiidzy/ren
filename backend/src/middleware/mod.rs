@@ -48,6 +48,52 @@ pub async fn ensure_member(
     }
     Ok(())
 }
+
+// Утилита: убедиться, что пользователь может отправлять сообщения в чат.
+// Для channel писать могут только owner/admin.
+pub async fn ensure_can_send_message(
+    state: &AppState,
+    chat_id: i32,
+    user_id: i32,
+) -> Result<(), (StatusCode, String)> {
+    let row = sqlx::query(
+        r#"
+        SELECT c.kind, COALESCE(cp.role, 'member') AS role
+        FROM chats c
+        JOIN chat_participants cp ON cp.chat_id = c.id
+        WHERE c.id = $1 AND cp.user_id = $2
+        LIMIT 1
+        "#,
+    )
+    .bind(chat_id)
+    .bind(user_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Ошибка БД: {}", e),
+        )
+    })?;
+
+    let Some(row) = row else {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Нет доступа: вы не являетесь участником чата".into(),
+        ));
+    };
+
+    let kind: String = row.try_get("kind").unwrap_or_default();
+    let role: String = row.try_get("role").unwrap_or_else(|_| "member".to_string());
+    if kind == "channel" && role != "owner" && role != "admin" {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Недостаточно прав: в channel писать могут только owner/admin".into(),
+        ));
+    }
+
+    Ok(())
+}
 #[derive(Clone, Copy, Debug)]
 pub struct CurrentUser {
     pub id: i32,
@@ -390,10 +436,10 @@ pub async fn ensure_admin(
     };
 
     let role: String = row.try_get("role").unwrap_or_else(|_| "member".to_string());
-    if role != "admin" {
+    if role != "admin" && role != "owner" {
         return Err((
             StatusCode::FORBIDDEN,
-            "Недостаточно прав (нужна роль admin)".into(),
+            "Недостаточно прав (нужна роль admin/owner)".into(),
         ));
     }
     Ok(())

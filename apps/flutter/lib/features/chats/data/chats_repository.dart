@@ -62,6 +62,8 @@ class ChatsRepository {
 
   ChatsRepository(this.api, this.renSdk);
 
+  bool _isPrivateKind(String kind) => kind.trim().toLowerCase() == 'private';
+
   Future<T> _runInMediaPipeline<T>(Future<T> Function() task) {
     final completer = Completer<T>();
     _mediaPipelineTail = _mediaPipelineTail.catchError((_) {}).then((_) async {
@@ -222,15 +224,20 @@ class ChatsRepository {
           : int.tryParse('${m['peer_id']}');
       final peerUsername = (m['peer_username'] as String?) ?? '';
       final peerAvatar = (m['peer_avatar'] as String?) ?? '';
+      final title = ((m['title'] as String?) ?? '').trim();
+      final kind = ((m['kind'] as String?) ?? 'private').trim().toLowerCase();
       final isFavorite =
           (m['is_favorite'] == true) || (m['isFavorite'] == true);
       final updatedAtStr = (m['updated_at'] as String?) ?? '';
 
       final updatedAt = DateTime.tryParse(updatedAtStr) ?? DateTime.now();
 
+      final userName = _isPrivateKind(kind)
+          ? (peerUsername.isNotEmpty ? peerUsername : 'User')
+          : (title.isNotEmpty ? title : 'Chat');
       final user = ChatUser(
         id: (peerId ?? 0).toString(),
-        name: peerUsername.isNotEmpty ? peerUsername : 'User',
+        name: userName,
         avatarUrl: _avatarUrl(peerAvatar),
         isOnline: false,
       );
@@ -239,7 +246,7 @@ class ChatsRepository {
         ChatPreview(
           id: id.toString(),
           peerId: peerId,
-          kind: (m['kind'] as String?) ?? 'private',
+          kind: kind,
           user: user,
           isFavorite: isFavorite,
           lastMessage: '',
@@ -583,7 +590,8 @@ class ChatsRepository {
     try {
       payload = jsonDecode(encrypted) as Map<String, dynamic>;
     } catch (_) {
-      return (text: '[encrypted]', key: null);
+      // non-E2EE chats may carry plaintext directly in message
+      return (text: encrypted, key: null);
     }
 
     final ciphertext = (payload['ciphertext'] as String?)?.trim();
@@ -709,15 +717,157 @@ class ChatsRepository {
     );
   }
 
+  ChatPreview _chatPreviewFromCreateResponse(
+    Map<String, dynamic> json, {
+    required String kind,
+    int? peerId,
+    String? fallbackName,
+  }) {
+    final id = (json['id'] is int)
+        ? json['id'] as int
+        : int.tryParse('${json['id']}') ?? 0;
+    final isFavorite =
+        (json['is_favorite'] == true) || (json['isFavorite'] == true);
+    final title = ((json['title'] as String?) ?? '').trim();
+
+    final name = _isPrivateKind(kind)
+        ? ((fallbackName ?? 'User').trim().isEmpty
+              ? 'User'
+              : (fallbackName ?? 'User').trim())
+        : (title.isNotEmpty ? title : (fallbackName ?? 'Chat'));
+
+    return ChatPreview(
+      id: id.toString(),
+      peerId: peerId,
+      kind: kind,
+      user: ChatUser(
+        id: (peerId ?? 0).toString(),
+        name: name,
+        avatarUrl: '',
+        isOnline: false,
+      ),
+      isFavorite: isFavorite,
+      lastMessage: '',
+      lastMessageAt: DateTime.now(),
+    );
+  }
+
+  Future<ChatPreview> createGroupChat({
+    required String title,
+    required List<int> memberUserIds,
+  }) async {
+    final myUserId = await _getMyUserId();
+    final users = <int>{
+      myUserId,
+      ...memberUserIds.where((e) => e > 0),
+    }.toList(growable: false);
+    final json = await api.createChat(
+      kind: 'group',
+      title: title,
+      userIds: users,
+    );
+    return _chatPreviewFromCreateResponse(
+      json,
+      kind: 'group',
+      fallbackName: title.trim().isEmpty ? 'Group' : title.trim(),
+    );
+  }
+
+  Future<ChatPreview> createChannel({
+    required String title,
+    required List<int> memberUserIds,
+  }) async {
+    final myUserId = await _getMyUserId();
+    final users = <int>{
+      myUserId,
+      ...memberUserIds.where((e) => e > 0),
+    }.toList(growable: false);
+    final json = await api.createChat(
+      kind: 'channel',
+      title: title,
+      userIds: users,
+    );
+    return _chatPreviewFromCreateResponse(
+      json,
+      kind: 'channel',
+      fallbackName: title.trim().isEmpty ? 'Channel' : title.trim(),
+    );
+  }
+
+  Future<List<ChatMember>> listMembers(int chatId) async {
+    final raw = await api.listMembers(chatId);
+    final out = <ChatMember>[];
+    for (final it in raw) {
+      if (it is! Map) continue;
+      final m = it.cast<String, dynamic>();
+      final userId = (m['user_id'] is int)
+          ? m['user_id'] as int
+          : int.tryParse('${m['user_id'] ?? ''}') ?? 0;
+      if (userId <= 0) continue;
+      final username = ((m['username'] as String?) ?? '').trim();
+      final avatarRaw = ((m['avatar'] as String?) ?? '').trim();
+      final role = ((m['role'] as String?) ?? 'member').trim();
+      final joinedAt =
+          DateTime.tryParse('${m['joined_at'] ?? ''}') ??
+          DateTime.fromMillisecondsSinceEpoch(0);
+      out.add(
+        ChatMember(
+          userId: userId,
+          username: username.isEmpty ? 'User' : username,
+          avatarUrl: _avatarUrl(avatarRaw),
+          role: role.isEmpty ? 'member' : role,
+          joinedAt: joinedAt,
+        ),
+      );
+    }
+    return out;
+  }
+
+  Future<void> addMember(
+    int chatId, {
+    required int userId,
+    String? role,
+  }) async {
+    await api.addMember(chatId, userId: userId, role: role);
+  }
+
+  Future<void> updateMemberRole(
+    int chatId, {
+    required int userId,
+    required String role,
+  }) async {
+    await api.updateMemberRole(chatId, userId: userId, role: role);
+  }
+
+  Future<void> removeMember(int chatId, {required int userId}) async {
+    await api.removeMember(chatId, userId: userId);
+  }
+
   Future<void> deleteChat(int chatId, {bool forAll = false}) async {
     await api.deleteChat(chatId, forAll: forAll);
   }
 
-  Future<Map<String, dynamic>> buildEncryptedWsMessage({
+  Future<Map<String, dynamic>> buildOutgoingWsTextMessage({
     required int chatId,
-    required int peerId,
+    required String chatKind,
+    int? peerId,
     required String plaintext,
   }) async {
+    if (!_isPrivateKind(chatKind)) {
+      return {
+        'chat_id': chatId,
+        'message': plaintext,
+        'message_type': 'text',
+        'envelopes': null,
+        'metadata': null,
+      };
+    }
+
+    final peer = peerId ?? 0;
+    if (peer <= 0) {
+      throw Exception('Некорректный peerId для private-чата');
+    }
+
     final myUserId = await _getMyUserId();
     final myPrivateKeyB64 = await _getMyPrivateKeyB64();
     final myPublicKeyB64 = await _getMyPublicKeyB64();
@@ -732,7 +882,7 @@ class ChatsRepository {
       throw Exception('Не найден публичный ключ');
     }
 
-    final peerPublicKeyB64 = await _getPeerPublicKeyB64(peerId);
+    final peerPublicKeyB64 = await _getPeerPublicKeyB64(peer);
 
     final msgKeyB64 = renSdk.generateMessageKey().trim();
     final enc = renSdk.encryptMessage(plaintext, msgKeyB64);
@@ -777,7 +927,7 @@ class ChatsRepository {
 
     final envelopes = <String, dynamic>{
       '$myUserId': env('$myUserId', wrappedForMe),
-      '$peerId': env('$peerId', wrappedForPeer),
+      '$peer': env('$peer', wrappedForPeer),
     };
 
     final messageJson = jsonEncode({
@@ -902,14 +1052,22 @@ class ChatsRepository {
     });
   }
 
-  Future<Map<String, dynamic>> buildEncryptedWsMediaMessage({
+  Future<Map<String, dynamic>> buildOutgoingWsMediaMessage({
     required int chatId,
-    required int peerId,
+    required String chatKind,
+    int? peerId,
     required String caption,
     required List<OutgoingAttachment> attachments,
   }) async {
+    if (!_isPrivateKind(chatKind)) {
+      throw Exception(
+        'Вложения пока поддерживаются только для private-чатов (E2EE)',
+      );
+    }
+
     return _runInMediaPipeline(() async {
-      if (peerId <= 0) {
+      final peer = peerId ?? 0;
+      if (peer <= 0) {
         throw Exception('Некорректный peerId');
       }
 
@@ -923,7 +1081,7 @@ class ChatsRepository {
         throw Exception('Отсутствует публичный ключ');
       }
 
-      final peerPublicKeyB64 = await _getPeerPublicKeyB64(peerId);
+      final peerPublicKeyB64 = await _getPeerPublicKeyB64(peer);
 
       final msgKeyB64 = renSdk.generateMessageKey().trim();
 
@@ -951,7 +1109,7 @@ class ChatsRepository {
 
       final envelopes = {
         '$myId': env('$myId', wrappedForMe),
-        '$peerId': env('$peerId', wrappedForPeer),
+        '$peer': env('$peer', wrappedForPeer),
       };
 
       final metadata = <Map<String, dynamic>>[];

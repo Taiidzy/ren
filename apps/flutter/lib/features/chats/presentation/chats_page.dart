@@ -413,32 +413,27 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
   }
 
   Future<void> _createChatFlow() async {
-    final controller = TextEditingController();
-    final peerId = await GlassOverlays.showGlassDialog<int>(
+    final kind = await GlassOverlays.showGlassDialog<String>(
       context,
       builder: (context) {
         return AlertDialog(
-          title: const Text('Новый чат'),
-          content: TextField(
-            controller: controller,
-            keyboardType: TextInputType.number,
-            decoration: const InputDecoration(labelText: 'ID пользователя'),
-          ),
+          title: const Text('Создать чат'),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
               child: const Text('Отмена'),
             ),
             FilledButton(
-              onPressed: () {
-                final id = int.tryParse(controller.text.trim());
-                if (id == null || id <= 0) {
-                  Navigator.of(context).pop(null);
-                  return;
-                }
-                Navigator.of(context).pop(id);
-              },
-              child: const Text('Создать'),
+              onPressed: () => Navigator.of(context).pop('private'),
+              child: const Text('Private'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop('group'),
+              child: const Text('Group'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop('channel'),
+              child: const Text('Channel'),
             ),
           ],
         );
@@ -446,20 +441,131 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
     );
 
     if (!mounted) return;
-    if (peerId == null) {
-      if (controller.text.trim().isNotEmpty) {
-        showGlassSnack(
+    if (kind == null || kind.isEmpty) {
+      return;
+    }
+
+    if (kind == 'private') {
+      final controller = TextEditingController();
+      final peerId = await GlassOverlays.showGlassDialog<int>(
+        context,
+        builder: (context) {
+          return AlertDialog(
+            title: const Text('Новый private чат'),
+            content: TextField(
+              controller: controller,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'ID пользователя'),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Отмена'),
+              ),
+              FilledButton(
+                onPressed: () {
+                  final id = int.tryParse(controller.text.trim());
+                  if (id == null || id <= 0) {
+                    Navigator.of(context).pop(null);
+                    return;
+                  }
+                  Navigator.of(context).pop(id);
+                },
+                child: const Text('Создать'),
+              ),
+            ],
+          );
+        },
+      );
+
+      if (!mounted) return;
+      if (peerId == null) {
+        if (controller.text.trim().isNotEmpty) {
+          showGlassSnack(
+            context,
+            'Укажите корректный ID пользователя',
+            kind: GlassSnackKind.error,
+          );
+        }
+        return;
+      }
+
+      try {
+        final repo = context.read<ChatsRepository>();
+        final chat = await repo.createPrivateChat(peerId);
+        if (!mounted) return;
+        await _reloadChats();
+        if (!mounted) return;
+        Navigator.of(
           context,
-          'Укажите корректный ID пользователя',
-          kind: GlassSnackKind.error,
-        );
+        ).push(adaptivePageRoute((_) => ChatPage(chat: chat)));
+      } catch (e) {
+        if (!mounted) return;
+        showGlassSnack(context, e.toString(), kind: GlassSnackKind.error);
       }
       return;
     }
 
+    final titleCtrl = TextEditingController();
+    final idsCtrl = TextEditingController();
+    final submitted = await GlassOverlays.showGlassDialog<bool>(
+      context,
+      builder: (context) {
+        return AlertDialog(
+          title: Text(kind == 'group' ? 'Новая группа' : 'Новый канал'),
+          content: SizedBox(
+            width: 360,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: titleCtrl,
+                  decoration: const InputDecoration(labelText: 'Название'),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: idsCtrl,
+                  keyboardType: TextInputType.text,
+                  decoration: const InputDecoration(
+                    labelText: 'ID участников через запятую',
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Отмена'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Создать'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (!mounted || submitted != true) return;
+    final title = titleCtrl.text.trim();
+    if (title.isEmpty) {
+      showGlassSnack(context, 'Укажите название', kind: GlassSnackKind.error);
+      return;
+    }
+
+    final memberIds = idsCtrl.text
+        .split(',')
+        .map((e) => int.tryParse(e.trim()) ?? 0)
+        .where((e) => e > 0)
+        .toSet()
+        .toList(growable: false);
+
     try {
       final repo = context.read<ChatsRepository>();
-      final chat = await repo.createPrivateChat(peerId);
+      final chat = kind == 'group'
+          ? await repo.createGroupChat(title: title, memberUserIds: memberIds)
+          : await repo.createChannel(title: title, memberUserIds: memberIds);
       if (!mounted) return;
       await _reloadChats();
       if (!mounted) return;
@@ -783,6 +889,14 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
           elevation: 0,
           flexibleSpace: const GlassAppBarBackground(),
           actions: [
+            IconButton(
+              icon: HugeIcon(
+                icon: HugeIcons.strokeRoundedAdd01,
+                color: theme.colorScheme.onSurface,
+                size: 24.0,
+              ),
+              onPressed: _createChatFlow,
+            ),
             IconButton(
               icon: HugeIcon(
                 icon: HugeIcons.strokeRoundedSettings01,

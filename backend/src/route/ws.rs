@@ -16,7 +16,7 @@ use tokio::{
 };
 
 use crate::AppState;
-use crate::middleware::{CurrentUser, ensure_member};
+use crate::middleware::{CurrentUser, ensure_can_send_message, ensure_member};
 use crate::models::auth::UserResponse;
 use crate::models::chats::{FileMetadata, Message};
 
@@ -452,21 +452,18 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                         metadata,
                         reply_to_message_id,
                     }) => {
-                        if !subs.joined.contains(&chat_id) {
-                            // safety: проверка членства
-                            if let Err(e) = ensure_member(&state, chat_id, user_id).await {
-                                let err_msg =
-                                    serde_json::to_string(&ServerEvent::Error { error: &e.1 })
-                                        .unwrap_or_else(|_| {
-                                            format!(
-                                                "{{\"type\":\"error\",\"error\":{}}}",
-                                                serde_json::to_string(&e.1)
-                                                    .unwrap_or_else(|_| "\"Ошибка\"".to_string())
-                                            )
-                                        });
-                                let _ = out_tx.send(WsMessage::Text(err_msg));
-                                continue;
-                            }
+                        if let Err(e) = ensure_can_send_message(&state, chat_id, user_id).await {
+                            let err_msg =
+                                serde_json::to_string(&ServerEvent::Error { error: &e.1 })
+                                    .unwrap_or_else(|_| {
+                                        format!(
+                                            "{{\"type\":\"error\",\"error\":{}}}",
+                                            serde_json::to_string(&e.1)
+                                                .unwrap_or_else(|_| "\"Ошибка\"".to_string())
+                                        )
+                                    });
+                            let _ = out_tx.send(WsMessage::Text(err_msg));
+                            continue;
                         }
 
                         let msg_type = message_type.unwrap_or_else(|| "text".to_string());
@@ -920,7 +917,8 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                             let _ = out_tx.send(WsMessage::Text(err_msg));
                             continue;
                         }
-                        if let Err(e) = ensure_member(&state, to_chat_id, user_id).await {
+                        if let Err(e) = ensure_can_send_message(&state, to_chat_id, user_id).await
+                        {
                             let err_msg =
                                 serde_json::to_string(&ServerEvent::Error { error: &e.1 })
                                     .unwrap_or_else(|_| {

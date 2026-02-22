@@ -68,3 +68,19 @@ class ChatPreview {
     required this.lastMessageAt,
   });
 }
+
+class ChatMember {
+  final int userId;
+  final String username;
+  final String avatarUrl;
+  final String role;
+  final DateTime joinedAt;
+
+  const ChatMember({
+    required this.userId,
+    required this.username,
+    required this.avatarUrl,
+    required this.role,
+    required this.joinedAt,
+  });
+}
