@@ -11,8 +11,8 @@ use zeroize::Zeroize;
 #[path = "mod.rs"]
 pub mod types;
 pub use types::{
-    AeadKey, CryptoError, DecryptedFileWithMessage, EncryptedFile, EncryptedFileWithMessage,
-    EncryptedMessage, KeyPair,
+    AeadKey, Argon2Config, CryptoError, DecryptedFileWithMessage, EncryptedFile,
+    EncryptedFileWithMessage, EncryptedMessage, IdentityKeyPair, KeyPair, SignedPublicKey,
 };
 
 // Helpers for base64
@@ -118,6 +118,314 @@ pub fn derive_key_from_string(secret: &str) -> Result<AeadKey, CryptoError> {
     let key = AeadKey::from_bytes(&out);
     out.zeroize();
     key
+}
+
+// ==============================
+// P0-3: Argon2id Recovery KDF Functions
+// ==============================
+
+/// P0-3: Derives a 32-byte recovery key using Argon2id (memory-hard KDF).
+/// 
+/// This function is designed for secure recovery key derivation from a mnemonic phrase
+/// or high-entropy recovery secret. It uses Argon2id with OWASP-recommended parameters:
+/// - Memory: 64 MiB
+/// - Iterations: 3
+/// - Parallelism: 4
+/// 
+/// # Arguments
+/// * `recovery_secret` - The recovery phrase or secret (must have >= 128 bits of entropy)
+/// * `salt_b64` - A unique salt (Base64-encoded, should be at least 16 bytes)
+/// 
+/// # Returns
+/// A 32-byte AEAD key suitable for encrypting/decrypting recovery data.
+/// 
+/// # Security Notes
+/// - The recovery_secret MUST have at least 128 bits of entropy
+/// - Use a unique, random salt for each user/recovery key
+/// - Store the salt alongside the encrypted recovery data (it's not secret)
+pub fn derive_recovery_key_argon2id(
+    recovery_secret: &str,
+    salt_b64: &str,
+) -> Result<AeadKey, CryptoError> {
+    derive_recovery_key_argon2id_with_config(recovery_secret, salt_b64, &Argon2Config::default())
+}
+
+/// P0-3: Derives a 32-byte recovery key using Argon2id with custom configuration.
+/// 
+/// This function allows fine-tuning of Argon2id parameters for specific security
+/// requirements or hardware constraints.
+/// 
+/// # Arguments
+/// * `recovery_secret` - The recovery phrase or secret
+/// * `salt_b64` - A unique salt (Base64-encoded)
+/// * `config` - Argon2 configuration (memory, iterations, parallelism)
+/// 
+/// # Returns
+/// A 32-byte AEAD key.
+pub fn derive_recovery_key_argon2id_with_config(
+    recovery_secret: &str,
+    salt_b64: &str,
+    config: &Argon2Config,
+) -> Result<AeadKey, CryptoError> {
+    use argon2::{Argon2, Params, Version};
+    
+    let mut salt = b64_decode(salt_b64)?;
+    if salt.len() < 16 {
+        return Err(CryptoError::InvalidKeyLen(format!(
+            "Salt must be at least 16 bytes, got {}",
+            salt.len()
+        )));
+    }
+    
+    // Validate Argon2 parameters
+    if config.memory_kib < 8 {
+        return Err(CryptoError::Argon2(
+            "Memory must be at least 8 KiB".into()
+        ));
+    }
+    if config.iterations < 1 {
+        return Err(CryptoError::Argon2(
+            "Iterations must be at least 1".into()
+        ));
+    }
+    if config.parallelism < 1 {
+        return Err(CryptoError::Argon2(
+            "Parallelism must be at least 1".into()
+        ));
+    }
+    
+    // Create Argon2id parameters
+    let params = Params::new(
+        config.memory_kib,
+        config.iterations,
+        config.parallelism,
+        Some(32), // Output length: 32 bytes
+    )
+    .map_err(|e| CryptoError::Argon2(format!("Invalid Argon2 parameters: {}", e)))?;
+    
+    // Create Argon2id instance with version 0x13 (v1.3)
+    let argon2 = Argon2::new(argon2::Algorithm::Argon2id, Version::V0x13, params);
+    
+    // Hash the recovery secret
+    let mut out = [0u8; 32];
+    argon2
+        .hash_password_into(recovery_secret.as_bytes(), &salt, &mut out)
+        .map_err(|e| CryptoError::Argon2(format!("Argon2 hashing failed: {}", e)))?;
+    
+    let key = AeadKey::from_bytes(&out);
+    out.zeroize();
+    salt.zeroize();
+    key
+}
+
+/// P0-3: Generate a secure random salt for Argon2id KDF.
+/// 
+/// Returns a Base64-encoded salt of the specified size.
+/// 
+/// # Arguments
+/// * `size_bytes` - Salt size in bytes (default: 16, minimum: 16)
+/// 
+/// # Returns
+/// Base64-encoded random salt.
+pub fn generate_recovery_salt(size_bytes: usize) -> Result<String, CryptoError> {
+    let size = size_bytes.max(16); // Minimum 16 bytes for security
+    let mut salt = vec![0u8; size];
+    getrandom::getrandom(&mut salt).expect("rand");
+    let salt_b64 = b64_encode(&salt);
+    salt.zeroize();
+    Ok(salt_b64)
+}
+
+/// P0-3: Validate that a recovery secret has sufficient entropy.
+/// 
+/// This is a basic check - in production, use proper entropy estimation.
+/// 
+/// # Arguments
+/// * `recovery_phrase` - The recovery phrase to validate
+/// 
+/// # Returns
+/// `Ok(true)` if the phrase appears to have >= 128 bits of entropy.
+pub fn validate_recovery_entropy(recovery_phrase: &str) -> Result<bool, CryptoError> {
+    let phrase = recovery_phrase.trim();
+    
+    // Check for word-based mnemonic (12 words = ~128 bits with BIP39)
+    let words: Vec<&str> = phrase.split_whitespace().collect();
+    if words.len() >= 12 {
+        return Ok(true);
+    }
+    
+    // Check for base64-like high-entropy string (22+ chars = ~128 bits)
+    if phrase.len() >= 22 && phrase.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/' || c == '=' || c == '-' || c == '_') {
+        return Ok(true);
+    }
+    
+    // Fallback: check character count for alphanumeric strings
+    // 20+ random alphanumeric chars ≈ 128 bits
+    if phrase.len() >= 20 && phrase.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Ok(true);
+    }
+    
+    Ok(false)
+}
+
+// ==============================
+// P0-2: Ed25519 Identity Key Functions for Key Authentication
+// ==============================
+
+/// P0-2: Generate an Ed25519 identity key pair for signing.
+/// 
+/// The identity key is used to sign X25519 public keys for authentication,
+/// preventing MITM attacks through key substitution.
+/// 
+/// # Returns
+/// IdentityKeyPair with Base64-encoded keys:
+/// - public_key: 32 bytes (Ed25519 public key)
+/// - private_key: 64 bytes (Ed25519 secret key with embedded public key)
+pub fn generate_identity_key_pair() -> Result<IdentityKeyPair, CryptoError> {
+    use ed25519_dalek::SigningKey;
+    
+    // Generate Ed25519 signing key
+    let mut secret_bytes = [0u8; 32];
+    getrandom::getrandom(&mut secret_bytes).expect("rand");
+    let signing_key = SigningKey::from_bytes(&secret_bytes);
+    let verifying_key = signing_key.verifying_key();
+    
+    Ok(IdentityKeyPair {
+        public_key: b64_encode(verifying_key.as_bytes()),
+        private_key: b64_encode(signing_key.to_keypair_bytes().as_slice()),
+    })
+}
+
+/// P0-2: Sign an X25519 public key with Ed25519 identity key.
+/// 
+/// Creates a cryptographic signature that binds the X25519 public key
+/// to the identity key, preventing MITM attacks.
+/// 
+/// # Arguments
+/// * `x25519_public_key_b64` - X25519 public key to sign (Base64, 32 bytes)
+/// * `identity_private_key_b64` - Ed25519 private key for signing (Base64, 64 bytes)
+/// * `key_version` - Version number for key rotation support
+/// 
+/// # Returns
+/// SignedPublicKey bundle with signature and metadata.
+pub fn sign_public_key(
+    x25519_public_key_b64: &str,
+    identity_private_key_b64: &str,
+    key_version: u32,
+) -> Result<SignedPublicKey, CryptoError> {
+    use ed25519_dalek::{SigningKey, Signature, Signer};
+    use chrono::Utc;
+    
+    // Decode keys
+    let id_key_bytes = b64_decode(identity_private_key_b64)?;
+    if id_key_bytes.len() != 64 {
+        return Err(CryptoError::InvalidKeyLen(format!(
+            "Identity private key must be 64 bytes, got {}",
+            id_key_bytes.len()
+        )));
+    }
+    
+    // Create signing key from keypair bytes
+    let signing_key = SigningKey::from_keypair_bytes(
+        &id_key_bytes.try_into().map_err(|_| CryptoError::InvalidKeyLen("Invalid key length".into()))?
+    )
+    .map_err(|e| CryptoError::Signature(format!("Invalid signing key: {}", e)))?;
+    
+    // Create message to sign: public_key || key_version
+    let pk_bytes = b64_decode(x25519_public_key_b64)?;
+    let version_bytes = key_version.to_le_bytes();
+    let mut message = Vec::with_capacity(pk_bytes.len() + version_bytes.len());
+    message.extend_from_slice(&pk_bytes);
+    message.extend_from_slice(&version_bytes);
+    
+    // Sign the message
+    let signature: Signature = signing_key.try_sign(&message)
+        .map_err(|e| CryptoError::Signature(format!("Signing failed: {}", e)))?;
+    
+    Ok(SignedPublicKey {
+        public_key: x25519_public_key_b64.to_string(),
+        signature: b64_encode(signature.to_bytes().as_slice()),
+        key_version,
+        signed_at: Utc::now().to_rfc3339(),
+    })
+}
+
+/// P0-2: Verify a signed X25519 public key.
+/// 
+/// Verifies that the signature was created by the holder of the identity
+/// private key, ensuring the public key hasn't been tampered with.
+/// 
+/// # Arguments
+/// * `signed_key` - The SignedPublicKey bundle to verify
+/// * `identity_public_key_b64` - Ed25519 public key for verification (Base64, 32 bytes)
+/// 
+/// # Returns
+/// `Ok(true)` if signature is valid, `Ok(false)` otherwise.
+pub fn verify_signed_public_key(
+    signed_key: &SignedPublicKey,
+    identity_public_key_b64: &str,
+) -> Result<bool, CryptoError> {
+    use ed25519_dalek::{VerifyingKey, Signature, Verifier};
+    
+    // Decode identity public key
+    let id_key_bytes = b64_decode(identity_public_key_b64)?;
+    if id_key_bytes.len() != 32 {
+        return Err(CryptoError::InvalidKeyLen(format!(
+            "Identity public key must be 32 bytes, got {}",
+            id_key_bytes.len()
+        )));
+    }
+    
+    // Decode signature
+    let sig_bytes = b64_decode(&signed_key.signature)?;
+    if sig_bytes.len() != 64 {
+        return Err(CryptoError::InvalidKeyLen(format!(
+            "Signature must be 64 bytes, got {}",
+            sig_bytes.len()
+        )));
+    }
+    
+    // Create verifying key
+    let key_array: [u8; 32] = id_key_bytes.try_into()
+        .map_err(|_| CryptoError::InvalidKeyLen("Invalid key length".into()))?;
+    let verifying_key = VerifyingKey::from_bytes(&key_array)
+        .map_err(|e| CryptoError::Signature(format!("Invalid identity key: {}", e)))?;
+    
+    // Create signature
+    let mut sig_bytes_arr = [0u8; 64];
+    sig_bytes_arr.copy_from_slice(&sig_bytes);
+    let signature = Signature::from_bytes(&sig_bytes_arr);
+    
+    // Reconstruct message
+    let pk_bytes = b64_decode(&signed_key.public_key)?;
+    let version_bytes = signed_key.key_version.to_le_bytes();
+    let mut message = Vec::with_capacity(pk_bytes.len() + version_bytes.len());
+    message.extend_from_slice(&pk_bytes);
+    message.extend_from_slice(&version_bytes);
+    
+    // Verify signature
+    match verifying_key.verify(&message, &signature) {
+        Ok(_) => Ok(true),
+        Err(_) => Ok(false),
+    }
+}
+
+/// P0-2: Import Ed25519 identity public key from Base64.
+/// 
+/// # Arguments
+/// * `b64` - Base64-encoded Ed25519 public key (32 bytes)
+/// 
+/// # Returns
+/// Result with success status or error message.
+pub fn import_identity_public_key(b64: &str) -> Result<(), CryptoError> {
+    let bytes = b64_decode(b64)?;
+    if bytes.len() != 32 {
+        return Err(CryptoError::InvalidKeyLen(format!(
+            "Identity public key must be 32 bytes, got {}",
+            bytes.len()
+        )));
+    }
+    Ok(())
 }
 
 /// Шифрует строку и возвращает Base64-последовательность: nonce(12) || ciphertext.

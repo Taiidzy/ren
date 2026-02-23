@@ -7,9 +7,10 @@ use zeroize::Zeroize;
 
 use crate::crypto::{
     decrypt_data, decrypt_file, decrypt_file_raw, decrypt_message, derive_key_from_password,
-    derive_key_from_string, encrypt_data, encrypt_file, encrypt_message, generate_key_pair,
+    derive_key_from_string, derive_recovery_key_argon2id, generate_recovery_salt,
+    encrypt_data, encrypt_file, encrypt_message, generate_key_pair,
     generate_message_encryption_key, generate_nonce, generate_salt, unwrap_symmetric_key,
-    wrap_symmetric_key,
+    wrap_symmetric_key, validate_recovery_entropy,
 };
 
 // ============================================================================
@@ -263,6 +264,84 @@ pub extern "C" fn ren_derive_key_from_string(secret: *const c_char) -> *mut c_ch
                 out
             }
             Err(_) => ptr::null_mut(),
+        }
+    })
+}
+
+// ============================================================================
+// P0-3: Argon2id Recovery KDF FFI Functions
+// ============================================================================
+
+/// P0-3: Derive a recovery key using Argon2id (memory-hard KDF).
+/// 
+/// # Arguments
+/// * `recovery_secret` - Recovery phrase or high-entropy secret (UTF-8 C string)
+/// * `salt_b64` - Salt encoded as Base64 (UTF-8 C string)
+/// 
+/// # Returns
+/// Base64-encoded 32-byte key, or null pointer on error.
+#[no_mangle]
+pub extern "C" fn ren_derive_recovery_key_argon2id(
+    recovery_secret: *const c_char,
+    salt_b64: *const c_char,
+) -> *mut c_char {
+    ffi_catch(ptr::null_mut(), || {
+        let secret = match c_str_to_str(recovery_secret) {
+            Some(s) => s,
+            None => return ptr::null_mut(),
+        };
+        let salt = match c_str_to_str(salt_b64) {
+            Some(s) => s,
+            None => return ptr::null_mut(),
+        };
+
+        match derive_recovery_key_argon2id(&secret, &salt) {
+            Ok(key) => {
+                let mut bytes = key.to_bytes();
+                let out = rust_str_to_c(general_purpose::STANDARD.encode(&bytes));
+                bytes.zeroize();
+                out
+            }
+            Err(_) => ptr::null_mut(),
+        }
+    })
+}
+
+/// P0-3: Generate a secure random salt for recovery KDF.
+/// 
+/// # Arguments
+/// * `size_bytes` - Size of salt in bytes (minimum 16)
+/// 
+/// # Returns
+/// Base64-encoded salt, or null pointer on error.
+#[no_mangle]
+pub extern "C" fn ren_generate_recovery_salt(size_bytes: u32) -> *mut c_char {
+    ffi_catch(ptr::null_mut(), || {
+        match generate_recovery_salt(size_bytes as usize) {
+            Ok(salt_b64) => rust_str_to_c(salt_b64),
+            Err(_) => ptr::null_mut(),
+        }
+    })
+}
+
+/// P0-3: Validate recovery phrase entropy.
+/// 
+/// # Arguments
+/// * `recovery_phrase` - Recovery phrase to validate (UTF-8 C string)
+/// 
+/// # Returns
+/// 1 if valid (>= 128 bits entropy), 0 if invalid.
+#[no_mangle]
+pub extern "C" fn ren_validate_recovery_entropy(recovery_phrase: *const c_char) -> i32 {
+    ffi_catch(0, || {
+        let phrase = match c_str_to_str(recovery_phrase) {
+            Some(s) => s,
+            None => return 0,
+        };
+
+        match validate_recovery_entropy(&phrase) {
+            Ok(valid) => if valid { 1 } else { 0 },
+            Err(_) => 0,
         }
     })
 }
