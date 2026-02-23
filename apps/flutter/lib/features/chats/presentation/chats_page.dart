@@ -1,18 +1,20 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'package:hugeicons/hugeicons.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
 import 'package:ren/features/chats/data/chats_repository.dart';
 import 'package:ren/features/chats/domain/chat_models.dart';
+import 'package:ren/features/chats/presentation/controllers/chats_chat_actions_controller.dart';
+import 'package:ren/features/chats/presentation/controllers/chats_realtime_coordinator.dart';
+import 'package:ren/features/chats/presentation/controllers/chats_top_banner_controller.dart';
+import 'package:ren/features/chats/presentation/controllers/chats_user_search_controller.dart';
 import 'package:ren/features/chats/presentation/chat_page.dart';
+import 'package:ren/features/chats/presentation/widgets/chat_group_channel_sheets.dart';
 import 'package:ren/features/profile/presentation/profile_menu_page.dart';
-import 'package:ren/features/profile/presentation/widgets/profile_edit_sheet.dart';
 
 import 'package:ren/core/constants/api_url.dart';
 import 'package:ren/core/constants/keys.dart';
@@ -119,22 +121,19 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
   bool _isInitialChatsLoading = true;
   final Map<String, bool> _online = {};
   final Map<int, ChatPreview> _chatIndex = {};
-  RealtimeClient? _rt;
-  StreamSubscription? _rtSub;
+  late final ChatsRealtimeCoordinator _realtimeCoordinator;
   final TextEditingController _searchCtrl = TextEditingController();
-  Timer? _searchDebounce;
+  late final ChatsChatActionsController _chatActionsController;
+  late final ChatsTopBannerController _topBannerController;
+  late final ChatsUserSearchController _userSearchController;
   String _query = '';
   List<ChatUser> _userResults = const [];
   bool _isSearchingUsers = false;
   String? _userSearchError;
-  int _userSearchSeq = 0;
   int _myUserId = 0;
 
   bool _isForeground = true;
   int? _currentOpenChatId;
-
-  OverlayEntry? _topBanner;
-  Timer? _topBannerTimer;
 
   Future<void> _reloadChats() async {
     await _syncChats();
@@ -232,25 +231,7 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
       setState(() {
         _currentOpenChatId = chatId;
         _chats = _chats
-            .map(
-              (c) => c.id == chat.id
-                  ? ChatPreview(
-                      id: c.id,
-                      peerId: c.peerId,
-                      kind: c.kind,
-                      user: c.user,
-                      isFavorite: c.isFavorite,
-                      lastMessage: c.lastMessage,
-                      lastMessageAt: c.lastMessageAt,
-                      unreadCount: 0,
-                      myRole: c.myRole,
-                      lastMessageIsMine: c.lastMessageIsMine,
-                      lastMessageIsPending: c.lastMessageIsPending,
-                      lastMessageIsDelivered: c.lastMessageIsDelivered,
-                      lastMessageIsRead: c.lastMessageIsRead,
-                    )
-                  : c,
-            )
+            .map((c) => c.id == chat.id ? c.copyWith(unreadCount: 0) : c)
             .toList(growable: false);
       });
     }
@@ -263,6 +244,13 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
       _currentOpenChatId = null;
     });
     await _syncChats();
+  }
+
+  Future<void> _handleCreatedChat(ChatPreview chat) async {
+    if (!mounted) return;
+    await _reloadChats();
+    if (!mounted) return;
+    await _openChat(chat);
   }
 
   Future<void> _loadChatsOfflineFirst() async {
@@ -314,38 +302,46 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
     }
   }
 
+  void _onSearchTextChanged() {
+    _userSearchController.onTextChanged(_searchCtrl.text);
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _realtimeCoordinator = ChatsRealtimeCoordinator(
+      context.read<RealtimeClient>(),
+    );
+    _chatActionsController = ChatsChatActionsController(
+      context.read<ChatsRepository>(),
+    );
+    _topBannerController = ChatsTopBannerController();
+    _userSearchController = ChatsUserSearchController(
+      repo: context.read<ChatsRepository>(),
+      onChanged: (snapshot) {
+        if (!mounted) return;
+        setState(() {
+          _query = snapshot.query;
+          _isSearchingUsers = snapshot.isSearching;
+          _userSearchError = snapshot.error;
+          _userResults = snapshot.users;
+        });
+      },
+    );
     unawaited(_loadMyUserId());
     unawaited(_loadChatsOfflineFirst());
-    _searchCtrl.addListener(() {
-      _searchDebounce?.cancel();
-      _searchDebounce = Timer(const Duration(milliseconds: 250), () {
-        final next = _searchCtrl.text.trim();
-        if (next == _query) return;
-        setState(() {
-          _query = next;
-        });
-        _runUserSearch(next);
-      });
-    });
+    _searchCtrl.addListener(_onSearchTextChanged);
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _topBannerTimer?.cancel();
-    _topBannerTimer = null;
-    _topBanner?.remove();
-    _topBanner = null;
-    _searchDebounce?.cancel();
-    _searchDebounce = null;
+    _topBannerController.dispose();
+    _searchCtrl.removeListener(_onSearchTextChanged);
+    _userSearchController.dispose();
     _searchCtrl.dispose();
-    _rtSub?.cancel();
-    _rtSub = null;
-    _rt = null;
+    unawaited(_realtimeCoordinator.dispose());
     super.dispose();
   }
 
@@ -362,153 +358,15 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
     required VoidCallback onTap,
     Duration duration = const Duration(seconds: 3),
   }) {
-    _topBannerTimer?.cancel();
-    _topBannerTimer = null;
-    _topBanner?.remove();
-    _topBanner = null;
-
-    final overlay = Overlay.of(context);
-
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final baseInk = isDark ? Colors.white : Colors.black;
-
-    late final OverlayEntry entry;
-    entry = OverlayEntry(
-      builder: (ctx) {
-        return SafeArea(
-          child: Align(
-            alignment: Alignment.topCenter,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
-              child: Material(
-                color: Colors.transparent,
-                child: GestureDetector(
-                  onTap: () {
-                    entry.remove();
-                    if (_topBanner == entry) {
-                      _topBanner = null;
-                    }
-                    onTap();
-                  },
-                  child: GlassSurface(
-                    borderRadius: 18,
-                    blurSigma: 14,
-                    borderColor: baseInk.withOpacity(isDark ? 0.18 : 0.10),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 14,
-                      vertical: 12,
-                    ),
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 520),
-                      child: Row(
-                        children: [
-                          RenAvatar(
-                            url: avatarUrl,
-                            name: avatarName,
-                            isOnline: false,
-                            size: 34,
-                            onlineDotSize: 0,
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  title,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: theme.textTheme.titleSmall?.copyWith(
-                                    fontWeight: FontWeight.w800,
-                                    color: theme.colorScheme.onSurface,
-                                  ),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  body,
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: theme.textTheme.bodySmall?.copyWith(
-                                    color: theme.colorScheme.onSurface
-                                        .withOpacity(0.85),
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Icon(
-                            Icons.chevron_right,
-                            size: 18,
-                            color: theme.colorScheme.onSurface.withOpacity(
-                              0.65,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-      },
+    _topBannerController.show(
+      context: context,
+      title: title,
+      body: body,
+      avatarUrl: avatarUrl,
+      avatarName: avatarName,
+      onTap: onTap,
+      duration: duration,
     );
-
-    _topBanner = entry;
-    overlay.insert(entry);
-
-    _topBannerTimer = Timer(duration, () {
-      entry.remove();
-      if (_topBanner == entry) {
-        _topBanner = null;
-      }
-    });
-  }
-
-  void _runUserSearch(String query) {
-    final q = query.trim();
-    final seq = ++_userSearchSeq;
-
-    if (q.isEmpty) {
-      setState(() {
-        _isSearchingUsers = false;
-        _userSearchError = null;
-        _userResults = const [];
-      });
-      return;
-    }
-
-    setState(() {
-      _isSearchingUsers = true;
-      _userSearchError = null;
-    });
-
-    final repo = context.read<ChatsRepository>();
-    repo
-        .searchUsers(q)
-        .then((users) {
-          if (!mounted) return;
-          if (seq != _userSearchSeq) return;
-          setState(() {
-            _isSearchingUsers = false;
-            _userSearchError = null;
-            _userResults = users;
-          });
-        })
-        .catchError((e) {
-          if (!mounted) return;
-          if (seq != _userSearchSeq) return;
-          setState(() {
-            _isSearchingUsers = false;
-            _userSearchError = e.toString();
-            _userResults = const [];
-          });
-        });
   }
 
   Future<void> _showChatActionsAt(
@@ -517,9 +375,8 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
   ) async {
     final chatId = int.tryParse(chat.id) ?? 0;
     if (chatId <= 0) return;
-    final kind = chat.kind.trim().toLowerCase();
-    final isGroupOrChannel = kind == 'group' || kind == 'channel';
-    final isOwner = chat.myRole.trim().toLowerCase() == 'owner';
+    final isGroupOrChannel = _isGroupOrChannel(chat);
+    final isOwner = _isOwner(chat);
 
     final action = await RenContextMenu.show<String>(
       context,
@@ -569,69 +426,104 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
     if (action == null) return;
 
     if (action == 'favorite') {
-      try {
-        final repo = context.read<ChatsRepository>();
-        await repo.setFavorite(chatId, favorite: !chat.isFavorite);
-        await _reloadChats();
-      } catch (e) {
-        if (!mounted) return;
-        showGlassSnack(context, e.toString(), kind: GlassSnackKind.error);
-      }
+      await _handleFavoriteAction(chat);
       return;
     }
 
     if (action == 'edit_chat') {
-      final updated = await showModalBottomSheet<bool>(
-        context: context,
-        isScrollControlled: true,
-        backgroundColor: Colors.transparent,
-        builder: (_) => _EditGroupChannelSheet(chat: chat),
-      );
-      if (updated == true) {
-        await _reloadChats();
-      }
+      await _handleEditAction(chat);
       return;
     }
 
     if (action == 'leave_or_delete' || action == 'delete_for_all') {
-      final isDeleteForAll = action == 'delete_for_all';
-      final confirm = await GlassOverlays.showGlassDialog<bool>(
-        context,
-        builder: (dctx) {
-          return GlassConfirmDialog(
-            title: isDeleteForAll
-                ? 'Удалить чат для всех?'
-                : (isGroupOrChannel ? 'Выйти из чата?' : 'Удалить чат?'),
-            text: isDeleteForAll
-                ? 'Чат/канал будет удалён для всех участников. Действие необратимо.'
-                : (isGroupOrChannel
-                      ? 'Вы покинете этот чат/канал. Вернуться можно только после повторного добавления.'
-                      : 'Чат будет удалён из вашего списка.'),
-            confirmLabel: isDeleteForAll
-                ? 'Удалить для всех'
-                : (isGroupOrChannel ? 'Выйти' : 'Удалить'),
-            onConfirm: () => Navigator.of(dctx).pop(true),
-          );
-        },
+      await _handleDeleteAction(
+        chat: chat,
+        isGroupOrChannel: isGroupOrChannel,
+        isDeleteForAll: action == 'delete_for_all',
       );
-
-      if (confirm != true) return;
-      if (!mounted) return;
-      try {
-        final repo = context.read<ChatsRepository>();
-        await repo.deleteChat(chatId, forAll: isDeleteForAll);
-        await _reloadChats();
-      } catch (e) {
-        if (!mounted) return;
-        showGlassSnack(context, e.toString(), kind: GlassSnackKind.error);
-      }
     }
   }
 
-  Future<void> _ensureRealtime(List<ChatPreview> chats) async {
-    _rt ??= context.read<RealtimeClient>();
-    final rt = _rt!;
+  bool _isGroupOrChannel(ChatPreview chat) {
+    final kind = chat.kind.trim().toLowerCase();
+    return kind == 'group' || kind == 'channel';
+  }
 
+  bool _isOwner(ChatPreview chat) {
+    return chat.myRole.trim().toLowerCase() == 'owner';
+  }
+
+  Future<void> _handleFavoriteAction(ChatPreview chat) async {
+    try {
+      await _chatActionsController.toggleFavorite(chat);
+      await _reloadChats();
+    } catch (e) {
+      if (!mounted) return;
+      showGlassSnack(context, e.toString(), kind: GlassSnackKind.error);
+    }
+  }
+
+  Future<void> _handleEditAction(ChatPreview chat) async {
+    final updated = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => EditGroupChannelSheet(chat: chat),
+    );
+    if (updated == true) {
+      await _reloadChats();
+    }
+  }
+
+  Future<void> _handleDeleteAction({
+    required ChatPreview chat,
+    required bool isGroupOrChannel,
+    required bool isDeleteForAll,
+  }) async {
+    final confirm = await _showDeleteChatConfirmDialog(
+      isGroupOrChannel: isGroupOrChannel,
+      isDeleteForAll: isDeleteForAll,
+    );
+    if (confirm != true || !mounted) return;
+
+    try {
+      await _chatActionsController.deleteOrLeaveChat(
+        chat: chat,
+        forAll: isDeleteForAll,
+      );
+      await _reloadChats();
+    } catch (e) {
+      if (!mounted) return;
+      showGlassSnack(context, e.toString(), kind: GlassSnackKind.error);
+    }
+  }
+
+  Future<bool?> _showDeleteChatConfirmDialog({
+    required bool isGroupOrChannel,
+    required bool isDeleteForAll,
+  }) {
+    return GlassOverlays.showGlassDialog<bool>(
+      context,
+      builder: (dctx) {
+        return GlassConfirmDialog(
+          title: isDeleteForAll
+              ? 'Удалить чат для всех?'
+              : (isGroupOrChannel ? 'Выйти из чата?' : 'Удалить чат?'),
+          text: isDeleteForAll
+              ? 'Чат/канал будет удалён для всех участников. Действие необратимо.'
+              : (isGroupOrChannel
+                    ? 'Вы покинете этот чат/канал. Вернуться можно только после повторного добавления.'
+                    : 'Чат будет удалён из вашего списка.'),
+          confirmLabel: isDeleteForAll
+              ? 'Удалить для всех'
+              : (isGroupOrChannel ? 'Выйти' : 'Удалить'),
+          onConfirm: () => Navigator.of(dctx).pop(true),
+        );
+      },
+    );
+  }
+
+  Future<void> _ensureRealtime(List<ChatPreview> chats) async {
     _chatIndex
       ..clear()
       ..addEntries(
@@ -640,263 +532,247 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
             .where((e) => e.key > 0),
       );
 
-    if (!rt.isConnected) {
-      await rt.connect();
+    await _realtimeCoordinator.ensureConnected(
+      chats: chats,
+      onEvent: _handleRealtimeEvent,
+    );
+  }
+
+  Future<void> _handleRealtimeEvent(RealtimeEvent evt) async {
+    if (!_mounted) return;
+    _handleMessageSyncEvents(evt.type);
+    switch (evt.type) {
+      case 'connection':
+        _handleConnectionEvent(evt);
+        return;
+      case 'presence':
+        _handlePresenceEvent(evt);
+        return;
+      case 'chat_created':
+        await _handleChatCreatedEvent(evt);
+        return;
+      case 'member_added':
+      case 'member_removed':
+      case 'member_role_changed':
+        await _handleMemberEvent(evt);
+        return;
+      case 'chat_updated':
+        unawaited(_syncChats());
+        return;
+      case 'profile_updated':
+        _handleProfileUpdatedEvent(evt);
+        return;
+      case 'message_new':
+        await _handleIncomingMessageEvent(evt);
+        return;
+      default:
+        return;
     }
+  }
 
-    final contacts = <int>[];
-    for (final c in chats) {
-      final pid = c.peerId;
-      if (pid != null && pid > 0) contacts.add(pid);
+  bool get _mounted => mounted;
+
+  void _handleMessageSyncEvents(String eventType) {
+    if (eventType == 'message_new' ||
+        eventType == 'message_updated' ||
+        eventType == 'message_deleted' ||
+        eventType == 'message_delivered' ||
+        eventType == 'message_read') {
+      unawaited(_syncChats());
     }
-    rt.setContacts(contacts);
+  }
 
-    _rtSub ??= rt.events.listen((evt) async {
-      if (evt.type == 'connection') {
-        final reconnected = evt.data['reconnected'] == true;
-        if (reconnected) {
-          unawaited(_syncChats());
-        }
-        return;
-      }
+  void _handleConnectionEvent(RealtimeEvent evt) {
+    final reconnected = evt.data['reconnected'] == true;
+    if (reconnected) {
+      unawaited(_syncChats());
+    }
+  }
 
-      if (evt.type == 'presence') {
-        final userId = evt.data['user_id'];
-        final status = (evt.data['status'] as String?) ?? '';
-        final idStr = '$userId';
-        final isOnline = status == 'online';
-        if (_online[idStr] != isOnline) {
-          setState(() {
-            _online[idStr] = isOnline;
-          });
-        }
-      }
-
-      if (evt.type == 'message_new' ||
-          evt.type == 'message_updated' ||
-          evt.type == 'message_deleted' ||
-          evt.type == 'message_delivered' ||
-          evt.type == 'message_read') {
-        unawaited(_syncChats());
-      }
-
-      if (evt.type == 'chat_created') {
-        final chatId = int.tryParse(
-          '${evt.data['chat_id'] ?? evt.data['chatId'] ?? 0}',
-        );
-        final kind = '${evt.data['kind'] ?? 'group'}';
-        final title = (evt.data['title'] as String?)?.trim();
-        final createdBy = int.tryParse(
-          '${evt.data['created_by'] ?? evt.data['createdBy'] ?? 0}',
-        );
-        if (chatId != null && chatId > 0 && _chatIndex[chatId] == null) {
-          if (!mounted) return;
-          setState(() {
-            final preview = _placeholderChatFromRealtime(
-              chatId: chatId,
-              kind: kind,
-              title: title,
-            );
-            _chats = [preview, ..._chats];
-            _rebuildChatIndexFromCurrentChats();
-          });
-        }
-        if ((createdBy ?? 0) != _myUserId && mounted) {
-          showGlassSnack(
-            context,
-            'Добавлен новый чат: ${(title != null && title.isNotEmpty) ? title : "Без названия"}',
-            kind: GlassSnackKind.info,
-          );
-        }
-        unawaited(_syncChats());
-        return;
-      }
-
-      if (evt.type == 'member_added' ||
-          evt.type == 'member_removed' ||
-          evt.type == 'member_role_changed') {
-        final chatId = int.tryParse(
-          '${evt.data['chat_id'] ?? evt.data['chatId'] ?? 0}',
-        );
-        final targetUserId = int.tryParse(
-          '${evt.data['user_id'] ?? evt.data['userId'] ?? 0}',
-        );
-        if (!mounted) return;
-        if (chatId != null &&
-            chatId > 0 &&
-            targetUserId != null &&
-            targetUserId == _myUserId) {
-          if (evt.type == 'member_added' && _chatIndex[chatId] == null) {
-            if (!mounted) return;
-            setState(() {
-              final preview = _placeholderChatFromRealtime(
-                chatId: chatId,
-                kind: 'group',
-                title: null,
-              );
-              _chats = [preview, ..._chats];
-              _rebuildChatIndexFromCurrentChats();
-            });
-            showGlassSnack(
-              context,
-              'Вас добавили в чат',
-              kind: GlassSnackKind.info,
-            );
-          } else if (evt.type == 'member_removed') {
-            if (!mounted) return;
-            setState(() {
-              _chats = _chats
-                  .where((c) => (int.tryParse(c.id) ?? 0) != chatId)
-                  .toList(growable: false);
-              _rebuildChatIndexFromCurrentChats();
-            });
-            showGlassSnack(
-              context,
-              'Вас удалили из чата',
-              kind: GlassSnackKind.info,
-            );
-          } else if (evt.type == 'member_role_changed') {
-            showGlassSnack(
-              context,
-              'Ваша роль в чате обновлена',
-              kind: GlassSnackKind.info,
-            );
-          }
-        }
-        unawaited(_syncChats());
-        return;
-      }
-
-      if (evt.type == 'chat_updated') {
-        unawaited(_syncChats());
-        return;
-      }
-
-      if (evt.type == 'profile_updated') {
-        final userDyn = evt.data['user'];
-        if (userDyn is! Map) return;
-        final u = (userDyn is Map<String, dynamic>)
-            ? userDyn
-            : Map<String, dynamic>.fromEntries(
-                userDyn.entries.map((e) => MapEntry(e.key.toString(), e.value)),
-              );
-        final uid = (u['id'] is int)
-            ? u['id'] as int
-            : int.tryParse('${u['id'] ?? ''}') ?? 0;
-        if (uid <= 0) return;
-        final username = ((u['username'] as String?) ?? '').trim();
-        final nickname = ((u['nickname'] as String?) ?? '').trim();
-        final avatarRaw = ((u['avatar'] as String?) ?? '').trim();
-        final avatarUrl = avatarRaw.isEmpty ? '' : _avatarUrl(avatarRaw);
-        if (!mounted) return;
-        setState(() {
-          _chats = _chats
-              .map((c) {
-                if ((c.peerId ?? 0) != uid) return c;
-                return ChatPreview(
-                  id: c.id,
-                  peerId: c.peerId,
-                  kind: c.kind,
-                  user: ChatUser(
-                    id: c.user.id,
-                    name: nickname.isNotEmpty
-                        ? nickname
-                        : (username.isNotEmpty ? username : c.user.name),
-                    nickname: nickname.isNotEmpty ? nickname : null,
-                    avatarUrl: avatarUrl.isNotEmpty
-                        ? avatarUrl
-                        : c.user.avatarUrl,
-                    isOnline: c.user.isOnline,
-                  ),
-                  isFavorite: c.isFavorite,
-                  lastMessage: c.lastMessage,
-                  lastMessageAt: c.lastMessageAt,
-                  unreadCount: c.unreadCount,
-                  myRole: c.myRole,
-                  lastMessageIsMine: c.lastMessageIsMine,
-                  lastMessageIsPending: c.lastMessageIsPending,
-                  lastMessageIsDelivered: c.lastMessageIsDelivered,
-                  lastMessageIsRead: c.lastMessageIsRead,
-                );
-              })
-              .toList(growable: false);
-          _rebuildChatIndexFromCurrentChats();
-        });
-        return;
-      }
-
-      if (evt.type == 'message_new') {
-        final repo = context.read<ChatsRepository>();
-        final chatIdDyn = evt.data['chat_id'] ?? evt.data['chatId'];
-        final chatId = (chatIdDyn is int)
-            ? chatIdDyn
-            : int.tryParse('$chatIdDyn') ?? 0;
-        if (chatId <= 0) return;
-
-        final msg = evt.data['message'];
-        if (msg is! Map) return;
-
-        final m = (msg is Map<String, dynamic>)
-            ? msg
-            : Map<String, dynamic>.fromEntries(
-                msg.entries.map((e) => MapEntry(e.key.toString(), e.value)),
-              );
-        final senderId = (m['sender_id'] is int)
-            ? m['sender_id'] as int
-            : int.tryParse('${m['sender_id'] ?? ''}') ?? 0;
-        if (_myUserId > 0 && senderId == _myUserId) {
-          return;
-        }
-
-        // Не показываем уведомление если пользователь находится в этом чате
-        if (_currentOpenChatId == chatId) {
-          return;
-        }
-
-        final decoded = await repo.decryptIncomingWsMessageFull(message: m);
-        final hasAttachments = decoded.attachments.isNotEmpty;
-        final chat = _chatIndex[chatId];
-        final title = (chat?.user.name ?? '').trim().isNotEmpty
-            ? (chat!.user.name)
-            : 'Новое сообщение';
-
-        final body = decoded.text.trim().isNotEmpty
-            ? decoded.text.trim()
-            : (hasAttachments ? 'Вложение' : 'Сообщение');
-
-        if (!mounted) return;
-        final notificationsSettings = context.read<NotificationsSettings>();
-
-        if (_isForeground) {
-          if (notificationsSettings.inAppSoundEnabled) {
-            SystemSound.play(SystemSoundType.click);
-          }
-          if (notificationsSettings.inAppBannersEnabled) {
-            _showTopGlassBanner(
-              title: title,
-              body: body,
-              avatarUrl: chat?.user.avatarUrl ?? '',
-              avatarName: chat?.user.name ?? title,
-              onTap: () {
-                final c = _chatIndex[chatId];
-                if (c == null) return;
-                _openChat(c);
-              },
-            );
-          }
-        } else {
-          await LocalNotifications.instance.showMessageNotification(
-            chatId: chatId,
-            title: title,
-            body: body,
-            avatarUrl: chat?.user.avatarUrl,
-            senderName: chat?.user.name,
-          );
-        }
-
-        return;
-      }
+  void _handlePresenceEvent(RealtimeEvent evt) {
+    final userId = evt.data['user_id'];
+    final status = (evt.data['status'] as String?) ?? '';
+    final idStr = '$userId';
+    final isOnline = status == 'online';
+    if (_online[idStr] == isOnline) return;
+    setState(() {
+      _online[idStr] = isOnline;
     });
+  }
+
+  Future<void> _handleChatCreatedEvent(RealtimeEvent evt) async {
+    final chatId = int.tryParse(
+      '${evt.data['chat_id'] ?? evt.data['chatId'] ?? 0}',
+    );
+    final kind = '${evt.data['kind'] ?? 'group'}';
+    final title = (evt.data['title'] as String?)?.trim();
+    final createdBy = int.tryParse(
+      '${evt.data['created_by'] ?? evt.data['createdBy'] ?? 0}',
+    );
+
+    if (chatId != null && chatId > 0 && _chatIndex[chatId] == null) {
+      setState(() {
+        final preview = _placeholderChatFromRealtime(
+          chatId: chatId,
+          kind: kind,
+          title: title,
+        );
+        _chats = [preview, ..._chats];
+        _rebuildChatIndexFromCurrentChats();
+      });
+    }
+
+    if ((createdBy ?? 0) != _myUserId) {
+      showGlassSnack(
+        context,
+        'Добавлен новый чат: ${(title != null && title.isNotEmpty) ? title : "Без названия"}',
+        kind: GlassSnackKind.info,
+      );
+    }
+    unawaited(_syncChats());
+  }
+
+  Future<void> _handleMemberEvent(RealtimeEvent evt) async {
+    final chatId = int.tryParse(
+      '${evt.data['chat_id'] ?? evt.data['chatId'] ?? 0}',
+    );
+    final targetUserId = int.tryParse(
+      '${evt.data['user_id'] ?? evt.data['userId'] ?? 0}',
+    );
+    if (chatId == null ||
+        chatId <= 0 ||
+        targetUserId == null ||
+        targetUserId != _myUserId) {
+      unawaited(_syncChats());
+      return;
+    }
+
+    if (evt.type == 'member_added' && _chatIndex[chatId] == null) {
+      setState(() {
+        final preview = _placeholderChatFromRealtime(
+          chatId: chatId,
+          kind: 'group',
+          title: null,
+        );
+        _chats = [preview, ..._chats];
+        _rebuildChatIndexFromCurrentChats();
+      });
+      showGlassSnack(context, 'Вас добавили в чат', kind: GlassSnackKind.info);
+    } else if (evt.type == 'member_removed') {
+      setState(() {
+        _chats = _chats
+            .where((c) => (int.tryParse(c.id) ?? 0) != chatId)
+            .toList(growable: false);
+        _rebuildChatIndexFromCurrentChats();
+      });
+      showGlassSnack(context, 'Вас удалили из чата', kind: GlassSnackKind.info);
+    } else if (evt.type == 'member_role_changed') {
+      showGlassSnack(
+        context,
+        'Ваша роль в чате обновлена',
+        kind: GlassSnackKind.info,
+      );
+    }
+    unawaited(_syncChats());
+  }
+
+  void _handleProfileUpdatedEvent(RealtimeEvent evt) {
+    final userDyn = evt.data['user'];
+    if (userDyn is! Map) return;
+    final user = (userDyn is Map<String, dynamic>)
+        ? userDyn
+        : Map<String, dynamic>.fromEntries(
+            userDyn.entries.map((e) => MapEntry(e.key.toString(), e.value)),
+          );
+    final uid = (user['id'] is int)
+        ? user['id'] as int
+        : int.tryParse('${user['id'] ?? ''}') ?? 0;
+    if (uid <= 0) return;
+
+    final username = ((user['username'] as String?) ?? '').trim();
+    final nickname = ((user['nickname'] as String?) ?? '').trim();
+    final avatarRaw = ((user['avatar'] as String?) ?? '').trim();
+    final avatarUrl = avatarRaw.isEmpty ? '' : _avatarUrl(avatarRaw);
+    setState(() {
+      _chats = _chats
+          .map((c) {
+            if ((c.peerId ?? 0) != uid) return c;
+            return c.copyWith(
+              user: c.user.copyWith(
+                name: nickname.isNotEmpty
+                    ? nickname
+                    : (username.isNotEmpty ? username : c.user.name),
+                nickname: nickname.isNotEmpty ? nickname : null,
+                avatarUrl: avatarUrl.isNotEmpty ? avatarUrl : c.user.avatarUrl,
+              ),
+            );
+          })
+          .toList(growable: false);
+      _rebuildChatIndexFromCurrentChats();
+    });
+  }
+
+  Future<void> _handleIncomingMessageEvent(RealtimeEvent evt) async {
+    final repo = context.read<ChatsRepository>();
+    final chatIdDyn = evt.data['chat_id'] ?? evt.data['chatId'];
+    final chatId = (chatIdDyn is int)
+        ? chatIdDyn
+        : int.tryParse('$chatIdDyn') ?? 0;
+    if (chatId <= 0) return;
+
+    final messageData = evt.data['message'];
+    if (messageData is! Map) return;
+
+    final message = (messageData is Map<String, dynamic>)
+        ? messageData
+        : Map<String, dynamic>.fromEntries(
+            messageData.entries.map((e) => MapEntry(e.key.toString(), e.value)),
+          );
+
+    final senderId = (message['sender_id'] is int)
+        ? message['sender_id'] as int
+        : int.tryParse('${message['sender_id'] ?? ''}') ?? 0;
+    if (_myUserId > 0 && senderId == _myUserId) return;
+    if (_currentOpenChatId == chatId) return;
+
+    final decoded = await repo.decryptIncomingWsMessageFull(message: message);
+    final hasAttachments = decoded.attachments.isNotEmpty;
+    final chat = _chatIndex[chatId];
+    final title = (chat?.user.name ?? '').trim().isNotEmpty
+        ? (chat!.user.name)
+        : 'Новое сообщение';
+    final body = decoded.text.trim().isNotEmpty
+        ? decoded.text.trim()
+        : (hasAttachments ? 'Вложение' : 'Сообщение');
+
+    final notificationsSettings = context.read<NotificationsSettings>();
+    if (_isForeground) {
+      if (notificationsSettings.inAppSoundEnabled) {
+        SystemSound.play(SystemSoundType.click);
+      }
+      if (notificationsSettings.inAppBannersEnabled) {
+        _showTopGlassBanner(
+          title: title,
+          body: body,
+          avatarUrl: chat?.user.avatarUrl ?? '',
+          avatarName: chat?.user.name ?? title,
+          onTap: () {
+            final c = _chatIndex[chatId];
+            if (c == null) return;
+            _openChat(c);
+          },
+        );
+      }
+      return;
+    }
+
+    await LocalNotifications.instance.showMessageNotification(
+      chatId: chatId,
+      title: title,
+      body: body,
+      avatarUrl: chat?.user.avatarUrl,
+      senderName: chat?.user.name,
+    );
   }
 
   @override
@@ -1058,26 +934,10 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
 
               final decoratedChats = chats
                   .map(
-                    (c) => ChatPreview(
-                      id: c.id,
-                      peerId: c.peerId,
-                      kind: c.kind,
-                      user: ChatUser(
-                        id: c.user.id,
-                        name: c.user.name,
-                        nickname: c.user.nickname,
-                        avatarUrl: c.user.avatarUrl,
+                    (c) => c.copyWith(
+                      user: c.user.copyWith(
                         isOnline: _online[c.user.id] ?? c.user.isOnline,
                       ),
-                      isFavorite: c.isFavorite,
-                      lastMessage: c.lastMessage,
-                      lastMessageAt: c.lastMessageAt,
-                      unreadCount: c.unreadCount,
-                      myRole: c.myRole,
-                      lastMessageIsMine: c.lastMessageIsMine,
-                      lastMessageIsPending: c.lastMessageIsPending,
-                      lastMessageIsDelivered: c.lastMessageIsDelivered,
-                      lastMessageIsRead: c.lastMessageIsRead,
                     ),
                   )
                   .toList();
@@ -1243,9 +1103,11 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                                                   GlassOverlays.showGlassBottomSheet(
                                                     context,
                                                     builder: (_) =>
-                                                        _CreateGroupChannelSheet(
+                                                        CreateGroupChannelSheet(
                                                           kind: 'group',
                                                           initialTitle: _query,
+                                                          onCreated:
+                                                              _handleCreatedChat,
                                                         ),
                                                   );
                                                 },
@@ -1302,9 +1164,11 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                                                   GlassOverlays.showGlassBottomSheet(
                                                     context,
                                                     builder: (_) =>
-                                                        _CreateGroupChannelSheet(
+                                                        CreateGroupChannelSheet(
                                                           kind: 'channel',
                                                           initialTitle: _query,
+                                                          onCreated:
+                                                              _handleCreatedChat,
                                                         ),
                                                   );
                                                 },
@@ -1800,690 +1664,6 @@ class _PressableState extends State<_Pressable> {
           child: widget.child,
         ),
       ),
-    );
-  }
-}
-
-class _EditGroupChannelSheet extends StatefulWidget {
-  final ChatPreview chat;
-
-  const _EditGroupChannelSheet({required this.chat});
-
-  @override
-  State<_EditGroupChannelSheet> createState() => _EditGroupChannelSheetState();
-}
-
-class _EditGroupChannelSheetState extends State<_EditGroupChannelSheet> {
-  final _titleCtrl = TextEditingController();
-  File? _newAvatar;
-  bool _removeAvatar = false;
-  bool _isSaving = false;
-
-  ChatsRepository get _repo => context.read<ChatsRepository>();
-
-  @override
-  void initState() {
-    super.initState();
-    _titleCtrl.text = widget.chat.user.name.trim();
-  }
-
-  @override
-  void dispose() {
-    _titleCtrl.dispose();
-    super.dispose();
-  }
-
-  Future<void> _pickAvatar() async {
-    final picker = ImagePicker();
-    final source = await picker.pickImage(
-      source: ImageSource.gallery,
-      imageQuality: 96,
-      maxWidth: 2048,
-      maxHeight: 2048,
-    );
-    if (source == null || !mounted) return;
-    final cropped = await AvatarCropEditor.show(context, File(source.path));
-    if (cropped == null || !mounted) return;
-    setState(() {
-      _newAvatar = cropped;
-      _removeAvatar = false;
-    });
-  }
-
-  void _markAvatarForRemove() {
-    setState(() {
-      _newAvatar = null;
-      _removeAvatar = true;
-    });
-  }
-
-  Future<void> _save() async {
-    if (_isSaving) return;
-    final chatId = int.tryParse(widget.chat.id) ?? 0;
-    if (chatId <= 0) return;
-
-    final nextTitle = _titleCtrl.text.trim();
-    if (nextTitle.isEmpty) {
-      showGlassSnack(context, 'Введите название', kind: GlassSnackKind.error);
-      return;
-    }
-
-    final initialTitle = widget.chat.user.name.trim();
-    final hadAvatar = widget.chat.user.avatarUrl.trim().isNotEmpty;
-    final titleChanged = nextTitle != initialTitle;
-    final avatarChanged = _newAvatar != null || (_removeAvatar && hadAvatar);
-    if (!titleChanged && !avatarChanged) {
-      Navigator.of(context).pop(false);
-      return;
-    }
-
-    setState(() => _isSaving = true);
-    try {
-      if (titleChanged) {
-        await _repo.updateChatInfo(chatId, title: nextTitle);
-      }
-      if (_newAvatar != null) {
-        await _repo.uploadChatAvatar(chatId, _newAvatar!);
-      } else if (_removeAvatar && hadAvatar) {
-        await _repo.removeChatAvatar(chatId);
-      }
-      if (!mounted) return;
-      showGlassSnack(
-        context,
-        'Изменения сохранены',
-        kind: GlassSnackKind.success,
-      );
-      Navigator.of(context).pop(true);
-    } catch (e) {
-      if (!mounted) return;
-      showGlassSnack(context, e.toString(), kind: GlassSnackKind.error);
-      setState(() => _isSaving = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final baseInk = isDark ? Colors.white : Colors.black;
-    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
-    final currentAvatarUrl = widget.chat.user.avatarUrl.trim();
-
-    return Padding(
-      padding: EdgeInsets.fromLTRB(12, 12, 12, bottomInset + 12),
-      child: GlassSurface(
-        borderRadius: 24,
-        blurSigma: 16,
-        borderColor: baseInk.withOpacity(isDark ? 0.20 : 0.10),
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Редактирование',
-              style: theme.textTheme.titleMedium?.copyWith(
-                color: theme.colorScheme.onSurface,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-            const SizedBox(height: 14),
-            Center(
-              child: SizedBox(
-                width: 94,
-                height: 94,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(47),
-                  child: _newAvatar != null
-                      ? Image.file(_newAvatar!, fit: BoxFit.cover)
-                      : (_removeAvatar || currentAvatarUrl.isEmpty)
-                      ? Container(
-                          color: theme.colorScheme.surface,
-                          alignment: Alignment.center,
-                          child: Text(
-                            (widget.chat.user.name.isNotEmpty
-                                    ? widget.chat.user.name[0]
-                                    : '?')
-                                .toUpperCase(),
-                            style: theme.textTheme.headlineSmall?.copyWith(
-                              color: theme.colorScheme.onSurface,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
-                        )
-                      : Image.network(
-                          currentAvatarUrl,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) {
-                            return Container(
-                              color: theme.colorScheme.surface,
-                              alignment: Alignment.center,
-                              child: Text(
-                                (widget.chat.user.name.isNotEmpty
-                                        ? widget.chat.user.name[0]
-                                        : '?')
-                                    .toUpperCase(),
-                                style: theme.textTheme.headlineSmall?.copyWith(
-                                  color: theme.colorScheme.onSurface,
-                                  fontWeight: FontWeight.w800,
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 10),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                TextButton(
-                  onPressed: _isSaving ? null : _pickAvatar,
-                  child: const Text('Сменить аватар'),
-                ),
-                if (_newAvatar != null ||
-                    (!_removeAvatar && currentAvatarUrl.isNotEmpty))
-                  TextButton(
-                    onPressed: _isSaving ? null : _markAvatarForRemove,
-                    child: const Text('Удалить'),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _titleCtrl,
-              maxLength: 80,
-              textInputAction: TextInputAction.done,
-              enabled: !_isSaving,
-              decoration: InputDecoration(
-                labelText: 'Название',
-                labelStyle: TextStyle(
-                  color: theme.colorScheme.onSurface.withOpacity(0.75),
-                ),
-                filled: true,
-                fillColor: Colors.transparent,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(16),
-                  borderSide: BorderSide(
-                    color: baseInk.withOpacity(isDark ? 0.28 : 0.18),
-                  ),
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(16),
-                  borderSide: BorderSide(
-                    color: baseInk.withOpacity(isDark ? 0.28 : 0.18),
-                  ),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(16),
-                  borderSide: BorderSide(
-                    color: theme.colorScheme.primary,
-                    width: 1.5,
-                  ),
-                ),
-                counterText: '',
-              ),
-            ),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                Expanded(
-                  child: TextButton(
-                    onPressed: _isSaving
-                        ? null
-                        : () => Navigator.of(context).pop(false),
-                    child: const Text('Отмена'),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: _isSaving ? null : _save,
-                    child: Text(_isSaving ? 'Сохранение...' : 'Сохранить'),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _CreateGroupChannelSheet extends StatefulWidget {
-  final String kind;
-  final String initialTitle;
-
-  const _CreateGroupChannelSheet({required this.kind, this.initialTitle = ''});
-
-  @override
-  State<_CreateGroupChannelSheet> createState() =>
-      _CreateGroupChannelSheetState();
-}
-
-class _CreateGroupChannelSheetState extends State<_CreateGroupChannelSheet> {
-  final _titleCtrl = TextEditingController();
-  final _searchCtrl = TextEditingController();
-  final Set<int> _selectedUserIds = <int>{};
-  final Map<int, ChatUser> _selectedUsers = <int, ChatUser>{};
-  bool _isSearching = false;
-  String? _searchError;
-  List<ChatUser> _searchResults = const [];
-  int _searchSeq = 0;
-  Timer? _searchDebounce;
-  bool _isCreating = false;
-
-  ChatsRepository get _repo => context.read<ChatsRepository>();
-
-  @override
-  void initState() {
-    super.initState();
-    _titleCtrl.text = widget.initialTitle;
-  }
-
-  @override
-  void dispose() {
-    _searchDebounce?.cancel();
-    _titleCtrl.dispose();
-    _searchCtrl.dispose();
-    super.dispose();
-  }
-
-  void _runSearch(String query) {
-    final q = query.trim();
-    final seq = ++_searchSeq;
-
-    if (q.isEmpty) {
-      setState(() {
-        _isSearching = false;
-        _searchError = null;
-        _searchResults = const [];
-      });
-      return;
-    }
-
-    setState(() {
-      _isSearching = true;
-      _searchError = null;
-    });
-
-    _repo
-        .searchUsers(q)
-        .then((users) {
-          if (!mounted || seq != _searchSeq) return;
-          final existing = _selectedUserIds;
-          final filtered = users
-              .where((u) => !existing.contains(int.tryParse(u.id) ?? 0))
-              .toList(growable: false);
-          setState(() {
-            _isSearching = false;
-            _searchError = null;
-            _searchResults = filtered;
-          });
-        })
-        .catchError((e) {
-          if (!mounted || seq != _searchSeq) return;
-          setState(() {
-            _isSearching = false;
-            _searchError = e.toString();
-            _searchResults = const [];
-          });
-        });
-  }
-
-  void _scheduleSearch(String query) {
-    _searchDebounce?.cancel();
-    _searchDebounce = Timer(const Duration(milliseconds: 250), () {
-      if (!mounted) return;
-      _runSearch(query);
-    });
-  }
-
-  void _toggleUser(ChatUser user) {
-    final userId = int.tryParse(user.id) ?? 0;
-    if (userId <= 0) return;
-
-    setState(() {
-      if (_selectedUserIds.contains(userId)) {
-        _selectedUserIds.remove(userId);
-        _selectedUsers.remove(userId);
-      } else {
-        _selectedUserIds.add(userId);
-        _selectedUsers[userId] = user;
-      }
-    });
-  }
-
-  Future<void> _create() async {
-    if (_isCreating) return;
-
-    final title = _titleCtrl.text.trim();
-    if (title.isEmpty) {
-      showGlassSnack(context, 'Укажите название', kind: GlassSnackKind.error);
-      return;
-    }
-
-    final memberIds = _selectedUserIds.toList(growable: false);
-
-    setState(() {
-      _isCreating = true;
-    });
-
-    try {
-      final chat = widget.kind == 'group'
-          ? await _repo.createGroupChat(title: title, memberUserIds: memberIds)
-          : await _repo.createChannel(title: title, memberUserIds: memberIds);
-
-      if (!mounted) return;
-      Navigator.of(context).pop(true);
-
-      // Открываем созданный чат
-      final state = context.findAncestorStateOfType<_HomePageState>();
-      if (state != null && state.mounted) {
-        await state._reloadChats();
-        if (state.mounted) {
-          state._openChat(chat);
-        }
-      }
-    } catch (e) {
-      if (!mounted) return;
-      showGlassSnack(context, e.toString(), kind: GlassSnackKind.error);
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isCreating = false;
-        });
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-    final baseInk = isDark ? Colors.white : Colors.black;
-
-    return DraggableScrollableSheet(
-      initialChildSize: 0.85,
-      minChildSize: 0.5,
-      maxChildSize: 0.95,
-      builder: (ctx, scrollController) {
-        return GlassSurface(
-          blurSigma: 16,
-          borderRadiusGeometry: const BorderRadius.only(
-            topLeft: Radius.circular(26),
-            topRight: Radius.circular(26),
-          ),
-          borderColor: baseInk.withOpacity(isDark ? 0.22 : 0.12),
-          child: ListView(
-            controller: scrollController,
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 18),
-            children: [
-              Center(
-                child: Container(
-                  width: 44,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.onSurface.withOpacity(0.25),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                widget.kind == 'group' ? 'Новая группа' : 'Новый канал',
-                style: theme.textTheme.titleLarge?.copyWith(
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 16),
-              GlassSurface(
-                borderRadius: 14,
-                blurSigma: 8,
-                borderColor: baseInk.withOpacity(isDark ? 0.14 : 0.08),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 8,
-                ),
-                child: TextField(
-                  controller: _titleCtrl,
-                  decoration: InputDecoration(
-                    labelText: 'Название',
-                    border: InputBorder.none,
-                    filled: false,
-                    isDense: true,
-                    contentPadding: const EdgeInsets.symmetric(vertical: 8),
-                  ),
-                  style: TextStyle(color: theme.colorScheme.onSurface),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Участники',
-                style: theme.textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 8),
-              GlassSurface(
-                borderRadius: 14,
-                blurSigma: 8,
-                borderColor: baseInk.withOpacity(isDark ? 0.14 : 0.08),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 4,
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: _searchCtrl,
-                        onChanged: _scheduleSearch,
-                        decoration: InputDecoration(
-                          hintText: 'Поиск пользователей',
-                          border: InputBorder.none,
-                          filled: false,
-                          isDense: true,
-                          suffixIcon: _searchCtrl.text.trim().isEmpty
-                              ? null
-                              : IconButton(
-                                  icon: const Icon(Icons.close_rounded),
-                                  onPressed: () {
-                                    _searchCtrl.clear();
-                                    _searchDebounce?.cancel();
-                                    setState(() {
-                                      _isSearching = false;
-                                      _searchError = null;
-                                      _searchResults = const [];
-                                    });
-                                  },
-                                ),
-                        ),
-                        style: TextStyle(color: theme.colorScheme.onSurface),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              if (_isSearching)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 8),
-                  child: LinearProgressIndicator(minHeight: 2),
-                )
-              else if (_searchError != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Text(
-                    _searchError!.replaceFirst('Exception: ', ''),
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.error,
-                    ),
-                  ),
-                )
-              else if (_searchResults.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Column(
-                    children: _searchResults
-                        .map((user) {
-                          final uid = int.tryParse(user.id) ?? 0;
-                          if (uid <= 0) return const SizedBox.shrink();
-                          final isSelected = _selectedUserIds.contains(uid);
-                          return Padding(
-                            padding: const EdgeInsets.only(bottom: 8),
-                            child: GlassSurface(
-                              borderRadius: 14,
-                              blurSigma: 8,
-                              borderColor: isSelected
-                                  ? theme.colorScheme.primary.withOpacity(0.5)
-                                  : baseInk.withOpacity(isDark ? 0.14 : 0.08),
-                              padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
-                              child: InkWell(
-                                borderRadius: BorderRadius.circular(14),
-                                onTap: () => _toggleUser(user),
-                                child: Row(
-                                  children: [
-                                    RenAvatar(
-                                      url: user.avatarUrl,
-                                      name: user.name,
-                                      isOnline: false,
-                                      size: 34,
-                                      onlineDotSize: 0,
-                                    ),
-                                    const SizedBox(width: 10),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            user.name,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: theme.textTheme.titleSmall
-                                                ?.copyWith(
-                                                  fontWeight: FontWeight.w700,
-                                                ),
-                                          ),
-                                          Text(
-                                            'ID: $uid',
-                                            style: theme.textTheme.bodySmall
-                                                ?.copyWith(
-                                                  color: theme
-                                                      .colorScheme
-                                                      .onSurface
-                                                      .withOpacity(0.7),
-                                                ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                    if (isSelected)
-                                      CircleAvatar(
-                                        radius: 12,
-                                        backgroundColor:
-                                            theme.colorScheme.primary,
-                                        child: const Icon(
-                                          Icons.check_rounded,
-                                          size: 16,
-                                          color: Colors.white,
-                                        ),
-                                      )
-                                    else
-                                      CircleAvatar(
-                                        radius: 12,
-                                        backgroundColor: theme
-                                            .colorScheme
-                                            .onSurface
-                                            .withOpacity(0.12),
-                                        child: const Icon(
-                                          Icons.add_rounded,
-                                          size: 16,
-                                          color: Colors.white,
-                                        ),
-                                      ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          );
-                        })
-                        .toList(growable: false),
-                  ),
-                ),
-              if (_selectedUsers.isNotEmpty) ...[
-                const SizedBox(height: 16),
-                Text(
-                  'Выбрано: ${_selectedUsers.length}',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurface.withOpacity(0.7),
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: _selectedUsers.values.map((user) {
-                    return GlassSurface(
-                      borderRadius: 20,
-                      blurSigma: 8,
-                      borderColor: theme.colorScheme.primary.withOpacity(0.3),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 6,
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          RenAvatar(
-                            url: user.avatarUrl,
-                            name: user.name,
-                            isOnline: false,
-                            size: 24,
-                            onlineDotSize: 0,
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            user.name,
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          const SizedBox(width: 6),
-                          InkWell(
-                            onTap: () => _toggleUser(user),
-                            borderRadius: BorderRadius.circular(12),
-                            child: const Padding(
-                              padding: EdgeInsets.all(2),
-                              child: Icon(Icons.close_rounded, size: 14),
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  }).toList(),
-                ),
-              ],
-              const SizedBox(height: 20),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton(
-                  onPressed: _isCreating ? null : _create,
-                  child: _isCreating
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Text('Создать'),
-                ),
-              ),
-            ],
-          ),
-        );
-      },
     );
   }
 }

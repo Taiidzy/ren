@@ -1,5 +1,52 @@
 # Changelog
 
+## [Unreleased] - 2026-02-23
+
+### Flutter App (`apps/flutter`)
+
+#### Chats architecture refactor and codebase optimization
+- Проведён крупный рефактор `chats` presentation-слоя без изменения пользовательской логики:
+  - вынесена orchestration-логика из перегруженных экранов в отдельные controllers;
+  - сокращён объём `chat_page.dart` за счёт декомпозиции send/pick/attachments/realtime/appbar callbacks;
+  - устранено дублирование отправки записанных медиа (voice/video) через общий flow.
+- Вынесены и переиспользованы presentation controllers:
+  - `ChatPageRealtimeCoordinator` — lifecycle WS (connect/join/subscribe/dispose) для chat page;
+  - `ChatsRealtimeCoordinator` — realtime lifecycle для chats list;
+  - `ChatsUserSearchController` — debounce и состояние поиска пользователей;
+  - `ChatsTopBannerController` — централизованное управление in-app баннером;
+  - `ChatsChatActionsController` — favorite/delete actions для чатов;
+  - `ChatPendingAttachmentsController` — очередь вложений (лимиты/статусы/remove/retry);
+  - `ChatAttachmentsPickerController` — выбор фото/файлов/камеры вне UI-страницы;
+  - `ChatAttachmentsPreparer` — подготовка optimistic attachments и bytes для отправки.
+- Декомпозированы крупные UI-блоки в отдельные файлы:
+  - `chat_members_sheet_body.dart` — управление участниками;
+  - `chat_group_channel_sheets.dart` — create/edit group/channel sheets;
+  - `chat_message_context_menu.dart` — контекстное меню сообщений и picker чата для forward.
+- Улучшена доменная модель чатов:
+  - добавлены `copyWith` в `ChatUser`, `ChatMessage`, `ChatAttachment`, `ChatPreview`;
+  - call sites переведены на `copyWith` для более безопасных локальных обновлений.
+- Улучшения читаемости и поддержки:
+  - в `ChatInputBar`/`ChatPageAppBar` и video overlay вынесены тяжёлые inline callbacks в именованные private-методы;
+  - уменьшена вложенность `build`-веток и упрощено сопровождение крупных виджетов.
+- Проверка:
+  - `flutter analyze` — без ошибок;
+  - `flutter test` — все тесты проходят.
+- Файлы:
+  - `apps/flutter/lib/features/chats/domain/chat_models.dart`
+  - `apps/flutter/lib/features/chats/presentation/chats_page.dart`
+  - `apps/flutter/lib/features/chats/presentation/chat_page.dart`
+  - `apps/flutter/lib/features/chats/presentation/controllers/chats_user_search_controller.dart`
+  - `apps/flutter/lib/features/chats/presentation/controllers/chats_realtime_coordinator.dart`
+  - `apps/flutter/lib/features/chats/presentation/controllers/chats_top_banner_controller.dart`
+  - `apps/flutter/lib/features/chats/presentation/controllers/chats_chat_actions_controller.dart`
+  - `apps/flutter/lib/features/chats/presentation/controllers/chat_page_realtime_coordinator.dart`
+  - `apps/flutter/lib/features/chats/presentation/controllers/chat_pending_attachments_controller.dart`
+  - `apps/flutter/lib/features/chats/presentation/controllers/chat_attachments_picker_controller.dart`
+  - `apps/flutter/lib/features/chats/presentation/controllers/chat_attachments_preparer.dart`
+  - `apps/flutter/lib/features/chats/presentation/widgets/chat_group_channel_sheets.dart`
+  - `apps/flutter/lib/features/chats/presentation/widgets/chat_members_sheet_body.dart`
+  - `apps/flutter/lib/features/chats/presentation/widgets/chat_message_context_menu.dart`
+
 ## [Unreleased] - 2026-02-22
 
 ### Flutter App (`apps/flutter`)
