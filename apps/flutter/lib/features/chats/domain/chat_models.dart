@@ -12,6 +12,26 @@ class ChatUser {
     required this.avatarUrl,
     required this.isOnline,
   });
+
+  static const Object _unset = Object();
+
+  ChatUser copyWith({
+    String? id,
+    String? name,
+    Object? nickname = _unset,
+    String? avatarUrl,
+    bool? isOnline,
+  }) {
+    return ChatUser(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      nickname: identical(nickname, _unset)
+          ? this.nickname
+          : nickname as String?,
+      avatarUrl: avatarUrl ?? this.avatarUrl,
+      isOnline: isOnline ?? this.isOnline,
+    );
+  }
 }
 
 class ChatMessage {
@@ -40,6 +60,42 @@ class ChatMessage {
     this.senderName,
     this.senderAvatarUrl,
   });
+
+  static const Object _unset = Object();
+
+  ChatMessage copyWith({
+    String? id,
+    String? chatId,
+    bool? isMe,
+    String? text,
+    List<ChatAttachment>? attachments,
+    DateTime? sentAt,
+    Object? replyToMessageId = _unset,
+    bool? isDelivered,
+    bool? isRead,
+    Object? senderName = _unset,
+    Object? senderAvatarUrl = _unset,
+  }) {
+    return ChatMessage(
+      id: id ?? this.id,
+      chatId: chatId ?? this.chatId,
+      isMe: isMe ?? this.isMe,
+      text: text ?? this.text,
+      attachments: attachments ?? this.attachments,
+      sentAt: sentAt ?? this.sentAt,
+      replyToMessageId: identical(replyToMessageId, _unset)
+          ? this.replyToMessageId
+          : replyToMessageId as String?,
+      isDelivered: isDelivered ?? this.isDelivered,
+      isRead: isRead ?? this.isRead,
+      senderName: identical(senderName, _unset)
+          ? this.senderName
+          : senderName as String?,
+      senderAvatarUrl: identical(senderAvatarUrl, _unset)
+          ? this.senderAvatarUrl
+          : senderAvatarUrl as String?,
+    );
+  }
 }
 
 class ChatAttachment {
@@ -54,6 +110,20 @@ class ChatAttachment {
     required this.mimetype,
     required this.size,
   });
+
+  ChatAttachment copyWith({
+    String? localPath,
+    String? filename,
+    String? mimetype,
+    int? size,
+  }) {
+    return ChatAttachment(
+      localPath: localPath ?? this.localPath,
+      filename: filename ?? this.filename,
+      mimetype: mimetype ?? this.mimetype,
+      size: size ?? this.size,
+    );
+  }
 
   bool get isImage => mimetype.startsWith('image/');
   bool get isVideo => mimetype.startsWith('video/');
@@ -89,6 +159,41 @@ class ChatPreview {
     this.lastMessageIsDelivered = false,
     this.lastMessageIsRead = false,
   });
+
+  static const Object _unset = Object();
+
+  ChatPreview copyWith({
+    String? id,
+    Object? peerId = _unset,
+    String? kind,
+    ChatUser? user,
+    bool? isFavorite,
+    String? lastMessage,
+    DateTime? lastMessageAt,
+    int? unreadCount,
+    String? myRole,
+    bool? lastMessageIsMine,
+    bool? lastMessageIsPending,
+    bool? lastMessageIsDelivered,
+    bool? lastMessageIsRead,
+  }) {
+    return ChatPreview(
+      id: id ?? this.id,
+      peerId: identical(peerId, _unset) ? this.peerId : peerId as int?,
+      kind: kind ?? this.kind,
+      user: user ?? this.user,
+      isFavorite: isFavorite ?? this.isFavorite,
+      lastMessage: lastMessage ?? this.lastMessage,
+      lastMessageAt: lastMessageAt ?? this.lastMessageAt,
+      unreadCount: unreadCount ?? this.unreadCount,
+      myRole: myRole ?? this.myRole,
+      lastMessageIsMine: lastMessageIsMine ?? this.lastMessageIsMine,
+      lastMessageIsPending: lastMessageIsPending ?? this.lastMessageIsPending,
+      lastMessageIsDelivered:
+          lastMessageIsDelivered ?? this.lastMessageIsDelivered,
+      lastMessageIsRead: lastMessageIsRead ?? this.lastMessageIsRead,
+    );
+  }
 }
 
 class ChatMember {
