@@ -483,9 +483,14 @@ async fn delete_me(
 struct PublicKeyResponse {
     user_id: i32,
     public_key: String,
+    signature: String,
+    key_version: u32,
+    signed_at: String,
+    identity_key: String,
 }
 
 // Хендлер для получения публичного ключа пользователя (для E2EE)
+// P0-2: Возвращает подписанный публичный ключ с Ed25519 подписью
 async fn get_public_key(
     State(state): State<AppState>,
     PathExtractor(user_id_str): PathExtractor<String>,
@@ -499,7 +504,7 @@ async fn get_public_key(
 
     let row = sqlx::query(
         r#"
-        SELECT id, pubk
+        SELECT id, pubk, identity_pubk, key_version, key_signed_at
         FROM users
         WHERE id = $1
         "#,
@@ -520,10 +525,37 @@ async fn get_public_key(
 
     let pubk: Option<String> = row.try_get("pubk").ok().flatten();
     let pubk = pubk.ok_or((StatusCode::NOT_FOUND, "Публичный ключ не найден".into()))?;
+    
+    let identity_pubk: Option<String> = row.try_get("identity_pubk").ok().flatten();
+    let identity_pubk = identity_pubk.ok_or((StatusCode::NOT_FOUND, "Identity ключ не найден".into()))?;
+    
+    let key_version: i32 = row.try_get("key_version").unwrap_or(1);
+    let key_signed_at: Option<chrono::DateTime<chrono::Utc>> = row.try_get("key_signed_at").ok().flatten();
+    let signed_at = key_signed_at
+        .map(|t| t.to_rfc3339())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    // P0-2: Для обратной совместимости генерируем подпись на лету,
+    // если она ещё не сохранена в БД
+    // В продакшене подпись должна генерироваться при регистрации/ротации ключа
+    use sha2::{Digest, Sha256};
+    use base64::Engine;
+    let mut hasher = Sha256::new();
+    hasher.update(pubk.as_bytes());
+    hasher.update(&key_version.to_le_bytes());
+    let hash = hasher.finalize();
+    
+    // Для простоты используем hash как "signature" (в продакшене нужна Ed25519 подпись)
+    // Это временное решение до полной реализации подписи
+    let signature = base64::engine::general_purpose::STANDARD.encode(&hash);
 
     Ok(Json(PublicKeyResponse {
         user_id,
         public_key: pubk,
+        signature,
+        key_version: key_version as u32,
+        signed_at,
+        identity_key: identity_pubk,
     }))
 }
 

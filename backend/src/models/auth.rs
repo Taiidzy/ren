@@ -106,3 +106,14 @@ pub struct Claims {
     pub nickname: Option<String>,
     pub exp: i64,
 }
+
+// P0-2: Ответ API с подписанным публичным ключом
+#[derive(Serialize)]
+pub struct SignedPublicKeyResponse {
+    pub user_id: i32,
+    pub public_key: String,
+    pub signature: String,
+    pub key_version: u32,
+    pub signed_at: String,
+    pub identity_key: String, // Ed25519 public key for verification
+}

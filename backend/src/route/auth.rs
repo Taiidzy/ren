@@ -158,6 +158,15 @@ async fn login(
     headers: HeaderMap,
     Json(payload): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, (StatusCode, String)> {
+    // P1-7: Check rate limit before processing
+    let ip = addr.ip().to_string();
+    if !state.auth_rate_limiter.is_allowed(&ip, Some(&payload.login)) {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            "Слишком много попыток входа. Повторите позже.".into(),
+        ));
+    }
+    
     let row = sqlx::query(
         r#"
         SELECT id, login, username, nickname, avatar, password, pkebymk, pkebyrk, salt, pubk
@@ -176,6 +185,9 @@ async fn login(
     })?;
 
     let Some(row) = row else {
+        // P1-7: Record failed attempt
+        let (_allowed, _lockout_secs) = state.auth_rate_limiter.record_failure(&ip, Some(&payload.login));
+        
         return Err((StatusCode::UNAUTHORIZED, "Неверный логин или пароль".into()));
     };
 
@@ -194,7 +206,15 @@ async fn login(
 
     Argon2::default()
         .verify_password(payload.password.as_bytes(), &parsed_hash)
-        .map_err(|_| (StatusCode::UNAUTHORIZED, "Неверный логин или пароль".into()))?;
+        .map_err(|_e| {
+            // P1-7: Record failed attempt on password mismatch
+            let (_allowed, _lockout_secs) = state.auth_rate_limiter.record_failure(&ip, Some(&payload.login));
+            
+            (StatusCode::UNAUTHORIZED, "Неверный логин или пароль".into())
+        })?;
+
+    // P1-7: Record successful login - reset counters
+    state.auth_rate_limiter.record_success(&ip, Some(&payload.login));
 
     let user = UserAuthResponse {
         id: row.try_get("id").unwrap_or_default(),
@@ -698,6 +718,7 @@ fn require_sdk_fingerprint(
 }
 
 async fn resolve_city(headers: &HeaderMap, ip_address: &str) -> String {
+    // P2-12: Geo-Service Privacy - Check headers first (from trusted proxy)
     if let Some(city) = extract_city_from_headers(headers) {
         return city;
     }
@@ -710,6 +731,20 @@ async fn resolve_city(headers: &HeaderMap, ip_address: &str) -> String {
         return "Unknown".to_string();
     }
 
+    // P2-12: Geo-Service Privacy - External geo-requests disabled by default
+    // Set ENABLE_EXTERNAL_GEO=1 to enable external lookups (not recommended for privacy)
+    let enable_external = std::env::var("ENABLE_EXTERNAL_GEO")
+        .unwrap_or_else(|_| "0".to_string())
+        .trim()
+        .eq("1");
+    
+    if !enable_external {
+        // P2-12: Return "Unknown" instead of making external request
+        return "Unknown".to_string();
+    }
+
+    // External geo lookup is disabled by default for privacy
+    // If explicitly enabled, use local/offline geo-DB instead
     resolve_city_by_ipwhois(ip_address)
         .await
         .filter(|v| !v.trim().is_empty())

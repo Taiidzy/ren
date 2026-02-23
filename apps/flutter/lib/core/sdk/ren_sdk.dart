@@ -320,6 +320,15 @@ typedef ren_unwrap_symmetric_key_bytes_native =
       Pointer<IntPtr>,
     );
 
+// P0-3: Argon2id Recovery KDF native typedefs
+typedef ren_derive_recovery_key_argon2id_native =
+    Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>);
+// Temporarily disabled due to FFI type compatibility issues
+// typedef ren_generate_recovery_salt_native =
+//     Pointer<Utf8> Function(Int32);
+// typedef ren_validate_recovery_entropy_native =
+//     Int32 Function(Pointer<Utf8>);
+
 // --- Dart-side typedefs (для lookupFunction second generic) ---
 typedef ren_free_string_dart = void Function(Pointer<Utf8>);
 typedef ren_free_bytes_dart = void Function(Pointer<Uint8>, int);
@@ -336,6 +345,49 @@ typedef ren_generate_message_key_dart = Pointer<Utf8> Function();
 typedef ren_derive_key_from_password_dart =
     Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>);
 typedef ren_derive_key_from_string_dart = Pointer<Utf8> Function(Pointer<Utf8>);
+
+// P0-3: Argon2id Recovery KDF typedefs
+typedef ren_derive_recovery_key_argon2id_dart =
+    Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>);
+// Temporarily disabled due to FFI type compatibility issues
+// typedef ren_generate_recovery_salt_dart =
+//     Pointer<Utf8> Function(Int32);
+// typedef ren_validate_recovery_entropy_dart =
+//     Int32 Function(Pointer<Utf8>);
+
+// P0-2: Ed25519 Identity Key typedefs
+final class RenIdentityKeyPair extends Struct {
+  external Pointer<Utf8> public_key;
+  external Pointer<Utf8> private_key;
+}
+
+typedef ren_generate_identity_key_pair_native = RenIdentityKeyPair Function();
+typedef ren_sign_public_key_native = Pointer<Utf8> Function(
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Int32,
+);
+typedef ren_verify_signed_public_key_native = Int32 Function(
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Int32,
+);
+
+typedef ren_generate_identity_key_pair_dart = RenIdentityKeyPair Function();
+typedef ren_sign_public_key_dart = Pointer<Utf8> Function(
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  int,
+);
+typedef ren_verify_signed_public_key_dart = int Function(
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  int,
+);
 
 typedef ren_encrypt_data_dart =
     Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>);
@@ -467,6 +519,40 @@ final _ren_derive_key_from_string = _dylib
       ren_derive_key_from_string_dart
     >('ren_derive_key_from_string');
 
+// P0-3: Argon2id Recovery KDF FFI lookups
+final _ren_derive_recovery_key_argon2id = _dylib
+    .lookupFunction<
+      ren_derive_recovery_key_argon2id_native,
+      ren_derive_recovery_key_argon2id_dart
+    >('ren_derive_recovery_key_argon2id');
+// Temporarily disabled due to FFI type compatibility issues
+// final _ren_generate_recovery_salt = _dylib
+//     .lookupFunction<
+//       ren_generate_recovery_salt_native,
+//       ren_generate_recovery_salt_dart
+//     >('ren_generate_recovery_salt');
+// final _ren_validate_recovery_entropy = _dylib
+//     .lookupFunction<
+//       ren_validate_recovery_entropy_native,
+//       ren_validate_recovery_entropy_dart
+//     >('ren_validate_recovery_entropy');
+
+// P0-2: Ed25519 Identity Key FFI lookups
+final _ren_generate_identity_key_pair = _dylib
+    .lookupFunction<
+      ren_generate_identity_key_pair_native,
+      ren_generate_identity_key_pair_dart
+    >('ren_generate_identity_key_pair');
+final _ren_sign_public_key = _dylib
+    .lookupFunction<ren_sign_public_key_native, ren_sign_public_key_dart>(
+      'ren_sign_public_key',
+    );
+final _ren_verify_signed_public_key = _dylib
+    .lookupFunction<
+      ren_verify_signed_public_key_native,
+      ren_verify_signed_public_key_dart
+    >('ren_verify_signed_public_key');
+
 final _ren_encrypt_data = _dylib
     .lookupFunction<ren_encrypt_data_native, ren_encrypt_data_dart>(
       'ren_encrypt_data',
@@ -543,16 +629,39 @@ class RenSdk {
   /// Инициализирует SDK.
   /// Выполняет лёгкую проверку доступности нативной библиотеки.
   /// Вызывать один раз при старте приложения.
+  /// 
+  /// P1-9: Выполняет проверку целостности SDK на Android.
   Future<void> initialize() async {
     if (_initialized) {
       return;
     }
     try {
+      // P1-9: SDK Integrity Check - verify before use
+      if (Platform.isAndroid) {
+        try {
+          _verifyAndroidSdkIntegrityOrThrow();
+          _logger.i('SDK integrity check passed');
+        } catch (e, st) {
+          _logger.e('SDK integrity check failed', error: e, stackTrace: st);
+          throw StateError(
+            'Ren SDK integrity check failed: $e. '
+            'The SDK may have been tampered with. Please reinstall the app.',
+          );
+        }
+      }
+      
       // Smoke-check native bindings early, so runtime failures are explicit.
       final nonce = generateNonce();
       if (nonce.isEmpty) {
         throw StateError('Ren SDK smoke-check failed: empty nonce');
       }
+      
+      // Log SDK fingerprint for security telemetry
+      final fingerprint = currentSdkFingerprint();
+      if (fingerprint.isNotEmpty) {
+        _logger.i('Ren SDK initialized, fingerprint: ${fingerprint.substring(0, 16)}...');
+      }
+      
       _initialized = true;
     } catch (e, st) {
       _logger.e('Ren SDK initialize failed', error: e, stackTrace: st);
@@ -699,6 +808,179 @@ class RenSdk {
         final res = pres.toDartString();
         ren_free_string(pres);
         return res;
+      });
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  // ==============================
+  // P0-3: Argon2id Recovery KDF Methods
+  // ==============================
+
+  /// P0-3: Derive a recovery key using Argon2id (memory-hard KDF).
+  ///
+  /// This function derives a 32-byte key from a recovery phrase/secret using
+  /// Argon2id with OWASP-recommended parameters (64 MiB memory, 3 iterations,
+  /// parallelism 4).
+  ///
+  /// # Arguments
+  /// * `recoverySecret` - Recovery phrase or high-entropy secret (>= 128 bits)
+  /// * `saltB64` - Unique salt encoded as Base64
+  ///
+  /// # Returns
+  /// Base64-encoded 32-byte key, or null on error.
+  String? deriveRecoveryKeyArgon2id(String recoverySecret, String saltB64) {
+    try {
+      return using((arena) {
+        final pSecret = recoverySecret.toNativeUtf8(allocator: arena);
+        final pSalt = saltB64.toNativeUtf8(allocator: arena);
+        final pResult = _ren_derive_recovery_key_argon2id(pSecret, pSalt);
+        if (pResult == nullptr) {
+          return null;
+        }
+        final result = pResult.toDartString();
+        ren_free_string(pResult);
+        return result;
+      });
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  /// P0-3: Generate a secure random salt for recovery KDF.
+  ///
+  /// # Arguments
+  /// * `sizeBytes` - Size of salt in bytes (minimum 16, default 16)
+  ///
+  /// # Returns
+  /// Base64-encoded salt, or null on error.
+  // Temporarily disabled due to FFI type compatibility issues
+  // String? generateRecoverySalt([int sizeBytes = 16]) {
+  //   try {
+  //     final size = sizeBytes < 16 ? 16 : sizeBytes;
+  //     final pResult = _ren_generate_recovery_salt(size);
+  //     if (pResult == nullptr) {
+  //       return null;
+  //     }
+  //     final result = pResult.toDartString();
+  //     ren_free_string(pResult);
+  //     return result;
+  //   } catch (e) {
+  //     rethrow;
+  //   }
+  // }
+
+  /// P0-3: Validate that a recovery phrase has sufficient entropy.
+  ///
+  /// Checks if the recovery phrase has at least 128 bits of entropy.
+  ///
+  /// # Arguments
+  /// * `recoveryPhrase` - Recovery phrase to validate
+  ///
+  /// # Returns
+  /// `true` if valid (>= 128 bits), `false` otherwise.
+  // Temporarily disabled due to FFI type compatibility issues
+  // bool validateRecoveryEntropy(String recoveryPhrase) {
+  //   try {
+  //     return using((arena) {
+  //       final pPhrase = recoveryPhrase.toNativeUtf8(allocator: arena);
+  //       final result = _ren_validate_recovery_entropy(pPhrase);
+  //       return result == 1;
+  //     });
+  //   } catch (e) {
+  //     rethrow;
+  //   }
+  // }
+
+  // ==============================
+  // P0-2: Ed25519 Identity Key Methods
+  // ==============================
+
+  /// P0-2: Generate an Ed25519 identity key pair for signing.
+  ///
+  /// The identity key is used to sign X25519 public keys for authentication,
+  /// preventing MITM attacks through key substitution.
+  ///
+  /// # Returns
+  /// Map with `publicKey` and `privateKey` (both Base64-encoded), or null on error.
+  Map<String, String>? generateIdentityKeyPair() {
+    try {
+      final result = _ren_generate_identity_key_pair();
+      if (result.public_key == nullptr || result.private_key == nullptr) {
+        return null;
+      }
+      final publicKey = result.public_key.toDartString();
+      final privateKey = result.private_key.toDartString();
+      ren_free_string(result.public_key);
+      ren_free_string(result.private_key);
+      return {'publicKey': publicKey, 'privateKey': privateKey};
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  /// P0-2: Sign an X25519 public key with Ed25519 identity key.
+  ///
+  /// Creates a cryptographic signature that binds the X25519 public key
+  /// to the identity key, preventing MITM attacks.
+  ///
+  /// # Arguments
+  /// * `x25519PublicKeyB64` - X25519 public key to sign (Base64)
+  /// * `identityPrivateKeyB64` - Ed25519 private key for signing (Base64)
+  /// * `keyVersion` - Version number for key rotation support
+  ///
+  /// # Returns
+  /// Base64-encoded signature, or null on error.
+  String? signPublicKey({
+    required String x25519PublicKeyB64,
+    required String identityPrivateKeyB64,
+    required int keyVersion,
+  }) {
+    try {
+      return using((arena) {
+        final pPk = x25519PublicKeyB64.toNativeUtf8(allocator: arena);
+        final pIdKey = identityPrivateKeyB64.toNativeUtf8(allocator: arena);
+        final pResult = _ren_sign_public_key(pPk, pIdKey, keyVersion);
+        if (pResult == nullptr) {
+          return null;
+        }
+        final result = pResult.toDartString();
+        ren_free_string(pResult);
+        return result;
+      });
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  /// P0-2: Verify a signed X25519 public key.
+  ///
+  /// Verifies that the signature was created by the holder of the identity
+  /// private key, ensuring the public key hasn't been tampered with.
+  ///
+  /// # Arguments
+  /// * `publicKeyB64` - X25519 public key (Base64)
+  /// * `signatureB64` - Ed25519 signature (Base64)
+  /// * `identityPublicKeyB64` - Ed25519 public key for verification (Base64)
+  /// * `keyVersion` - Key version to verify
+  ///
+  /// # Returns
+  /// `true` if signature is valid, `false` otherwise.
+  bool verifySignedPublicKey({
+    required String publicKeyB64,
+    required String signatureB64,
+    required String identityPublicKeyB64,
+    required int keyVersion,
+  }) {
+    try {
+      return using((arena) {
+        final pPk = publicKeyB64.toNativeUtf8(allocator: arena);
+        final pSig = signatureB64.toNativeUtf8(allocator: arena);
+        final pIdPk = identityPublicKeyB64.toNativeUtf8(allocator: arena);
+        final pVersion = arena.allocate<Int32>(sizeOf<Int32>())..value = keyVersion;
+        final result = _ren_verify_signed_public_key(pPk, pSig, pIdPk, Pointer.fromAddress(pVersion.address), keyVersion);
+        return result == 1;
       });
     } catch (e) {
       rethrow;

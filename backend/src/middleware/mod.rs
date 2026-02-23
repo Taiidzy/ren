@@ -17,6 +17,10 @@ use chrono::Local;
 use std::net::SocketAddr;
 use std::time::Instant;
 
+// Rate limiting module
+pub mod rate_limit;
+pub use rate_limit::{RateLimiter, AuthRateLimiter, rate_limit_middleware, auth_rate_limit_middleware};
+
 // Экстрактор текущего пользователя из заголовка Authorization: Bearer <JWT>
 // Пример использования: fn handler(State(state): State<AppState>, CurrentUser { id, .. }: CurrentUser) { ... }
 

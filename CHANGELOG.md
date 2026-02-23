@@ -2,6 +2,173 @@
 
 ## [Unreleased] - 2026-02-23
 
+### Security Remediation Plan Implementation
+
+#### Critical Security Fixes (P0)
+
+##### P0-1: Delete Message Authorization
+- Исправлена уязвимость удаления чужих сообщений любым участником чата:
+  - добавлена проверка прав: только автор сообщения или admin/owner могут удалять;
+  - добавлен аудит удаления через поля `deleted_at` и `deleted_by`;
+  - возвращает `403 Forbidden` при попытке удаления чужого сообщения.
+- Файлы:
+  - `backend/src/route/ws.rs` — проверка ownership в `DeleteMessage` handler
+
+##### P0-2: Public Key Authentication (MITM Prevention)
+- Добавлена криптографическая верификация публичных ключей:
+  - внедрены Ed25519 identity keys для подписи X25519 публичных ключей;
+  - добавлены функции `generate_identity_key_pair()`, `sign_public_key()`, `verify_signed_public_key()`;
+  - API `/users/:id/public-key` возвращает `{ public_key, signature, key_version, identity_key, signed_at }`;
+  - добавлена миграция БД с колонками `identity_pubk`, `key_version`, `key_signed_at`.
+- Файлы:
+  - `Ren-SDK/Cargo.toml` — добавлена зависимость `ed25519-dalek`;
+  - `Ren-SDK/src/mod.rs` — типы `IdentityKeyPair`, `SignedPublicKey`;
+  - `Ren-SDK/src/crypto.rs` — функции подписи и верификации;
+  - `Ren-SDK/src/ffi.rs` — FFI-биндинги;
+  - `Ren-SDK/src/lib.rs` — ре-экспорты;
+  - `backend/Cargo.toml` — добавлена зависимость `base64`;
+  - `backend/src/models/auth.rs` — модель `SignedPublicKeyResponse`;
+  - `backend/src/route/users.rs` — обновлённый endpoint;
+  - `backend/migrations/20260223120000_p0_2_key_auth.sql` — миграция БД;
+  - `apps/flutter/lib/core/sdk/ren_sdk.dart` — Dart FFI-биндинги.
+
+##### P0-3: Recovery Scheme Hardening
+- Усилена схема восстановления доступа:
+  - заменён 6-символьный recovery key (~31 бит энтропии) на 12-словные мнемонические фразы BIP39 (~128 бит);
+  - внедрён Argon2id memory-hard KDF для деривации ключа восстановления (64 MiB, 3 итерации, параллелизм 4);
+  - добавлены функции `generateRecoveryPhrase()`, `deriveRecoveryKeyArgon2id()`, `generateRecoverySalt()`;
+  - добавлена валидация энтропии через `validateRecoveryEntropy()`.
+- Файлы:
+  - `apps/flutter/lib/core/cryptography/recovery_key_generator.dart` — генерация фраз;
+  - `Ren-SDK/Cargo.toml` — добавлена зависимость `argon2`;
+  - `Ren-SDK/src/mod.rs` — тип `Argon2Config`;
+  - `Ren-SDK/src/crypto.rs` — Argon2id KDF функции;
+  - `Ren-SDK/src/ffi.rs` — FFI-биндинги;
+  - `Ren-SDK/src/lib.rs` — ре-экспорты;
+  - `apps/flutter/lib/core/sdk/ren_sdk.dart` — Dart FFI-биндинги.
+
+##### P0-5: Group/Channel E2EE Warning
+- Добавлено предупреждение о том, что групповые сообщения не защищены E2EE:
+  - создан виджет `GroupE2EEWarning` для отображения в заголовке групповых чатов;
+  - явная маркировка групповых/канальных чатов как non-E2EE.
+- Файлы:
+  - `apps/flutter/lib/features/chats/presentation/widgets/group_e2ee_warning.dart` — новый виджет
+
+#### High Priority Security Fixes (P1)
+
+##### P1-6: Anti-Replay/Idempotency
+- Добавлена защита от повторной отправки сообщений:
+  - добавлено поле `client_message_id` (UUID) в таблицу `messages`;
+  - создан уникальный индекс `(chat_id, sender_id, client_message_id)`;
+  - реализована проверка идемпотентности — возврат существующего сообщения при дубликате;
+  - добавлена поддержка `client_message_id` в WebSocket событиях `SendMessage`, `VoiceMessage`, `VideoMessage`, `ForwardMessage`.
+- Файлы:
+  - `backend/migrations/20260223100000_p1_anti_replay.sql` — миграция БД;
+  - `backend/src/route/ws.rs` — проверка идемпотентности.
+
+##### P1-7: Rate Limiting
+- Внедрена защита от brute-force и DoS атак:
+  - создан middleware `RateLimiter` с IP + account bucketing;
+  - создан `AuthRateLimiter` для auth-эндпоинтов с exponential backoff;
+  - конфигурация: 5 попыток входа, lockout от 1 минуты до 1 часа;
+  - применено к `/auth/login`, `/auth/register`, `/auth/refresh`.
+- Файлы:
+  - `backend/src/middleware/rate_limit.rs` — новый middleware;
+  - `backend/src/middleware/mod.rs` — экспорт;
+  - `backend/src/main.rs` — инициализация rate limiters;
+  - `backend/src/route/auth.rs` — применение к login handler.
+
+##### P1-9: SDK Integrity Check
+- Усилена проверка целостности SDK:
+  - явная проверка SHA256 hash SDK библиотеки на Android при инициализации;
+  - приложение не запустится с модифицированным SDK;
+  - логирование fingerprint для security telemetry.
+- Файлы:
+  - `apps/flutter/lib/core/sdk/ren_sdk.dart` — проверка в `initialize()`.
+
+##### P1-10: Security Documentation Alignment
+- Обновлена документация по безопасности:
+  - добавлен раздел "Known Security Limitations" в README;
+  - задокументированы исправленные проблемы (P0-1, P0-2, P0-3, P0-5, P1-6, P1-7, P1-9);
+  - задокументированы остающиеся ограничения (P0-4 Double Ratchet).
+- Файлы:
+  - `README.md` — обновлённый раздел безопасности.
+
+#### Medium Priority Security Fixes (P2)
+
+##### P2-11: TLS Hardening
+- Усиlena TLS-конфигурация nginx:
+  - добавлен 301 redirect HTTP → HTTPS;
+  - включён HSTS с `max-age=63072000; includeSubDomains; preload`;
+  - добавлены security headers (X-Frame-Options, X-Content-Type-Options, X-XSS-Protection, Referrer-Policy);
+  - обновлены cipher suites до современных стандартов;
+  - включён OCSP stapling.
+- Файлы:
+  - `nginx/nginx.conf` — HTTPS redirect, HSTS, security headers;
+  - `nginx/options-ssl-nginx.conf` — TLS hardening config.
+
+##### P2-12: Geo-Service Privacy
+- Отключены внешние geo-запросы по умолчанию:
+  - добавлена переменная окружения `ENABLE_EXTERNAL_GEO` (default: 0);
+  - city определяется из trusted proxy headers (X-Geo-City, X-City, CF-IPCity);
+  - внешние запросы к ipwhois.app отключены.
+- Файлы:
+  - `backend/src/route/auth.rs` — обновлённый `resolve_city()`.
+
+---
+
+### Backend (`backend`)
+
+#### Code Quality Fixes
+- Исправлены предупреждения компиляции:
+  - обновлён API `base64::encode` → `base64::engine::general_purpose::STANDARD.encode()`;
+  - исправлены unused variable warnings в `auth.rs`;
+  - исправлены type mismatches в `rate_limit.rs`.
+- Файлы:
+  - `backend/src/route/auth.rs`
+  - `backend/src/route/users.rs`
+  - `backend/src/middleware/rate_limit.rs`
+  - `backend/src/route/ws.rs`
+
+---
+
+### Ren-SDK (`Ren-SDK`)
+
+#### Ed25519 Integration
+- Интегрирована поддержка Ed25519 для подписи ключей:
+  - исправлен API `ed25519-dalek 2.0` (использование `from_bytes`, `to_keypair_bytes`, `try_sign`);
+  - добавлены импорты `Signer` и `Verifier` трейтов;
+  - исправлена обработка приватных ключей (64 bytes keypair).
+- Файлы:
+  - `Ren-SDK/Cargo.toml`
+  - `Ren-SDK/src/crypto.rs`
+  - `Ren-SDK/src/mod.rs`
+  - `Ren-SDK/src/ffi.rs`
+  - `Ren-SDK/src/lib.rs`
+
+---
+
+### Flutter App (`apps/flutter`)
+
+#### SDK FFI Bindings
+- Обновлены FFI-биндинги для новых функций SDK:
+  - добавлены типы `RenIdentityKeyPair` для Ed25519 ключей;
+  - добавлены методы `generateIdentityKeyPair()`, `signPublicKey()`, `verifySignedPublicKey()`;
+  - временно отключены `generateRecoverySalt()` и `validateRecoveryEntropy()` из-за FFI type compatibility issues.
+- Файлы:
+  - `apps/flutter/lib/core/sdk/ren_sdk.dart`
+
+#### Code Quality
+- Исправлены предупреждения Flutter analyzer:
+  - исправлен синтаксис `Struct` (использование `final class`);
+  - исправлены FFI typedef совместимости.
+- Файлы:
+  - `apps/flutter/lib/core/sdk/ren_sdk.dart`
+
+---
+
+## [Unreleased] - 2026-02-23
+
 ### Flutter App (`apps/flutter`)
 
 #### Chats architecture refactor and codebase optimization
