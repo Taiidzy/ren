@@ -6,6 +6,9 @@ pub mod ffi;
 #[cfg(feature = "wasm")]
 pub mod wasm;
 
+pub mod x3dh;
+pub mod ratchet;
+
 // Re-export основных типов для удобства
 pub use crypto::{
     decrypt_data, decrypt_file, decrypt_message, derive_key_from_password, derive_key_from_string,
@@ -19,4 +22,13 @@ pub use crypto::{
 pub use crypto::types::{
     AeadKey, Argon2Config, CryptoError, DecryptedFileWithMessage, EncryptedFile,
     EncryptedFileWithMessage, EncryptedMessage, IdentityKeyPair, KeyPair, SignedPublicKey,
+};
+
+// Re-export X3DH типов
+pub use x3dh::{
+    IdentityKeyStore,
+    PreKeyBundle,
+    x3dh_initiate,
+    x3dh_respond,
+    SharedSecret,
 };
