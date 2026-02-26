@@ -4,7 +4,6 @@ import 'dart:ffi';
 import 'dart:io' show Platform, File, Directory;
 import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
-import 'package:crypto/crypto.dart';
 
 import 'package:logger/logger.dart';
 
@@ -15,104 +14,6 @@ const String _ffiTag = 'RenFFI';
 
 final DynamicLibrary _dylib = _openLibrary();
 final Logger _logger = Logger();
-
-const Map<Abi, String> _androidPinnedSdkSha256 = <Abi, String>{
-  Abi.androidArm64:
-      'cd349cd58be7a034d6b44fc3012c29bcc25ff8302ea1c213fb35076ed44a7d50',
-  Abi.androidArm:
-      'f7e32a69b5ee6929cf84cf7d86e330b8389cc555af86df481e82946e968c0dd4',
-  Abi.androidX64:
-      '1d9bf5c81d8473f1761dabaf8b4aa22a40df770491d84fdec21b2ad2dadb9399',
-  Abi.androidIA32:
-      '97774bdb468610c22551131b6321580ed46aece2f4262dd35ece2a3145278542',
-};
-const String _iosArm64PinnedSdkSha256Default =
-    'f6045a96db9dc40924794ea6eb5dfecdc3d44806c82e6b7a38908a37be8638c3';
-const String _iosArm64PinnedSdkSha256 = String.fromEnvironment(
-  'REN_IOS_SDK_FINGERPRINT',
-  defaultValue: _iosArm64PinnedSdkSha256Default,
-);
-String? _sdkFingerprintCache;
-
-String _sha256OfFileSync(File file) {
-  final bytes = file.readAsBytesSync();
-  return sha256.convert(bytes).toString();
-}
-
-String? _resolveLoadedLibraryPathPosix(String libName) {
-  try {
-    final maps = File('/proc/self/maps');
-    if (!maps.existsSync()) return null;
-    for (final line in maps.readAsLinesSync()) {
-      if (!line.contains(libName)) continue;
-      final parts = line.trim().split(RegExp(r'\s+'));
-      if (parts.isEmpty) continue;
-      final candidate = parts.last.trim();
-      if (candidate.isEmpty || !candidate.contains(libName)) continue;
-      if (!candidate.startsWith('/')) continue;
-      if (candidate.contains('!')) {
-        return null;
-      }
-      return candidate;
-    }
-  } catch (_) {}
-  return null;
-}
-
-void _verifyAndroidSdkIntegrityOrThrow() {
-  final expected = _androidPinnedSdkSha256[Abi.current()];
-  if (expected == null) {
-    throw StateError('Unsupported Android ABI for SDK integrity check');
-  }
-
-  final path = _resolveLoadedLibraryPathPosix('libren_sdk.so');
-  if (path == null || path.isEmpty) {
-    throw StateError('Failed to resolve loaded libren_sdk.so path');
-  }
-
-  final file = File(path);
-  if (!file.existsSync()) {
-    throw StateError('Loaded SDK file not found at $path');
-  }
-
-  final actual = _sha256OfFileSync(file);
-  if (actual.toLowerCase() != expected.toLowerCase()) {
-    throw StateError('Ren SDK integrity check failed (hash mismatch)');
-  }
-}
-
-String currentSdkFingerprint() {
-  final cached = _sdkFingerprintCache;
-  if (cached != null) {
-    return cached;
-  }
-
-  String value = '';
-  if (Platform.isAndroid) {
-    final pinned = _androidPinnedSdkSha256[Abi.current()] ?? '';
-    _logger.i('Android ABI: ${Abi.current()}, pinned hash: ${pinned.isNotEmpty ? pinned.substring(0, 16) : "none"}...');
-    value = pinned;
-    if (value.isEmpty) {
-      final path = _resolveLoadedLibraryPathPosix('libren_sdk.so');
-      if (path != null && path.isNotEmpty) {
-        final file = File(path);
-        if (file.existsSync()) {
-          value = _sha256OfFileSync(file);
-        }
-      }
-    }
-    _sdkFingerprintCache = value;
-    _logger.i('SDK fingerprint result: ${value.isNotEmpty ? value.substring(0, 16) : "empty"}...');
-    return value;
-  }
-  if (Platform.isIOS) {
-    value = _iosArm64PinnedSdkSha256;
-    _sdkFingerprintCache = value;
-    return value;
-  }
-  _sdkFingerprintCache = value;
-  return value;
-}
 
 DynamicLibrary _openLibrary() {
   try {
@@ -362,32 +263,28 @@ final class RenIdentityKeyPair extends Struct {
 }
 
 typedef ren_generate_identity_key_pair_native = RenIdentityKeyPair Function();
-typedef ren_sign_public_key_native = Pointer<Utf8> Function(
-  Pointer<Utf8>,
-  Pointer<Utf8>,
-  Int32,
-);
-typedef ren_verify_signed_public_key_native = Int32 Function(
-  Pointer<Utf8>,
-  Pointer<Utf8>,
-  Pointer<Utf8>,
-  Pointer<Utf8>,
-  Int32,
-);
+typedef ren_sign_public_key_native =
+    Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, Int32);
+typedef ren_verify_signed_public_key_native =
+    Int32 Function(
+      Pointer<Utf8>,
+      Pointer<Utf8>,
+      Pointer<Utf8>,
+      Pointer<Utf8>,
+      Int32,
+    );
 
 typedef ren_generate_identity_key_pair_dart = RenIdentityKeyPair Function();
-typedef ren_sign_public_key_dart = Pointer<Utf8> Function(
-  Pointer<Utf8>,
-  Pointer<Utf8>,
-  int,
-);
-typedef ren_verify_signed_public_key_dart = int Function(
-  Pointer<Utf8>,
-  Pointer<Utf8>,
-  Pointer<Utf8>,
-  Pointer<Utf8>,
-  int,
-);
+typedef ren_sign_public_key_dart =
+    Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, int);
+typedef ren_verify_signed_public_key_dart =
+    int Function(
+      Pointer<Utf8>,
+      Pointer<Utf8>,
+      Pointer<Utf8>,
+      Pointer<Utf8>,
+      int,
+    );
 
 typedef ren_encrypt_data_dart =
     Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>);
@@ -629,39 +526,17 @@ class RenSdk {
   /// Инициализирует SDK.
   /// Выполняет лёгкую проверку доступности нативной библиотеки.
   /// Вызывать один раз при старте приложения.
-  /// 
-  /// P1-9: Выполняет проверку целостности SDK на Android.
   Future<void> initialize() async {
     if (_initialized) {
       return;
     }
     try {
-      // P1-9: SDK Integrity Check - verify before use
-      if (Platform.isAndroid) {
-        try {
-          _verifyAndroidSdkIntegrityOrThrow();
-          _logger.i('SDK integrity check passed');
-        } catch (e, st) {
-          _logger.e('SDK integrity check failed', error: e, stackTrace: st);
-          throw StateError(
-            'Ren SDK integrity check failed: $e. '
-            'The SDK may have been tampered with. Please reinstall the app.',
-          );
-        }
-      }
-      
       // Smoke-check native bindings early, so runtime failures are explicit.
       final nonce = generateNonce();
       if (nonce.isEmpty) {
         throw StateError('Ren SDK smoke-check failed: empty nonce');
       }
-      
-      // Log SDK fingerprint for security telemetry
-      final fingerprint = currentSdkFingerprint();
-      if (fingerprint.isNotEmpty) {
-        _logger.i('Ren SDK initialized, fingerprint: ${fingerprint.substring(0, 16)}...');
-      }
-      
+
       _initialized = true;
     } catch (e, st) {
       _logger.e('Ren SDK initialize failed', error: e, stackTrace: st);
@@ -978,8 +853,15 @@ class RenSdk {
         final pPk = publicKeyB64.toNativeUtf8(allocator: arena);
         final pSig = signatureB64.toNativeUtf8(allocator: arena);
         final pIdPk = identityPublicKeyB64.toNativeUtf8(allocator: arena);
-        final pVersion = arena.allocate<Int32>(sizeOf<Int32>())..value = keyVersion;
-        final result = _ren_verify_signed_public_key(pPk, pSig, pIdPk, Pointer.fromAddress(pVersion.address), keyVersion);
+        final pVersion = arena.allocate<Int32>(sizeOf<Int32>())
+          ..value = keyVersion;
+        final result = _ren_verify_signed_public_key(
+          pPk,
+          pSig,
+          pIdPk,
+          Pointer.fromAddress(pVersion.address),
+          keyVersion,
+        );
         return result == 1;
       });
     } catch (e) {

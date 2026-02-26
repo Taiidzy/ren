@@ -77,14 +77,7 @@
   3. Убрать bearer storage из JS runtime.
 - Критерий: токен недоступен JavaScript-коду страницы.
 
-### 9) SDK integrity check на Android не форсируется при старте
-- План:
-  1. Вызвать проверку целостности в `RenSdk.initialize()`.
-  2. Фейлить старт при mismatch.
-  3. Логировать событие в security telemetry.
-- Критерий: модифицированный SDK не запускается.
-
-### 10) Документация безопасности расходится с реализацией
+### 9) Документация безопасности расходится с реализацией
 - План:
   1. Обновить README/spec с точным статусом (что E2EE, что нет).
   2. Добавить раздел Known Security Limitations.
@@ -128,6 +121,6 @@
 1. P0-1: запрет удаления чужих сообщений.
 2. P0-2: key authentication baseline (подписи + warnings).
 3. P0-3: recovery hardening.
-4. P1-6/7/8/9: anti-replay, rate-limit, web token model, SDK verify.
+4. P1-6/7/8: anti-replay, rate-limit, web token model.
 5. P0-4/5: миграция к ratchet + group E2EE.
 6. P1/P2/P3: документация, TLS/privacy/process hardening.

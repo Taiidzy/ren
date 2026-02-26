@@ -5,7 +5,6 @@ import 'package:dio/dio.dart';
 import 'package:ren/core/constants/api_url.dart';
 import 'package:ren/core/constants/keys.dart';
 import 'package:ren/core/device/device_metadata.dart';
-import 'package:ren/core/sdk/ren_sdk.dart';
 import 'package:ren/core/secure/secure_storage.dart';
 
 class AuthSessionInterceptor extends Interceptor {
@@ -33,10 +32,6 @@ class AuthSessionInterceptor extends Interceptor {
     final metadata = await DeviceMetadataProvider.load();
     options.headers['X-Device-Name'] = metadata.deviceName;
     options.headers['X-App-Version'] = metadata.appVersion;
-    final sdkFingerprint = currentSdkFingerprint();
-    if (sdkFingerprint.isNotEmpty) {
-      options.headers['X-SDK-Fingerprint'] = sdkFingerprint;
-    }
 
     if (!_isPublicAuthPath(options.path)) {
       final token = await SecureStorage.readKey(Keys.token);
@@ -82,10 +77,6 @@ class AuthSessionInterceptor extends Interceptor {
     final metadata = await DeviceMetadataProvider.load();
     requestOptions.headers['X-Device-Name'] = metadata.deviceName;
     requestOptions.headers['X-App-Version'] = metadata.appVersion;
-    final sdkFingerprint = currentSdkFingerprint();
-    if (sdkFingerprint.isNotEmpty) {
-      requestOptions.headers['X-SDK-Fingerprint'] = sdkFingerprint;
-    }
 
     try {
       final response = await _dio.fetch(requestOptions);
@@ -117,8 +108,6 @@ class AuthSessionInterceptor extends Interceptor {
           headers: {
             'X-Device-Name': metadata.deviceName,
             'X-App-Version': metadata.appVersion,
-            if (currentSdkFingerprint().isNotEmpty)
-              'X-SDK-Fingerprint': currentSdkFingerprint(),
           },
         ),
       );

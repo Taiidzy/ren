@@ -41,7 +41,7 @@ Required environment variables (see details in [MOBILE_BUILD.md](MOBILE_BUILD.md
 - `JWT_SECRET`
 
 Optional security variable:
-- `SDK_FINGERPRINT_ALLOWLIST` (comma-separated SHA-256 fingerprints)
+- `ENABLE_EXTERNAL_GEO` (`1` to enable external geo lookup; default disabled)
 
 ### 2. Flutter app
 ```bash
@@ -50,9 +50,8 @@ flutter pub get
 flutter run
 ```
 
-For iOS release with SDK attestation fingerprint, use the documented command in [MOBILE_BUILD.md](MOBILE_BUILD.md).
+For iOS release, use the documented command in [MOBILE_BUILD.md](MOBILE_BUILD.md).
 
 ## Security Notes
 - Do not commit secrets (`JWT_SECRET`, API keys, private keys, CI tokens).
-- Do not commit real SDK fingerprint values into markdown/docs.
-- Android currently contains hardcoded SDK fingerprints in code; migration plan is documented in [MOBILE_BUILD.md](MOBILE_BUILD.md).
+- Do not commit secrets into markdown/docs.

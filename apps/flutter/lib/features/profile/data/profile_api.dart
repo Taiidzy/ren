@@ -7,7 +7,6 @@ import 'package:http/http.dart' as http;
 
 import 'package:ren/core/constants/api_url.dart';
 import 'package:ren/core/constants/keys.dart';
-import 'package:ren/core/sdk/ren_sdk.dart';
 import 'package:ren/core/secure/secure_storage.dart';
 
 class ApiException implements Exception {
@@ -97,10 +96,6 @@ class ProfileApi {
         final request = http.MultipartRequest('POST', uri);
 
         request.headers['Authorization'] = 'Bearer $token';
-        final sdkFingerprint = currentSdkFingerprint();
-        if (sdkFingerprint.isNotEmpty) {
-          request.headers['X-SDK-Fingerprint'] = sdkFingerprint;
-        }
 
         final filename = file.uri.pathSegments.isNotEmpty
             ? file.uri.pathSegments.last

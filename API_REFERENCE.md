@@ -18,7 +18,6 @@ Base: backend Axum server (`backend/src/route/*`).
 Auth/session behavior:
 - Access token is JWT (`token_type=access`).
 - Refresh token stored hashed in `auth_sessions`.
-- Optional SDK fingerprint enforcement via `X-SDK-Fingerprint` + backend allowlist.
 
 ## Users
 - `GET /users/me`
@@ -78,11 +77,10 @@ Auth/session behavior:
 - `Authorization: Bearer <access_token>`
 - `X-Device-Name`
 - `X-App-Version`
-- `X-SDK-Fingerprint` (required when allowlist enabled)
 
 ## Error Codes
 - `400` invalid input
-- `401` auth/session/fingerprint failure
+- `401` auth/session failure
 - `403` permission denied
 - `404` not found
 - `409` conflict (unique constraints)

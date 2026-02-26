@@ -51,7 +51,6 @@ Relevant code:
 
 ## Device Change Handling
 - Multi-device session tracking exists (`auth_sessions` table + `/auth/sessions`).
-- SDK fingerprint can be bound to sessions when allowlist is enabled.
 - Key migration UX/protocol between devices is not fully documented in current app flow.
 
 ## Metadata Not Protected by E2EE
@@ -88,22 +87,18 @@ Suggested intake template:
   - private keys
   - JWT secrets
   - API tokens
-  - real SDK fingerprint values in docs
 - Use placeholders in documentation.
 - Store build/runtime secrets in CI secret manager.
 
 ## Secret Rotation Rules
 - JWT signing secret: rotate on schedule and incident response.
 - DB credentials: rotate on schedule and after exposure.
-- SDK allowlist fingerprints: rotate whenever SDK artifacts are rebuilt/replaced.
 
 ## Security Findings (from current code)
 1. `GET /users/:id/public-key` returns hash-derived placeholder signature, not true Ed25519 signature chain.
 2. Group/channel messages are plaintext at application layer (no E2EE envelopes).
-3. Android SDK fingerprint values are hardcoded in Dart source.
 
 ## Recommended Immediate Actions
 1. Complete public-key authenticity (real Ed25519 signatures end-to-end in app flow).
-2. Migrate Android fingerprint injection to CI/runtime defines.
-3. Implement group E2EE (Sender Keys or MLS).
-4. Implement Double Ratchet for 1:1 sessions.
+2. Implement group E2EE (Sender Keys or MLS).
+3. Implement Double Ratchet for 1:1 sessions.

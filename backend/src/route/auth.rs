@@ -229,7 +229,6 @@ async fn login(
     };
 
     let remember_me = payload.remember_me.unwrap_or(false);
-    let sdk_fingerprint = require_sdk_fingerprint(&state, &headers)?;
     let ip_address = extract_ip(&headers, addr);
     let city = resolve_city(&headers, &ip_address).await;
     let app_version =
@@ -255,9 +254,9 @@ async fn login(
         r#"
         INSERT INTO auth_sessions (
             id, user_id, refresh_token_hash, device_name, user_agent, ip_address,
-            city, app_version, sdk_fingerprint, remember_me, expires_at
+            city, app_version, remember_me, expires_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         "#,
     )
     .bind(session_id)
@@ -268,7 +267,6 @@ async fn login(
     .bind(ip_address)
     .bind(city)
     .bind(app_version)
-    .bind(sdk_fingerprint.as_ref())
     .bind(remember_me)
     .bind(session_expires_at)
     .execute(&state.pool)
@@ -302,8 +300,6 @@ async fn refresh(
     }
 
     let refresh_hash = hash_refresh_token(&state.jwt_secret, &payload.refresh_token);
-    let sdk_fingerprint = require_sdk_fingerprint(&state, &headers)?;
-
     let row = sqlx::query(
         r#"
         SELECT
@@ -382,10 +378,9 @@ async fn refresh(
             ip_address = $4,
             city = $5,
             app_version = $6,
-            sdk_fingerprint = $7,
             last_seen_at = now(),
-            expires_at = $8
-        WHERE id = $9
+            expires_at = $7
+        WHERE id = $8
         "#,
     )
     .bind(new_refresh_hash)
@@ -394,7 +389,6 @@ async fn refresh(
     .bind(ip_address)
     .bind(city)
     .bind(app_version)
-    .bind(sdk_fingerprint.as_ref())
     .bind(new_expires_at)
     .bind(session_id)
     .execute(&state.pool)
@@ -442,7 +436,6 @@ async fn list_sessions(
             ip_address,
             city,
             app_version,
-            sdk_fingerprint,
             created_at,
             last_seen_at
         FROM auth_sessions
@@ -493,10 +486,6 @@ async fn list_sessions(
                 .ok()
                 .flatten()
                 .unwrap_or_else(|| "unknown".to_string()),
-            sdk_fingerprint: row
-                .try_get::<Option<String>, _>("sdk_fingerprint")
-                .ok()
-                .flatten(),
             login_at: row.try_get("created_at").map_err(|_| {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -687,34 +676,6 @@ fn extract_header(headers: &HeaderMap, name: &str) -> Option<String> {
         .get(name)
         .and_then(|v| v.to_str().ok())
         .map(|v| v.trim().to_string())
-}
-
-fn require_sdk_fingerprint(
-    state: &AppState,
-    headers: &HeaderMap,
-) -> Result<Option<String>, (StatusCode, String)> {
-    if state.sdk_fingerprint_allowlist.is_empty() {
-        return Ok(None);
-    }
-
-    let raw = extract_header(headers, "x-sdk-fingerprint").ok_or((
-        StatusCode::UNAUTHORIZED,
-        "sdk fingerprint required".to_string(),
-    ))?;
-    let value = raw.trim().to_lowercase();
-    if value.is_empty() {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            "sdk fingerprint required".to_string(),
-        ));
-    }
-    if !state.sdk_fingerprint_allowlist.contains(&value) {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            "sdk fingerprint is not allowed".to_string(),
-        ));
-    }
-    Ok(Some(value))
 }
 
 async fn resolve_city(headers: &HeaderMap, ip_address: &str) -> String {

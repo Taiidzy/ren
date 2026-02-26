@@ -89,7 +89,6 @@ pub struct SessionResponse {
     pub ip_address: String,
     pub city: String,
     pub app_version: String,
-    pub sdk_fingerprint: Option<String>,
     pub login_at: DateTime<Utc>,
     pub last_seen_at: DateTime<Utc>,
     pub is_current: bool,

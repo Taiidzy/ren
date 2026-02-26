@@ -2,7 +2,6 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 
 import 'package:ren/core/constants/api_url.dart';
-import 'package:ren/core/sdk/ren_sdk.dart';
 import 'package:ren/core/secure/secure_storage.dart';
 import 'package:ren/core/constants/keys.dart';
 
@@ -30,12 +29,6 @@ class AuthApi {
     return null;
   }
 
-  Map<String, dynamic> _publicAuthHeaders() {
-    final sdkFingerprint = currentSdkFingerprint();
-    if (sdkFingerprint.isEmpty) return const <String, dynamic>{};
-    return <String, dynamic>{'X-SDK-Fingerprint': sdkFingerprint};
-  }
-
   Future<Map<String, dynamic>> login(
     String login,
     String password,
@@ -45,7 +38,6 @@ class AuthApi {
       final response = await dio.post(
         '${Apiurl.api}/auth/login',
         data: {'login': login, 'password': password, 'remember_me': rememberMe},
-        options: Options(headers: _publicAuthHeaders()),
       );
 
       return response.data;
@@ -58,12 +50,6 @@ class AuthApi {
       }
       switch (status) {
         case 401:
-          final serverMessage = _extractServerMessage(e.response?.data) ?? '';
-          if (serverMessage.toLowerCase().contains('sdk fingerprint')) {
-            throw ApiException(
-              'Сервер требует SDK fingerprint, но клиент его не передал. Проверьте сборку Ren-SDK и заголовок X-SDK-Fingerprint.',
-            );
-          }
           throw ApiException('Неверный логин или пароль.');
         case 500:
           throw ApiException('Ошибка сервера. Попробуйте позже.');
@@ -113,7 +99,6 @@ class AuthApi {
           'pubk': pubk,
           'salt': salt,
         },
-        options: Options(headers: _publicAuthHeaders()),
       );
       return response.data;
     } on DioException catch (e) {

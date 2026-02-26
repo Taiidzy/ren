@@ -168,82 +168,27 @@ where
             )
         })?;
 
-        let sdk_fingerprint = if app_state.sdk_fingerprint_allowlist.is_empty() {
-            None
-        } else {
-            let v = parts
-                .headers
-                .get("x-sdk-fingerprint")
-                .and_then(|x| x.to_str().ok())
-                .map(|x| x.trim().to_string())
-                .filter(|x| !x.is_empty())
-                .ok_or((
-                    StatusCode::UNAUTHORIZED,
-                    "sdk fingerprint required".to_string(),
-                ))?;
-            let normalized = v.trim().to_lowercase();
-            if normalized.is_empty() {
-                return Err((
-                    StatusCode::UNAUTHORIZED,
-                    "sdk fingerprint required".to_string(),
-                ));
-            }
-            if !app_state.sdk_fingerprint_allowlist.contains(&normalized) {
-                return Err((
-                    StatusCode::UNAUTHORIZED,
-                    "sdk fingerprint is not allowed".to_string(),
-                ));
-            }
-            Some(normalized)
-        };
-
-        let active: Option<i32> = if let Some(fp) = sdk_fingerprint.as_ref() {
-            sqlx::query_scalar(
-                r#"
-                SELECT 1
-                FROM auth_sessions
-                WHERE id = $1
-                  AND user_id = $2
-                  AND revoked_at IS NULL
-                  AND expires_at > now()
-                  AND lower(coalesce(sdk_fingerprint, '')) = $3
-                LIMIT 1
-                "#,
+        let active: Option<i32> = sqlx::query_scalar(
+            r#"
+            SELECT 1
+            FROM auth_sessions
+            WHERE id = $1
+              AND user_id = $2
+              AND revoked_at IS NULL
+              AND expires_at > now()
+            LIMIT 1
+            "#,
+        )
+        .bind(session_id)
+        .bind(data.claims.sub)
+        .fetch_optional(&app_state.pool)
+        .await
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Ошибка проверки сессии".to_string(),
             )
-            .bind(session_id)
-            .bind(data.claims.sub)
-            .bind(fp)
-            .fetch_optional(&app_state.pool)
-            .await
-            .map_err(|_| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Ошибка проверки сессии".to_string(),
-                )
-            })?
-        } else {
-            sqlx::query_scalar(
-                r#"
-                SELECT 1
-                FROM auth_sessions
-                WHERE id = $1
-                  AND user_id = $2
-                  AND revoked_at IS NULL
-                  AND expires_at > now()
-                LIMIT 1
-                "#,
-            )
-            .bind(session_id)
-            .bind(data.claims.sub)
-            .fetch_optional(&app_state.pool)
-            .await
-            .map_err(|_| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Ошибка проверки сессии".to_string(),
-                )
-            })?
-        };
+        })?;
 
         if active.is_none() {
             return Err((

@@ -101,17 +101,15 @@ sequenceDiagram
   participant B as Backend
   participant P as Postgres
 
-  C->>B: POST /auth/refresh (refresh_token + X-SDK-Fingerprint)
+  C->>B: POST /auth/refresh (refresh_token)
   B->>P: validate auth_sessions row
-  B->>P: rotate refresh_token_hash + update sdk_fingerprint
+  B->>P: rotate refresh_token_hash
   B-->>C: new access token + refresh token + session_id
   C->>B: GET /auth/sessions
-  B-->>C: list active sessions (device/ip/city/app_version/fingerprint)
+  B-->>C: list active sessions (device/ip/city/app_version)
 ```
 
 ## Fault Points
-- SDK integrity mismatch on Android blocks startup (`RenSdk.initialize`).
-- Missing/invalid fingerprint when allowlist enabled causes 401 on auth/session validation.
 - Media file persistence depends on local filesystem availability in backend container.
 - WebSocket state recovery relies on client reconnect logic.
 
