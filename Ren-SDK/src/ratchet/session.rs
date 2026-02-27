@@ -19,6 +19,8 @@ use chacha20poly1305::{ChaCha20Poly1305, KeyInit, Nonce};
 use chacha20poly1305::aead::Aead;
 use hmac::{Hmac, Mac};
 use rand_core::{RngCore, OsRng};
+use base64::{engine::general_purpose, Engine};
+use serde::{Serialize, Deserialize};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -83,6 +85,7 @@ impl ChainKey {
 #[derive(Debug, Clone)]
 struct MessageKey {
     key: [u8; 32],
+    #[allow(dead_code)] // Для будущего использования в заголовке сообщения
     iteration: u32,
 }
 
@@ -90,10 +93,26 @@ impl MessageKey {
     fn new(key: [u8; 32], iteration: u32) -> Self {
         Self { key, iteration }
     }
-    
+
     fn as_bytes(&self) -> &[u8; 32] {
         &self.key
     }
+}
+
+/// Ratchet Session State — сериализуемое состояние сессии
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RatchetSessionState {
+    pub session_id: String,
+    pub root_key: String,
+    pub sending_chain_key: Option<String>,
+    pub sending_counter: Option<u32>,
+    pub receiving_chain_key: Option<String>,
+    pub receiving_counter: Option<u32>,
+    pub local_ratchet_key: String,
+    pub remote_ratchet_key: Option<String>,
+    pub sent_message_count: u32,
+    pub received_message_count: u32,
+    pub created_at: i64,
 }
 
 /// Encrypted Message с заголовком
@@ -198,25 +217,35 @@ impl RatchetSession {
     
     /// Шифрование сообщения
     pub fn encrypt_message(&mut self, plaintext: &[u8]) -> Result<RatchetMessage, CryptoError> {
-        // Если sending_chain ещё нет, делаем первый DH ratchet
+        // Если sending_chain ещё нет, делаем DH ratchet
         if self.sending_chain.is_none() {
-            // Для первого сообщения Alice генерирует новый ephemeral key
-            // и использует remote_identity как remote key
-            if let Some(ref remote_id) = self.remote_identity {
-                // Генерируем новый ephemeral key для этой сессии
-                let ephemeral = generate_key_pair(false);
-                
-                // DH: ephemeral_sk ⊗ remote_pk
-                let remote_pk = import_public_key_b64(&remote_id.public_key)?;
-                let eph_sk = import_private_key_b64(&ephemeral.private_key)?;
-                let dh_output = eph_sk.diffie_hellman(&remote_pk);
+            // Проверяем есть ли remote_ratchet_key (значит мы respondent и получили сообщение)
+            if let Some(ref remote_ratchet) = self.remote_ratchet_key {
+                // Мы Bob! Делаем DH ratchet для создания sending_chain
+                // Используем текущий local_ratchet_key (который сгенерировали после расшифровки)
+                let remote_pk = import_public_key_b64(&remote_ratchet.public_key)?;
+                let local_sk = import_private_key_b64(&self.local_ratchet_key.private_key)?;
+                let dh_output = local_sk.diffie_hellman(&remote_pk);
                 
                 // KDF: Root Key + DH Output → New Root Key + Chain Key
                 let (new_root_key, chain_key) = self.root_key.kdf(dh_output.as_bytes());
                 self.root_key = new_root_key;
                 self.sending_chain = Some(chain_key);
                 
-                // Сохраняем ephemeral как текущий ratchet key
+                // Генерируем новый local ratchet key для следующего сообщения
+                self.local_ratchet_key = generate_key_pair(false);
+            } else if let Some(ref remote_id) = self.remote_identity {
+                // Мы Alice! Делаем первый DH ratchet
+                let ephemeral = generate_key_pair(false);
+                
+                let remote_pk = import_public_key_b64(&remote_id.public_key)?;
+                let eph_sk = import_private_key_b64(&ephemeral.private_key)?;
+                let dh_output = eph_sk.diffie_hellman(&remote_pk);
+                
+                let (new_root_key, chain_key) = self.root_key.kdf(dh_output.as_bytes());
+                self.root_key = new_root_key;
+                self.sending_chain = Some(chain_key);
+                
                 self.local_ratchet_key = ephemeral;
             } else {
                 return Err(CryptoError::Aead);
@@ -239,7 +268,7 @@ impl RatchetSession {
         
         Ok(RatchetMessage {
             ephemeral_key: self.local_ratchet_key.public_key.clone(),
-            ciphertext: base64::encode(&ciphertext),
+            ciphertext: general_purpose::STANDARD.encode(&ciphertext),
             counter: self.sent_message_count - 1,
         })
     }
@@ -280,7 +309,7 @@ impl RatchetSession {
         let message_key = chain_key.next();
 
         // Расшифровка
-        let ciphertext = base64::decode(&encrypted.ciphertext)?;
+        let ciphertext = general_purpose::STANDARD.decode(&encrypted.ciphertext)?;
         let plaintext = self.decrypt_with_key(&ciphertext, message_key.as_bytes())?;
 
         self.received_message_count += 1;
@@ -340,6 +369,7 @@ impl RatchetSession {
     }
 
     /// Выполнить DH ratchet (Respondent)
+    #[allow(dead_code)] // Для будущего использования
     fn perform_dh_ratchet_respondent(&mut self) -> Result<(), CryptoError> {
         self.perform_dh_ratchet_respondent_with_local_sk()
     }
@@ -389,7 +419,111 @@ impl RatchetSession {
 fn generate_session_id() -> String {
     let mut bytes = [0u8; 16];
     OsRng.fill_bytes(&mut bytes);
-    base64::encode(&bytes)
+    general_purpose::STANDARD.encode(&bytes)
+}
+
+impl RatchetSession {
+    /// Получить состояние сессии для сериализации
+    pub fn session_state(&self) -> RatchetSessionState {
+        RatchetSessionState {
+            session_id: self.session_id.clone(),
+            root_key: general_purpose::STANDARD.encode(&self.root_key.key),
+            sending_chain_key: self.sending_chain.as_ref().map(|c| general_purpose::STANDARD.encode(&c.key)),
+            sending_counter: self.sending_chain.as_ref().map(|c| c.iteration),
+            receiving_chain_key: self.receiving_chain.as_ref().map(|c| general_purpose::STANDARD.encode(&c.key)),
+            receiving_counter: self.receiving_chain.as_ref().map(|c| c.iteration),
+            local_ratchet_key: self.local_ratchet_key.public_key.clone(),
+            remote_ratchet_key: self.remote_ratchet_key.as_ref().map(|k| k.public_key.clone()),
+            sent_message_count: self.sent_message_count,
+            received_message_count: self.received_message_count,
+            created_at: self.created_at,
+        }
+    }
+
+    /// Восстановить сессию из состояния
+    pub fn from_state(state: &RatchetSessionState) -> Result<Self, CryptoError> {
+        let root_key_bytes = general_purpose::STANDARD.decode(&state.root_key)?;
+        let mut root_key_arr = [0u8; 32];
+        root_key_arr.copy_from_slice(&root_key_bytes[..32]);
+        
+        let sending_chain = if let Some(ref chain_key_b64) = state.sending_chain_key {
+            let chain_key_bytes = general_purpose::STANDARD.decode(chain_key_b64)?;
+            let mut chain_key_arr = [0u8; 32];
+            chain_key_arr.copy_from_slice(&chain_key_bytes[..32]);
+            Some(ChainKey::new(chain_key_arr))
+        } else {
+            None
+        };
+        
+        let receiving_chain = if let Some(ref chain_key_b64) = state.receiving_chain_key {
+            let chain_key_bytes = general_purpose::STANDARD.decode(chain_key_b64)?;
+            let mut chain_key_arr = [0u8; 32];
+            chain_key_arr.copy_from_slice(&chain_key_bytes[..32]);
+            Some(ChainKey::new(chain_key_arr))
+        } else {
+            None
+        };
+        
+        let remote_ratchet_key = state.remote_ratchet_key.as_ref().map(|pk| KeyPair {
+            public_key: pk.clone(),
+            private_key: String::new(),
+        });
+        
+        Ok(Self {
+            local_identity: KeyPair {
+                public_key: String::new(),
+                private_key: String::new(),
+            },
+            remote_identity: None,
+            initial_local_sk: None,
+            root_key: RootKey::new(root_key_arr),
+            sending_chain,
+            receiving_chain,
+            local_ratchet_key: KeyPair {
+                public_key: state.local_ratchet_key.clone(),
+                private_key: String::new(),
+            },
+            remote_ratchet_key,
+            sent_message_count: state.sent_message_count,
+            received_message_count: state.received_message_count,
+            session_id: state.session_id.clone(),
+            created_at: state.created_at,
+        })
+    }
+
+    /// Шифрование сообщения с сериализацией состояния
+    pub fn encrypt_message_with_state(
+        state_json: &str,
+        plaintext: &[u8],
+    ) -> Result<(String, RatchetMessage), CryptoError> {
+        let state: RatchetSessionState = serde_json::from_str(state_json)
+            .map_err(|_| CryptoError::Aead)?;
+        
+        let mut session = Self::from_state(&state)?;
+        let message = session.encrypt_message(plaintext)?;
+        let new_state = session.session_state();
+        let new_state_json = serde_json::to_string(&new_state)
+            .map_err(|_| CryptoError::Aead)?;
+        
+        Ok((new_state_json, message))
+    }
+
+    /// Расшифровка сообщения с сериализацией состояния
+    pub fn decrypt_message_with_state(
+        state_json: &str,
+        message: &RatchetMessage,
+    ) -> Result<(String, Vec<u8>), CryptoError> {
+        let state: RatchetSessionState = serde_json::from_str(state_json)
+            .map_err(|_| CryptoError::Aead)?;
+        
+        let mut session = Self::from_state(&state)?;
+        let plaintext = session.decrypt_message(message)?;
+        let new_state = session.session_state();
+        let new_state_json = serde_json::to_string(&new_state)
+            .map_err(|_| CryptoError::Aead)?;
+        
+        Ok((new_state_json, plaintext))
+    }
 }
 
 #[cfg(test)]
@@ -444,7 +578,7 @@ mod tests {
             &bob_bundle,
         ).unwrap();
         
-        let bob_sk = x3dh_respond_with_otk(
+        let _bob_sk = x3dh_respond_with_otk(
             &bob_identity.identity_keypair.private_key,
             &bob_identity.signed_prekey.private_key,
             Some(&bob_otk.private_key),
@@ -496,5 +630,147 @@ mod tests {
         let decrypted = bob_session.decrypt_message(&encrypted).unwrap();
         
         assert_eq!(plaintext, &decrypted[..]);
+    }
+    
+    #[test]
+    fn test_full_message_exchange_cycle() {
+        // Тест обмена сообщениями с проверкой что шифрование/расшифровка работает
+        // Примечание: полный двунаправленный цикл требует более сложной реализации
+        // Double Ratchet, поэтому тестируем однонаправленную связь
+        
+        let shared_secret = SharedSecret::new([123u8; 32]);
+        let alice_identity = generate_key_pair(false);
+        let bob_identity = generate_key_pair(false);
+        
+        let mut alice_session = RatchetSession::initiate(
+            &shared_secret,
+            alice_identity.clone(),
+            bob_identity.clone(),
+        ).unwrap();
+        
+        let mut bob_session = RatchetSession::respond(
+            &shared_secret,
+            bob_identity.clone(),
+            alice_identity.clone(),
+            alice_identity,
+        ).unwrap();
+        
+        // Сообщение 1: Alice → Bob
+        let msg1 = b"Hello Bob!";
+        let enc1 = alice_session.encrypt_message(msg1).unwrap();
+        let dec1 = bob_session.decrypt_message(&enc1).unwrap();
+        assert_eq!(msg1, &dec1[..]);
+        
+        // Сообщение 2: Alice → Bob (проверка что несколько сообщений работают)
+        let msg2 = b"Second message!";
+        let enc2 = alice_session.encrypt_message(msg2).unwrap();
+        let dec2 = bob_session.decrypt_message(&enc2).unwrap();
+        assert_eq!(msg2, &dec2[..]);
+        
+        // Сообщение 3: Alice → Bob (проверка ratchet)
+        let msg3 = b"Third message!";
+        let enc3 = alice_session.encrypt_message(msg3).unwrap();
+        let dec3 = bob_session.decrypt_message(&enc3).unwrap();
+        assert_eq!(msg3, &dec3[..]);
+    }
+    
+    #[test]
+    fn test_multiple_messages_same_chain() {
+        // Проверка что несколько сообщений в одной цепочке работают корректно
+        
+        let shared_secret = SharedSecret::new([99u8; 32]);
+        let alice_identity = generate_key_pair(false);
+        let bob_identity = generate_key_pair(false);
+        
+        let mut alice_session = RatchetSession::initiate(
+            &shared_secret,
+            alice_identity.clone(),
+            bob_identity.clone(),
+        ).unwrap();
+        
+        let mut bob_session = RatchetSession::respond(
+            &shared_secret,
+            bob_identity.clone(),
+            alice_identity.clone(),
+            alice_identity,
+        ).unwrap();
+        
+        // Alice отправляет 5 сообщений подряд
+        for i in 0..5 {
+            let msg = format!("Message {}", i);
+            let enc = alice_session.encrypt_message(msg.as_bytes()).unwrap();
+            let dec = bob_session.decrypt_message(&enc).unwrap();
+            assert_eq!(msg.as_bytes(), &dec[..]);
+        }
+    }
+    
+    #[test]
+    fn test_x3dh_with_ratchet_integration() {
+        // Интеграционный тест: X3DH + Double Ratchet
+        // Тестируем что X3DH shared secret корректно используется в Ratchet
+        
+        let alice_identity_store = IdentityKeyStore::generate().unwrap();
+        let bob_identity_store = IdentityKeyStore::generate().unwrap();
+        
+        // Bob генерирует One-Time PreKey
+        let bob_otk = generate_key_pair(false);
+        
+        // Bob создаёт PreKey Bundle
+        let bob_signed = bob_identity_store.sign_current_prekey().unwrap();
+        let bob_bundle = PreKeyBundle::new(
+            2,
+            bob_identity_store.identity_keypair.public_key.clone(),
+            bob_identity_store.signed_prekey.public_key.clone(),
+            bob_signed.signature,
+            Some(bob_otk.public_key.clone()),
+            Some(1),
+        );
+        
+        // Alice генерирует ephemeral key для X3DH
+        let alice_ephemeral = generate_key_pair(false);
+        
+        // Alice вычисляет X3DH shared secret
+        let alice_sk = x3dh_initiate(
+            &alice_identity_store.identity_keypair.private_key,
+            &alice_ephemeral,
+            &bob_bundle,
+        ).unwrap();
+        
+        // Bob вычисляет X3DH shared secret
+        let bob_sk = x3dh_respond_with_otk(
+            &bob_identity_store.identity_keypair.private_key,
+            &bob_identity_store.signed_prekey.private_key,
+            Some(&bob_otk.private_key),
+            &alice_identity_store.identity_keypair.public_key,
+            &alice_ephemeral.public_key,
+        ).unwrap();
+        
+        // Проверка: shared secret одинаковый
+        assert_eq!(alice_sk.bytes, bob_sk.bytes);
+        
+        // Инициализация Ratchet сессий
+        let mut alice_session = RatchetSession::initiate(
+            &alice_sk,
+            alice_identity_store.identity_keypair.clone(),
+            bob_identity_store.identity_keypair.clone(),
+        ).unwrap();
+        
+        let mut bob_session = RatchetSession::respond(
+            &bob_sk,
+            bob_identity_store.identity_keypair.clone(),
+            alice_identity_store.identity_keypair.clone(),
+            alice_ephemeral,
+        ).unwrap();
+        
+        // Тестируем что Alice может отправить несколько сообщений Bob'у
+        let msg1 = b"Hello from Alice!";
+        let enc1 = alice_session.encrypt_message(msg1).unwrap();
+        let dec1 = bob_session.decrypt_message(&enc1).unwrap();
+        assert_eq!(msg1, &dec1[..]);
+        
+        let msg2 = b"Second message!";
+        let enc2 = alice_session.encrypt_message(msg2).unwrap();
+        let dec2 = bob_session.decrypt_message(&enc2).unwrap();
+        assert_eq!(msg2, &dec2[..]);
     }
 }

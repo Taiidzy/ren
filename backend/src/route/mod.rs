@@ -3,6 +3,7 @@ pub mod chats;
 pub mod media;
 pub mod users;
 pub mod ws;
+pub mod keys;
 
 use crate::AppState;
 use axum::Router;
@@ -15,4 +16,5 @@ pub fn router() -> Router<AppState> {
         .merge(chats::router())
         .merge(media::router())
         .merge(ws::router())
+        .merge(keys::router())
 }

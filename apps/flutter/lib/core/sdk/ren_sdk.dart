@@ -1,5 +1,6 @@
 // ignore_for_file: non_constant_identifier_names, camel_case_types, unintended_html_in_doc_comment
 
+import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io' show Platform, File, Directory;
 import 'dart:typed_data';
@@ -111,6 +112,14 @@ final class RenDecryptedFile extends Struct {
   external Pointer<Utf8> filename;
   external Pointer<Utf8> mimetype;
   external Pointer<Utf8> message;
+}
+
+// P0-4: RatchetMessage structure (matches Rust RatchetMessage)
+final class RenRatchetMessage extends Struct {
+  external Pointer<Utf8> ephemeral_key;
+  external Pointer<Utf8> ciphertext;
+  @Int32()
+  external int counter;
 }
 
 /* ============================
@@ -350,6 +359,87 @@ typedef ren_unwrap_symmetric_key_bytes_dart =
       Pointer<IntPtr>,
     );
 
+// P0-4: X3DH & Double Ratchet typedefs
+typedef x3dh_initiate_native = Pointer<Utf8> Function(
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+);
+
+typedef x3dh_respond_native = Pointer<Utf8> Function(
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+);
+
+typedef ratchet_initiate_native = Pointer<Utf8> Function(
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+);
+
+typedef ratchet_respond_native = Pointer<Utf8> Function(
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+);
+
+typedef ratchet_encrypt_native = Pointer<Utf8> Function(
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+);
+
+typedef ratchet_decrypt_native = Pointer<Utf8> Function(
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+);
+
+typedef x3dh_initiate_dart = Pointer<Utf8> Function(
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+);
+
+typedef x3dh_respond_dart = Pointer<Utf8> Function(
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+);
+
+typedef ratchet_initiate_dart = Pointer<Utf8> Function(
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+);
+
+typedef ratchet_respond_dart = Pointer<Utf8> Function(
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+);
+
+typedef ratchet_encrypt_dart = Pointer<Utf8> Function(
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+);
+
+typedef ratchet_decrypt_dart = Pointer<Utf8> Function(
+  Pointer<Utf8>,
+  Pointer<Utf8>,
+);
+
 // ==============================
 // Lookup native functions
 // ==============================
@@ -509,6 +599,32 @@ final _ren_unwrap_symmetric_key_bytes = _dylib
       ren_unwrap_symmetric_key_bytes_native,
       ren_unwrap_symmetric_key_bytes_dart
     >('ren_unwrap_symmetric_key_bytes');
+
+// P0-4: X3DH & Double Ratchet FFI lookups
+final _x3dh_initiate = _dylib
+    .lookupFunction<x3dh_initiate_native, x3dh_initiate_dart>(
+      'x3dh_initiate_ffi',
+    );
+final _x3dh_respond = _dylib
+    .lookupFunction<x3dh_respond_native, x3dh_respond_dart>(
+      'x3dh_respond_ffi',
+    );
+final _ratchet_initiate = _dylib
+    .lookupFunction<ratchet_initiate_native, ratchet_initiate_dart>(
+      'ratchet_initiate_ffi',
+    );
+final _ratchet_respond = _dylib
+    .lookupFunction<ratchet_respond_native, ratchet_respond_dart>(
+      'ratchet_respond_ffi',
+    );
+final _ratchet_encrypt = _dylib
+    .lookupFunction<ratchet_encrypt_native, ratchet_encrypt_dart>(
+      'ratchet_encrypt_ffi',
+    );
+final _ratchet_decrypt = _dylib
+    .lookupFunction<ratchet_decrypt_native, ratchet_decrypt_dart>(
+      'ratchet_decrypt_ffi',
+    );
 
 // ==============================
 // High-level Dart wrapper
@@ -1214,6 +1330,196 @@ class RenSdk {
         final pOut = _ren_derive_key_from_string(pi);
         final out = readAndFreeString(pOut);
         return out;
+      });
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  // ==============================
+  // P0-4: X3DH & Double Ratchet Methods
+  // ==============================
+
+  /// X3DH Initiate (Alice)
+  /// Returns Base64-encoded shared secret
+  String? x3dhInitiate({
+    required String identitySecretKey,
+    required String ephemeralPublicKey,
+    required String ephemeralSecretKey,
+    required String theirIdentityKey,
+    required String theirSignedPreKey,
+    String? theirOneTimePreKey,
+  }) {
+    try {
+      return using((arena) {
+        final pIdentitySk = identitySecretKey.toNativeUtf8(allocator: arena);
+        final pEphPk = ephemeralPublicKey.toNativeUtf8(allocator: arena);
+        final pEphSk = ephemeralSecretKey.toNativeUtf8(allocator: arena);
+        final pTheirIk = theirIdentityKey.toNativeUtf8(allocator: arena);
+        final pTheirSpk = theirSignedPreKey.toNativeUtf8(allocator: arena);
+        final pTheirOtk = theirOneTimePreKey?.toNativeUtf8(allocator: arena) ??
+            nullptr;
+
+        final result = _x3dh_initiate(
+          pIdentitySk,
+          pEphPk,
+          pEphSk,
+          pTheirIk,
+          pTheirSpk,
+          pTheirOtk,
+        );
+
+        if (result == nullptr) return null;
+
+        final secret = result.toDartString();
+        ren_free_string(result);
+        return secret;
+      });
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  /// X3DH Respond (Bob)
+  /// Returns Base64-encoded shared secret
+  String? x3dhRespond({
+    required String identitySecretKey,
+    required String signedPreKeySecret,
+    required String theirIdentityKey,
+    required String theirEphemeralKey,
+    String? oneTimePreKeySecret,
+  }) {
+    try {
+      return using((arena) {
+        final pIdentitySk = identitySecretKey.toNativeUtf8(allocator: arena);
+        final pSpkSk = signedPreKeySecret.toNativeUtf8(allocator: arena);
+        final pTheirIk = theirIdentityKey.toNativeUtf8(allocator: arena);
+        final pTheirEph = theirEphemeralKey.toNativeUtf8(allocator: arena);
+        final pOtkSk =
+            oneTimePreKeySecret?.toNativeUtf8(allocator: arena) ?? nullptr;
+
+        final result = _x3dh_respond(
+          pIdentitySk,
+          pSpkSk,
+          pTheirIk,
+          pTheirEph,
+          pOtkSk,
+        );
+
+        if (result == nullptr) return null;
+
+        final secret = result.toDartString();
+        ren_free_string(result);
+        return secret;
+      });
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  /// Ratchet Session Initiate (Alice)
+  /// Returns JSON-serialized session state
+  String? ratchetInitiate({
+    required String sharedSecretB64,
+    required String localIdentityPublic,
+    required String remoteIdentityPublic,
+  }) {
+    try {
+      return using((arena) {
+        final pSecret = sharedSecretB64.toNativeUtf8(allocator: arena);
+        final pLocalId = localIdentityPublic.toNativeUtf8(allocator: arena);
+        final pRemoteId = remoteIdentityPublic.toNativeUtf8(allocator: arena);
+
+        final result = _ratchet_initiate(pSecret, pLocalId, pRemoteId);
+
+        if (result == nullptr) return null;
+
+        final state = result.toDartString();
+        ren_free_string(result);
+        return state;
+      });
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  /// Ratchet Session Respond (Bob)
+  /// Returns JSON-serialized session state
+  String? ratchetRespond({
+    required String sharedSecretB64,
+    required String localIdentityPublic,
+    required String remoteIdentityPublic,
+    required String remoteRatchetKey,
+  }) {
+    try {
+      return using((arena) {
+        final pSecret = sharedSecretB64.toNativeUtf8(allocator: arena);
+        final pLocalId = localIdentityPublic.toNativeUtf8(allocator: arena);
+        final pRemoteId = remoteIdentityPublic.toNativeUtf8(allocator: arena);
+        final pRemoteRatchet =
+            remoteRatchetKey.toNativeUtf8(allocator: arena);
+
+        final result = _ratchet_respond(
+          pSecret,
+          pLocalId,
+          pRemoteId,
+          pRemoteRatchet,
+        );
+
+        if (result == nullptr) return null;
+
+        final state = result.toDartString();
+        ren_free_string(result);
+        return state;
+      });
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  /// Ratchet Encrypt
+  /// Returns JSON with session_state and message
+  String? ratchetEncrypt({
+    required String sessionStateJson,
+    required String plaintext,
+  }) {
+    try {
+      return using((arena) {
+        final pSession = sessionStateJson.toNativeUtf8(allocator: arena);
+        final pPlaintext = plaintext.toNativeUtf8(allocator: arena);
+
+        final result = _ratchet_encrypt(pSession, pPlaintext);
+
+        if (result == nullptr) return null;
+
+        final output = result.toDartString();
+        ren_free_string(result);
+        return output;
+      });
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  /// Ratchet Decrypt
+  /// Returns JSON with session_state and plaintext (Base64)
+  String? ratchetDecrypt({
+    required String sessionStateJson,
+    required Map<String, dynamic> message,
+  }) {
+    try {
+      return using((arena) {
+        final pSession = sessionStateJson.toNativeUtf8(allocator: arena);
+        final messageJson = jsonEncode(message);
+        final pMessage = messageJson.toNativeUtf8(allocator: arena);
+
+        final result = _ratchet_decrypt(pSession, pMessage);
+
+        if (result == nullptr) return null;
+
+        final output = result.toDartString();
+        ren_free_string(result);
+        return output;
       });
     } catch (e) {
       rethrow;

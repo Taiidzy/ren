@@ -58,6 +58,7 @@ class ChatsRepository {
   final Map<int, String> _peerPublicKeyB64Cache = <int, String>{};
   Future<void> _mediaPipelineTail = Future<void>.value();
 
+
   static const int _maxUploadRetries = 2;
 
   ChatsRepository(this.api, this.renSdk);
@@ -1049,6 +1050,9 @@ class ChatsRepository {
       throw Exception('Некорректный peerId для private-чата');
     }
 
+    // TODO: Интегрировать Double Ratchet шифрование
+    // Пока используем существующее шифрование через RenSdk
+    
     final myUserId = await _getMyUserId();
     final myPrivateKeyB64 = await _getMyPrivateKeyB64();
     final myPublicKeyB64 = await _getMyPublicKeyB64();

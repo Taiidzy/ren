@@ -13,6 +13,10 @@ use crate::crypto::{
     wrap_symmetric_key, validate_recovery_entropy,
 };
 
+use crate::x3dh::{PreKeyBundle, x3dh_initiate, x3dh_respond_with_otk};
+use crate::crypto::KeyPair;
+use crate::ratchet::RatchetSession;
+
 // ============================================================================
 // Helper functions для работы со строками C
 // ============================================================================
@@ -840,6 +844,306 @@ pub extern "C" fn ren_unwrap_symmetric_key_bytes(
                     *out_len = len;
                 }
                 ptr
+            }
+            Err(_) => ptr::null_mut(),
+        }
+    })
+}
+
+// ============================================================================
+// P0-4: X3DH Protocol FFI
+// ============================================================================
+
+/// X3DH Initiate FFI (Alice)
+#[no_mangle]
+pub extern "C" fn x3dh_initiate_ffi(
+    identity_secret_key: *const c_char,
+    ephemeral_public_key: *const c_char,
+    ephemeral_secret_key: *const c_char,
+    their_identity_key: *const c_char,
+    their_signed_prekey: *const c_char,
+    their_one_time_prekey: *const c_char,
+) -> *mut c_char {
+    ffi_catch(ptr::null_mut(), || {
+        let identity_sk = match c_str_to_str(identity_secret_key) {
+            Some(s) => s,
+            None => return ptr::null_mut(),
+        };
+        let eph_pk = match c_str_to_str(ephemeral_public_key) {
+            Some(s) => s,
+            None => return ptr::null_mut(),
+        };
+        let eph_sk = match c_str_to_str(ephemeral_secret_key) {
+            Some(s) => s,
+            None => return ptr::null_mut(),
+        };
+        let their_ik = match c_str_to_str(their_identity_key) {
+            Some(s) => s,
+            None => return ptr::null_mut(),
+        };
+        let their_spk = match c_str_to_str(their_signed_prekey) {
+            Some(s) => s,
+            None => return ptr::null_mut(),
+        };
+        let their_otk = c_str_to_str(their_one_time_prekey);
+
+        let ephemeral_keypair = KeyPair {
+            public_key: eph_pk.to_string(),
+            private_key: eph_sk.to_string(),
+        };
+
+        let bundle = PreKeyBundle::new(
+            0,
+            their_ik.to_string(),
+            their_spk.to_string(),
+            String::new(),
+            their_otk.map(|s| s.to_string()),
+            their_otk.map(|_| 0),
+        );
+
+        match x3dh_initiate(identity_sk, &ephemeral_keypair, &bundle) {
+            Ok(secret) => {
+                let secret_b64 = general_purpose::STANDARD.encode(&secret.bytes);
+                rust_str_to_c(secret_b64)
+            }
+            Err(_) => ptr::null_mut(),
+        }
+    })
+}
+
+/// X3DH Respond FFI (Bob)
+#[no_mangle]
+pub extern "C" fn x3dh_respond_ffi(
+    identity_secret_key: *const c_char,
+    signed_prekey_secret: *const c_char,
+    their_identity_key: *const c_char,
+    their_ephemeral_key: *const c_char,
+    one_time_prekey_secret: *const c_char,
+) -> *mut c_char {
+    ffi_catch(ptr::null_mut(), || {
+        let identity_sk = match c_str_to_str(identity_secret_key) {
+            Some(s) => s,
+            None => return ptr::null_mut(),
+        };
+        let spk_sk = match c_str_to_str(signed_prekey_secret) {
+            Some(s) => s,
+            None => return ptr::null_mut(),
+        };
+        let their_ik = match c_str_to_str(their_identity_key) {
+            Some(s) => s,
+            None => return ptr::null_mut(),
+        };
+        let their_eph = match c_str_to_str(their_ephemeral_key) {
+            Some(s) => s,
+            None => return ptr::null_mut(),
+        };
+        let otk_sk = c_str_to_str(one_time_prekey_secret);
+
+        match x3dh_respond_with_otk(identity_sk, spk_sk, otk_sk, their_ik, their_eph) {
+            Ok(secret) => {
+                let secret_b64 = general_purpose::STANDARD.encode(&secret.bytes);
+                rust_str_to_c(secret_b64)
+            }
+            Err(_) => ptr::null_mut(),
+        }
+    })
+}
+
+// ============================================================================
+// P0-4: Double Ratchet FFI
+// ============================================================================
+
+/// Ratchet Session Initiate FFI (Alice)
+#[no_mangle]
+pub extern "C" fn ratchet_initiate_ffi(
+    shared_secret_b64: *const c_char,
+    local_identity_public: *const c_char,
+    remote_identity_public: *const c_char,
+) -> *mut c_char {
+    ffi_catch(ptr::null_mut(), || {
+        let secret_b64 = match c_str_to_str(shared_secret_b64) {
+            Some(s) => s,
+            None => return ptr::null_mut(),
+        };
+        let local_id_pk = match c_str_to_str(local_identity_public) {
+            Some(s) => s,
+            None => return ptr::null_mut(),
+        };
+        let remote_id_pk = match c_str_to_str(remote_identity_public) {
+            Some(s) => s,
+            None => return ptr::null_mut(),
+        };
+
+        let secret_bytes = match general_purpose::STANDARD.decode(secret_b64) {
+            Ok(b) => b,
+            Err(_) => return ptr::null_mut(),
+        };
+        let mut secret_arr = [0u8; 32];
+        secret_arr.copy_from_slice(&secret_bytes[..32]);
+        let secret = crate::x3dh::SharedSecret::new(secret_arr);
+
+        let local_identity = KeyPair {
+            public_key: local_id_pk.to_string(),
+            private_key: String::new(),
+        };
+
+        let remote_identity = KeyPair {
+            public_key: remote_id_pk.to_string(),
+            private_key: String::new(),
+        };
+
+        match RatchetSession::initiate(&secret, local_identity, remote_identity) {
+            Ok(session) => {
+                let state = session.session_state();
+                let json = serde_json::to_string(&state).unwrap_or_default();
+                rust_str_to_c(json)
+            }
+            Err(_) => ptr::null_mut(),
+        }
+    })
+}
+
+/// Ratchet Session Respond FFI (Bob)
+#[no_mangle]
+pub extern "C" fn ratchet_respond_ffi(
+    shared_secret_b64: *const c_char,
+    local_identity_public: *const c_char,
+    remote_identity_public: *const c_char,
+    remote_ratchet_key: *const c_char,
+) -> *mut c_char {
+    ffi_catch(ptr::null_mut(), || {
+        let secret_b64 = match c_str_to_str(shared_secret_b64) {
+            Some(s) => s,
+            None => return ptr::null_mut(),
+        };
+        let local_id_pk = match c_str_to_str(local_identity_public) {
+            Some(s) => s,
+            None => return ptr::null_mut(),
+        };
+        let remote_id_pk = match c_str_to_str(remote_identity_public) {
+            Some(s) => s,
+            None => return ptr::null_mut(),
+        };
+        let remote_ratchet = match c_str_to_str(remote_ratchet_key) {
+            Some(s) => s,
+            None => return ptr::null_mut(),
+        };
+
+        let secret_bytes = match general_purpose::STANDARD.decode(secret_b64) {
+            Ok(b) => b,
+            Err(_) => return ptr::null_mut(),
+        };
+        let mut secret_arr = [0u8; 32];
+        secret_arr.copy_from_slice(&secret_bytes[..32]);
+        let secret = crate::x3dh::SharedSecret::new(secret_arr);
+
+        let local_identity = KeyPair {
+            public_key: local_id_pk.to_string(),
+            private_key: String::new(),
+        };
+
+        let remote_identity = KeyPair {
+            public_key: remote_id_pk.to_string(),
+            private_key: String::new(),
+        };
+
+        let remote_ratchet = KeyPair {
+            public_key: remote_ratchet.to_string(),
+            private_key: String::new(),
+        };
+
+        match RatchetSession::respond(&secret, local_identity, remote_identity, remote_ratchet) {
+            Ok(session) => {
+                let state = session.session_state();
+                let json = serde_json::to_string(&state).unwrap_or_default();
+                rust_str_to_c(json)
+            }
+            Err(_) => ptr::null_mut(),
+        }
+    })
+}
+
+/// Ratchet Encrypt FFI
+#[no_mangle]
+pub extern "C" fn ratchet_encrypt_ffi(
+    session_json: *const c_char,
+    plaintext: *const c_char,
+) -> *mut c_char {
+    ffi_catch(ptr::null_mut(), || {
+        let session_str = match c_str_to_str(session_json) {
+            Some(s) => s,
+            None => return ptr::null_mut(),
+        };
+        let plaintext_str = match c_str_to_str(plaintext) {
+            Some(s) => s,
+            None => return ptr::null_mut(),
+        };
+
+        match RatchetSession::encrypt_message_with_state(session_str, plaintext_str.as_bytes()) {
+            Ok((new_state_json, message)) => {
+                let result = serde_json::json!({
+                    "session_state": new_state_json,
+                    "message": {
+                        "ephemeral_key": message.ephemeral_key,
+                        "ciphertext": message.ciphertext,
+                        "counter": message.counter,
+                    }
+                });
+                rust_str_to_c(result.to_string())
+            }
+            Err(_) => ptr::null_mut(),
+        }
+    })
+}
+
+/// Ratchet Decrypt FFI
+#[no_mangle]
+pub extern "C" fn ratchet_decrypt_ffi(
+    session_json: *const c_char,
+    message_json: *const c_char,
+) -> *mut c_char {
+    ffi_catch(ptr::null_mut(), || {
+        let session_str = match c_str_to_str(session_json) {
+            Some(s) => s,
+            None => return ptr::null_mut(),
+        };
+        let message_str = match c_str_to_str(message_json) {
+            Some(s) => s,
+            None => return ptr::null_mut(),
+        };
+
+        let message: serde_json::Value = match serde_json::from_str(message_str) {
+            Ok(v) => v,
+            Err(_) => return ptr::null_mut(),
+        };
+
+        let ephemeral_key = match message["ephemeral_key"].as_str() {
+            Some(k) => k,
+            None => return ptr::null_mut(),
+        };
+        let ciphertext = match message["ciphertext"].as_str() {
+            Some(k) => k,
+            None => return ptr::null_mut(),
+        };
+        let counter = match message["counter"].as_u64() {
+            Some(c) => c,
+            None => return ptr::null_mut(),
+        } as u32;
+
+        let ratchet_message = crate::ratchet::RatchetMessage {
+            ephemeral_key: ephemeral_key.to_string(),
+            ciphertext: ciphertext.to_string(),
+            counter,
+        };
+
+        match RatchetSession::decrypt_message_with_state(session_str, &ratchet_message) {
+            Ok((new_state_json, plaintext)) => {
+                let plaintext_b64 = general_purpose::STANDARD.encode(&plaintext);
+                let result = serde_json::json!({
+                    "session_state": new_state_json,
+                    "plaintext": plaintext_b64,
+                });
+                rust_str_to_c(result.to_string())
             }
             Err(_) => ptr::null_mut(),
         }
