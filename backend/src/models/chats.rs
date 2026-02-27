@@ -71,6 +71,8 @@ pub struct Message {
     pub has_files: Option<bool>, // опционально, для обратной совместимости
     pub metadata: Option<Vec<FileMetadata>>, // метаданные файлов
     pub envelopes: Option<Value>, // JSON объект: {"userId": Envelope}
+    pub protocol_version: Option<i32>, // 1=legacy, 2=Double Ratchet
+    pub sender_identity_key: Option<String>, // Identity key отправителя для Double Ratchet
     pub status: Option<String>,  // "pending" | "sent" (для клиента)
 }
 

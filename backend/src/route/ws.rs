@@ -739,6 +739,8 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                                     has_files,
                                     metadata: metadata_vec,
                                     envelopes: envelopes_value,
+                                    protocol_version: row.try_get("protocol_version").ok(),
+                                    sender_identity_key: row.try_get("sender_identity_key").ok(),
                                     status: Some("sent".to_string()),
                                 };
 
@@ -780,10 +782,18 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                         }
 
                         // Сохраняем сообщение в БД
+                        // Извлекаем protocol_version и sender_identity_key из сообщения (для Double Ratchet)
+                        let msg_value: serde_json::Value = serde_json::from_str(&message).unwrap_or_else(|_| serde_json::json!({}));
+                        let protocol_version = msg_value.get("protocol_version").and_then(|v| v.as_i64()).map(|v| v as i32);
+                        let sender_identity_key = msg_value.get("sender_identity_key").and_then(|v| v.as_str()).map(|s| s.to_string());
+
                         let row = match sqlx::query(
                             r#"
-                            INSERT INTO messages (chat_id, sender_id, message, message_type, envelopes, metadata, reply_to_message_id, client_message_id)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                            INSERT INTO messages (
+                                chat_id, sender_id, message, message_type, envelopes, metadata, 
+                                reply_to_message_id, client_message_id, protocol_version, sender_identity_key
+                            )
+                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                             RETURNING
                                 id::INT8 AS id,
                                 chat_id::INT8 AS chat_id,
@@ -801,7 +811,9 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                                 is_read,
                                 is_delivered,
                                 envelopes,
-                                metadata
+                                metadata,
+                                protocol_version,
+                                sender_identity_key
                             "#,
                         )
                         .bind(chat_id)
@@ -812,6 +824,8 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                         .bind(&metadata_json)
                         .bind(reply_to_message_id.map(|v| v as i32))
                         .bind(client_message_id.as_ref().map(|s| s.as_str()))
+                        .bind(protocol_version)
+                        .bind(sender_identity_key.as_ref())
                         .fetch_one(&state.pool)
                         .await {
                             Ok(r) => r,
@@ -863,6 +877,8 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                             has_files,
                             metadata: metadata_vec,
                             envelopes: envelopes_value,
+                            protocol_version: row.try_get("protocol_version").ok(),
+                            sender_identity_key: row.try_get("sender_identity_key").ok(),
                             status: Some("sent".to_string()),
                         };
                         // Полная синхронизация идёт через личные user-каналы:
@@ -1040,6 +1056,8 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                             has_files: Some(has_files),
                             metadata: metadata_vec,
                             envelopes: envelopes_value,
+                            protocol_version: row.try_get("protocol_version").ok(),
+                            sender_identity_key: row.try_get("sender_identity_key").ok(),
                             status: Some("sent".to_string()),
                         };
 
@@ -1459,6 +1477,8 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                             has_files,
                             metadata: metadata_vec,
                             envelopes: envelopes_value,
+                            protocol_version: row.try_get("protocol_version").ok(),
+                            sender_identity_key: row.try_get("sender_identity_key").ok(),
                             status: Some("sent".to_string()),
                         };
 

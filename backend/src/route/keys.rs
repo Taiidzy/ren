@@ -140,7 +140,7 @@ pub async fn consume_prekey(
     Path(prekey_id): Path<i32>,
 ) -> Result<StatusCode, StatusCode> {
     let pool = &state.pool;
-    
+
     sqlx::query(
         "UPDATE prekeys SET used_at = NOW() WHERE id = $1 AND used_at IS NULL"
     )
@@ -148,8 +148,27 @@ pub async fn consume_prekey(
     .execute(pool)
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    
+
     Ok(StatusCode::OK)
+}
+
+/// GET /keys/one-time/count
+/// Получить количество неиспользованных One-Time PreKeys текущего пользователя
+pub async fn get_prekey_count(
+    State(state): State<AppState>,
+    CurrentUser { id, .. }: CurrentUser,
+) -> Result<Json<PreKeyCountResponse>, StatusCode> {
+    let pool = &state.pool;
+
+    let count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM prekeys WHERE user_id = $1 AND used_at IS NULL"
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(PreKeyCountResponse { count: count as i32 }))
 }
 
 /// Роутер для PreKey API
@@ -159,4 +178,5 @@ pub fn router() -> Router<AppState> {
         .route("/keys/one-time", post(upload_one_time_prekeys))
         .route("/keys/signed", post(upload_signed_prekey))
         .route("/keys/one-time/:prekey_id", delete(consume_prekey))
+        .route("/keys/one-time/count", get(get_prekey_count))
 }

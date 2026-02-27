@@ -16,7 +16,7 @@ This project follows Semantic Versioning.
     - Symmetric Ratchet with HMAC-SHA256
     - Forward Secrecy (per-message key rotation)
     - Post-Compromise Security (automatic recovery)
-    - Out-of-order message support
+    - Out-of-order message support with skipped key storage
   - FFI bindings for X3DH and Double Ratchet
     - `x3dh_initiate_ffi()` — Alice initiates key exchange
     - `x3dh_respond_ffi()` — Bob responds to key exchange
@@ -24,39 +24,74 @@ This project follows Semantic Versioning.
     - `ratchet_respond_ffi()` — Initialize Ratchet session (Bob)
     - `ratchet_encrypt_ffi()` — Encrypt message with Double Ratchet
     - `ratchet_decrypt_ffi()` — Decrypt message with Double Ratchet
-  - Flutter FFI bindings (`ren_sdk_p04.dart`)
-    - `RenSdkP04` class for P0-4 operations
-    - Full X3DH and Ratchet API for Flutter
+  - Flutter integration
+    - `RatchetSession` class using Ren-SDK FFI
+    - `HiveSessionStore` for persistent session storage
+    - `ChatE2EEService` for 1:1 chat encryption/decryption
+    - Automatic session initialization (X3DH + Ratchet)
   - Backend PreKey API endpoints
     - `GET /keys/:user_id/bundle` — Get PreKey Bundle for X3DH
     - `POST /keys/one-time` — Upload One-Time PreKeys
     - `POST /keys/signed` — Upload Signed PreKey
     - `DELETE /keys/one-time/:id` — Mark PreKey as used
-  - Chat E2EE Service integration
-    - `ChatE2EEService` for 1:1 chat encryption
-    - Integration with `ChatsRepository`
-    - E2EE status indicators
+    - `GET /keys/one-time/count` — Get unused PreKey count
+  - Backend Double Ratchet message support
+    - `protocol_version` field in messages table (1=legacy, 2=Double Ratchet)
+    - `sender_identity_key` field for Double Ratchet authentication
+    - Automatic extraction and storage of Double Ratchet fields
+  - Database migrations
+    - `20260301_x3dh_prekeys.sql` — PreKeys storage tables
+    - `20260302_double_ratchet_messages.sql` — Double Ratchet message fields
 
 ### Changed
+- **Ren-SDK ratchet module reorganization**
+  - Split into separate modules: `chain.rs`, `dh_ratchet.rs`, `symmetric_ratchet.rs`, `session.rs`
+  - Added `SkippedMessageKey` storage for out-of-order message decryption
+  - Added identity keys to `RatchetSessionState` for session persistence
+- **Flutter cryptography modules**
+  - `ratchet_session.dart` — Now uses Ren-SDK FFI directly (removed stubs)
+  - `session_store.dart` — Added `HiveSessionStore` implementation
+  - `x3dh_protocol.dart` — Fixed base64 encoding/decoding
+  - `identity_key_store.dart` — Added `getIdentityKeys()`, `getSignedPreKey()` methods
+  - `prekey_repository.dart` — Implemented `syncPreKeys()` with count endpoint
+- **ChatsRepository integration**
+  - `buildOutgoingWsTextMessage()` — Uses Double Ratchet for private chats
+  - `buildOutgoingWsMediaMessage()` — Encrypts attachments with Double Ratchet
+  - `_tryDecryptMessageAndKey()` — Supports both Double Ratchet and legacy
+  - Automatic fallback to legacy encryption if Double Ratchet fails
+- **Backend message handling**
+  - `ws.rs` — Extracts and stores `protocol_version` and `sender_identity_key`
+  - `chats.rs` — Returns Double Ratchet fields in message lists
+  - `models/chats.rs` — Added `protocol_version` and `sender_identity_key` fields
 - Updated `Ren-SDK/Cargo.toml` with new dependencies:
   - `hmac` v0.12 for chain key derivation
   - `rand_core` v0.6 for secure random generation
-- Updated `Ren-SDK/src/lib.rs` to export X3DH and Ratchet modules
-- Updated `Ren-SDK/src/ffi.rs` with P0-4 FFI functions
-- Updated `backend/src/models/mod.rs` to include PreKeys models
-- Updated `backend/src/route/mod.rs` to include PreKeys routes
-- Updated `apps/flutter/lib/core/cryptography/` with new crypto modules
+- Updated `apps/flutter/pubspec.yaml` — Added `hive` and `hive_flutter` dependencies
+
+### Deprecated
+- Legacy E2EE encryption (will be removed in future versions)
+- `ren_sdk_p04.dart` — Merged into `ren_sdk.dart`
+
+### Removed
+- `Ren-SDK/src/p04_ffi_additions.rs` — Merged into `ffi.rs`
+- `apps/flutter/lib/core/sdk/ren_sdk_p04.dart` — Merged into `ren_sdk.dart`
+- Stub implementations in `RatchetSession` (replaced with FFI calls)
 
 ### Fixed
-- FFI function signatures for proper error handling
-- Dart FFI bindings for correct type marshaling
+- Base64 encoding/decoding in `x3dh_protocol.dart` (was using runes instead of proper base64)
+- Borrow checker issues in `symmetric_ratchet.rs`
+- Duplicate method definitions in `chats_repository.dart`
+- Missing session persistence in `RatchetSessionState`
+- Out-of-order message decryption (now properly stores skipped keys)
 
 ### Security
-- **Forward Secrecy**: Each message uses unique encryption key
+- **Forward Secrecy**: Each message uses unique encryption key derived from chain
 - **Post-Compromise Security**: Automatic recovery via DH ratchet every 2 messages
 - **Asynchronous Support**: X3DH with PreKey Bundles for offline messages
 - **Key Authentication**: Ed25519 signatures prevent MITM attacks
 - **Secure Storage**: Identity keys stored in Secure Enclave/KeyStore
+- **Skipped Key Storage**: Protects against DoS with MAX_SKIPPED_KEYS limit
+- **Fallback Encryption**: Legacy E2EE as fallback if Double Ratchet unavailable
 
 ---
 

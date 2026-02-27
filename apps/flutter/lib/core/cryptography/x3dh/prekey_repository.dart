@@ -1,6 +1,7 @@
 /// PreKey Repository
-/// 
+///
 /// Управление PreKeys: загрузка на сервер, получение bundle других пользователей
+/// Реализует синхронизацию One-Time PreKeys
 
 import 'dart:convert';
 import 'package:http/http.dart' as http;
@@ -92,17 +93,47 @@ class PreKeyRepository {
     }
   }
 
+  /// Получить количество unused One-Time PreKeys
+  Future<int> getPreKeyCount() async {
+    try {
+      final response = await _client.get(
+        Uri.parse('$baseUrl/keys/one-time/count'),
+      );
+
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body) as Map<String, dynamic>;
+        return json['count'] as int;
+      }
+    } catch (_) {
+      // Endpoint может быть не реализован
+    }
+    
+    // Fallback: возвращаем 0 чтобы триггерить синхронизацию
+    return 0;
+  }
+
   /// Проверить и пополнить запас One-Time PreKeys
-  /// Если на сервере меньше чем minCount, загружаем новые
+  /// 
+  /// Если на сервере меньше чем [minCount], загружаем новые до [maxCount]
+  /// 
+  /// [generatePreKeys] - функция для генерации новых PreKeys
+  /// [minCount] - минимальное количество PreKeys (default 50)
+  /// [maxCount] - максимальное количество PreKeys (default 100)
   Future<void> syncPreKeys({
     required int userId,
     required Future<List<OneTimePreKey>> Function() generatePreKeys,
     int minCount = 50,
     int maxCount = 100,
   }) async {
-    // Пока заглушка - нужна реализация подсчёта OTPK на сервере
-    // В реальности нужно добавить endpoint GET /keys/one-time/count
-    return;
+    final currentCount = await getPreKeyCount();
+    
+    if (currentCount < minCount) {
+      // Генерируем новые PreKeys
+      final newPreKeys = await generatePreKeys();
+      
+      // Загружаем на сервер
+      await uploadOneTimePreKeys(newPreKeys);
+    }
   }
 
   /// Освободить ресурсы

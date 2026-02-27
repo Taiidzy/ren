@@ -52,3 +52,9 @@ pub struct UploadSignedPreKeyRequest {
     pub prekey: String,
     pub signature: String,
 }
+
+/// Ответ API с количеством One-Time PreKeys
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PreKeyCountResponse {
+    pub count: i32,
+}

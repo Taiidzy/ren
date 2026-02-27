@@ -255,6 +255,8 @@ async fn create_system_message_and_publish(
         has_files: Some(false),
         metadata: None,
         envelopes: None,
+        protocol_version: Some(1),
+        sender_identity_key: None,
         status: Some("sent".to_string()),
     };
 
@@ -1180,6 +1182,8 @@ async fn get_messages(
                 has_files,
                 metadata: metadata_vec,
                 envelopes: row.try_get("envelopes").ok().flatten(),
+                protocol_version: row.try_get("protocol_version").ok(),
+                sender_identity_key: row.try_get("sender_identity_key").ok(),
                 status: None,
             }
         })
