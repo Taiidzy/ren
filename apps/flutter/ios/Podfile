@@ -1,5 +1,5 @@
-# Uncomment this line to define a global platform for your project
-# platform :ios, '13.0'
+# Required by official Signal iOS library (LibSignalClient)
+platform :ios, '15.0'
 
 # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'
@@ -29,7 +29,7 @@ flutter_ios_podfile_setup
 
 target 'Runner' do
   use_frameworks!
-  use_modular_headers!
+  pod 'LibSignalClient', :git => 'https://github.com/signalapp/libsignal.git', :tag => 'v0.87.2'
 
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
   target 'RunnerTests' do
@@ -40,24 +40,21 @@ end
 post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
-  end
+    target.build_configurations.each do |config|
+      config.build_settings['SWIFT_ENABLE_EXPLICIT_MODULES'] = 'NO'
+    end
+    if target.name == 'LibSignalClient'
+      target.shell_script_build_phases.each do |phase|
+        next unless phase.name.include?('Download libsignal-ffi')
 
-  installer.aggregate_targets.each do |aggregate_target|
-    aggregate_target.user_project.native_targets.each do |native_target|
-      next unless native_target.name == 'Runner'
-
-      native_target.build_configurations.each do |config|
-        flags = config.build_settings['OTHER_LDFLAGS']
-        flags = [flags] if flags.is_a?(String)
-        flags = Array(flags)
-        flags << '$(inherited)' unless flags.include?('$(inherited)')
-
-        # RenSDK.xcframework contains a static library (libren_sdk.a). Without force loading,
-        # the linker may dead-strip the object files, and Dart FFI won't be able to dlsym ren_* symbols.
-        flags << '-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a'
-        flags << '-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a'
-
-        config.build_settings['OTHER_LDFLAGS'] = flags
+        script = phase.shell_script || ''
+        unless script.include?('LIBSIGNAL_FFI_PREBUILD_CHECKSUM:=')
+          phase.shell_script = <<~SCRIPT
+            : "${LIBSIGNAL_FFI_PREBUILD_CHECKSUM:=dee04b2b1bc49cfe3af9f175cd6d2ccb688dedabeadc3b9a5d225ff1a56d7ba2}"
+            : "${LIBSIGNAL_FFI_PREBUILD_ARCHIVE:=libsignal-client-ios-build-v0.87.2.tar.gz}"
+            #{script}
+          SCRIPT
+        end
       end
     end
   end

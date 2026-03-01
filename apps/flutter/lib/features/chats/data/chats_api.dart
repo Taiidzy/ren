@@ -390,24 +390,25 @@ class ChatsApi {
     return const Duration(seconds: 2);
   }
 
-  Future<String> getPublicKey(int userId) async {
+  Future<Map<String, dynamic>> getPublicKey(int userId) async {
     try {
       final token = await _requireToken();
       final resp = await dio.get(
         '${Apiurl.api}/users/$userId/public-key',
         options: Options(headers: {'Authorization': 'Bearer $token'}),
       );
-      final data = (resp.data as Map<String, dynamic>?);
-      final pk = data?['public_key'] as String?;
-      if (pk == null || pk.isEmpty) {
-        throw ApiException('Публичный ключ не найден');
+      final data =
+          (resp.data as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
+      final pk = (data['public_key'] as String?)?.trim() ?? '';
+      if (pk.isEmpty) {
+        throw ApiException('Signal bundle: публичный ключ не найден');
       }
-      return pk;
+      return data;
     } on DioException catch (e) {
       throw ApiException(
         (e.response?.data is String)
             ? e.response?.data as String
-            : 'Ошибка получения публичного ключа',
+            : 'Ошибка получения Signal bundle',
         statusCode: e.response?.statusCode,
       );
     }

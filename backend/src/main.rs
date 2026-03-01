@@ -22,7 +22,7 @@ pub mod models;
 // Подключаем модуль с экстракторами аутентификации
 pub mod middleware;
 
-use crate::middleware::rate_limit::{RateLimiterConfig, AuthRateLimiterConfig};
+use crate::middleware::rate_limit::{AuthRateLimiterConfig, RateLimiterConfig};
 
 // Делаем состояние приложения доступным в остальных модулях (например, в маршрутах)
 // чтобы в хендлерах был доступ к пулу соединений PostgreSQL.
@@ -97,7 +97,7 @@ async fn async_main() {
     let ws_hub = Arc::new(DashMap::new());
     let user_hub = Arc::new(DashMap::new());
     let online_connections = Arc::new(DashMap::new());
-    
+
     // P1-7: Initialize rate limiters
     let rate_limiter = middleware::RateLimiter::new(RateLimiterConfig {
         max_requests: 100, // 100 requests per minute
@@ -105,14 +105,14 @@ async fn async_main() {
         enable_ip_limiting: true,
         enable_account_limiting: true,
     });
-    
+
     let auth_rate_limiter = middleware::AuthRateLimiter::new(AuthRateLimiterConfig {
-        max_failures: 5, // 5 failed attempts
+        max_failures: 5,                                      // 5 failed attempts
         lockout_duration: std::time::Duration::from_secs(60), // 1 minute initial
-        backoff_multiplier: 2, // Exponential backoff
-        max_lockout: std::time::Duration::from_secs(3600), // Max 1 hour
+        backoff_multiplier: 2,                                // Exponential backoff
+        max_lockout: std::time::Duration::from_secs(3600),    // Max 1 hour
     });
-    
+
     let state = AppState {
         pool,
         jwt_secret,

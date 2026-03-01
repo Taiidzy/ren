@@ -196,4 +196,25 @@ class AuthApi {
       );
     }
   }
+
+  Future<void> updateSignalBundle(Map<String, dynamic> bundle) async {
+    try {
+      final token = await SecureStorage.readKey(Keys.token);
+      if (token == null || token.isEmpty) {
+        throw ApiException('Нет токена авторизации');
+      }
+      await dio.patch(
+        '${Apiurl.api}/users/signal-bundle',
+        data: bundle,
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+    } on DioException catch (e) {
+      final status = e.response?.statusCode;
+      final serverMessage = _extractServerMessage(e.response?.data);
+      throw ApiException(
+        serverMessage ??
+            'Ошибка обновления Signal bundle${status != null ? ' ($status)' : ''}.',
+      );
+    }
+  }
 }

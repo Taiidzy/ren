@@ -58,7 +58,6 @@ dependencies:
   record: ^6.1.2
   vibration: ^3.1.5
   just_audio: ^0.9.40
-  ffi: ^2.1.4
   crop_your_image: ^2.0.0
   device_info_plus: ^11.5.0
 
@@ -120,3 +119,7 @@ flutter_icons:
   android: true
   ios: true
   image_path: "assets/icon/app_icon.png"
+
+dependency_overrides:
+  ffmpeg_kit_min_gpl:
+    path: local_plugins/ffmpeg_kit_min_gpl_local

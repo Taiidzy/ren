@@ -52,7 +52,7 @@ enum ClientEvent {
         envelopes: Option<Value>,            // JSON объект с конвертами для каждого участника
         metadata: Option<Vec<FileMetadata>>, // метаданные файлов
         reply_to_message_id: Option<i64>,
-        client_message_id: Option<String>,   // P1-6: Client-provided UUID for idempotency
+        client_message_id: Option<String>, // P1-6: Client-provided UUID for idempotency
     },
     VoiceMessage {
         chat_id: i32,
@@ -61,7 +61,7 @@ enum ClientEvent {
         envelopes: Option<Value>,
         metadata: Option<Vec<FileMetadata>>,
         reply_to_message_id: Option<i64>,
-        client_message_id: Option<String>,   // P1-6: Client-provided UUID for idempotency
+        client_message_id: Option<String>, // P1-6: Client-provided UUID for idempotency
     },
     VideoMessage {
         chat_id: i32,
@@ -70,7 +70,7 @@ enum ClientEvent {
         envelopes: Option<Value>,
         metadata: Option<Vec<FileMetadata>>,
         reply_to_message_id: Option<i64>,
-        client_message_id: Option<String>,   // P1-6: Client-provided UUID for idempotency
+        client_message_id: Option<String>, // P1-6: Client-provided UUID for idempotency
     },
     EditMessage {
         chat_id: i32,
@@ -92,7 +92,7 @@ enum ClientEvent {
         message_type: Option<String>,
         envelopes: Option<Value>,
         metadata: Option<Vec<FileMetadata>>,
-        client_message_id: Option<String>,   // P1-6: Client-provided UUID for idempotency
+        client_message_id: Option<String>, // P1-6: Client-provided UUID for idempotency
     },
     Typing {
         chat_id: i32,
@@ -716,7 +716,8 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                                 // P1-6: Idempotency - return existing message instead of duplicate
                                 let envelopes_value: Option<Value> =
                                     row.try_get("envelopes").ok().flatten();
-                                let metadata_value: Option<Value> = row.try_get("metadata").ok().flatten();
+                                let metadata_value: Option<Value> =
+                                    row.try_get("metadata").ok().flatten();
                                 let metadata_vec: Option<Vec<FileMetadata>> =
                                     metadata_value.and_then(|v| serde_json::from_value(v).ok());
 
@@ -725,14 +726,31 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                                     chat_id: row.try_get("chat_id").unwrap_or_default(),
                                     sender_id: row.try_get("sender_id").unwrap_or_default(),
                                     message: row.try_get("message").unwrap_or_default(),
-                                    message_type: row.try_get("message_type").unwrap_or_else(|_| "text".to_string()),
-                                    created_at: row.try_get::<chrono::DateTime<chrono::Utc>, _>("created_at").map(|t| t.to_rfc3339()).unwrap_or_default(),
-                                    edited_at: row.try_get::<chrono::DateTime<chrono::Utc>, _>("edited_at").ok().map(|t| t.to_rfc3339()),
+                                    message_type: row
+                                        .try_get("message_type")
+                                        .unwrap_or_else(|_| "text".to_string()),
+                                    created_at: row
+                                        .try_get::<chrono::DateTime<chrono::Utc>, _>("created_at")
+                                        .map(|t| t.to_rfc3339())
+                                        .unwrap_or_default(),
+                                    edited_at: row
+                                        .try_get::<chrono::DateTime<chrono::Utc>, _>("edited_at")
+                                        .ok()
+                                        .map(|t| t.to_rfc3339()),
                                     reply_to_message_id: row.try_get("reply_to_message_id").ok(),
-                                    forwarded_from_message_id: row.try_get("forwarded_from_message_id").ok(),
-                                    forwarded_from_chat_id: row.try_get("forwarded_from_chat_id").ok(),
-                                    forwarded_from_sender_id: row.try_get("forwarded_from_sender_id").ok(),
-                                    deleted_at: row.try_get::<chrono::DateTime<chrono::Utc>, _>("deleted_at").ok().map(|t| t.to_rfc3339()),
+                                    forwarded_from_message_id: row
+                                        .try_get("forwarded_from_message_id")
+                                        .ok(),
+                                    forwarded_from_chat_id: row
+                                        .try_get("forwarded_from_chat_id")
+                                        .ok(),
+                                    forwarded_from_sender_id: row
+                                        .try_get("forwarded_from_sender_id")
+                                        .ok(),
+                                    deleted_at: row
+                                        .try_get::<chrono::DateTime<chrono::Utc>, _>("deleted_at")
+                                        .ok()
+                                        .map(|t| t.to_rfc3339()),
                                     deleted_by: row.try_get("deleted_by").ok(),
                                     is_read: row.try_get("is_read").unwrap_or(false),
                                     is_delivered: row.try_get("is_delivered").unwrap_or(false),
@@ -742,11 +760,12 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                                     status: Some("sent".to_string()),
                                 };
 
-                                let evt_message_new = serde_json::to_string(&ServerEvent::MessageNew {
-                                    chat_id,
-                                    message: msg,
-                                })
-                                .ok();
+                                let evt_message_new =
+                                    serde_json::to_string(&ServerEvent::MessageNew {
+                                        chat_id,
+                                        message: msg,
+                                    })
+                                    .ok();
 
                                 if let Some(evt) = &evt_message_new {
                                     // Send to all participants
@@ -773,7 +792,8 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                                 }
 
                                 // Send OK to sender
-                                let ok_msg = serde_json::to_string(&ServerEvent::Ok).unwrap_or_else(|_| "{\"type\":\"ok\"}".to_string());
+                                let ok_msg = serde_json::to_string(&ServerEvent::Ok)
+                                    .unwrap_or_else(|_| "{\"type\":\"ok\"}".to_string());
                                 let _ = out_tx.send(WsMessage::Text(ok_msg));
                                 continue;
                             }
@@ -1153,7 +1173,9 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                         };
 
                         let sender_id: i32 = msg_row.try_get("sender_id").unwrap_or_default();
-                        let role: String = msg_row.try_get("role").unwrap_or_else(|_| "member".to_string());
+                        let role: String = msg_row
+                            .try_get("role")
+                            .unwrap_or_else(|_| "member".to_string());
 
                         // Only sender, admin, or owner can delete
                         if sender_id != user_id && role != "admin" && role != "owner" {

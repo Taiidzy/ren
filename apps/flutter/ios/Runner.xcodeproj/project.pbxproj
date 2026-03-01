@@ -9,8 +9,6 @@
 /* Begin PBXBuildFile section */
 		1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */ = {isa = PBXBuildFile; fileRef = 1498D2331E8E89220040F4C2 /* GeneratedPluginRegistrant.m */; };
 		331C808B294A63AB00263BE5 /* RunnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807B294A618700263BE5 /* RunnerTests.swift */; };
-		337D004F2F08B01E00C2F47D /* RenSDK.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 337D004E2F08B01E00C2F47D /* RenSDK.xcframework */; };
-		337D00502F08B01E00C2F47D /* RenSDK.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 337D004E2F08B01E00C2F47D /* RenSDK.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		3B3967161E833CAA004F5970 /* AppFrameworkInfo.plist in Resources */ = {isa = PBXBuildFile; fileRef = 3B3967151E833CAA004F5970 /* AppFrameworkInfo.plist */; };
 		7225B61FEA68D10BDDF165F8 /* Pods_Runner.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0CCED14E2373E220B1355F36 /* Pods_Runner.framework */; };
 		74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74858FAE1ED2DC5600515810 /* AppDelegate.swift */; };
@@ -37,7 +35,6 @@
 			dstPath = "";
 			dstSubfolderSpec = 10;
 			files = (
-				337D00502F08B01E00C2F47D /* RenSDK.xcframework in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -51,7 +48,6 @@
 		1498D2331E8E89220040F4C2 /* GeneratedPluginRegistrant.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = GeneratedPluginRegistrant.m; sourceTree = "<group>"; };
 		331C807B294A618700263BE5 /* RunnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunnerTests.swift; sourceTree = "<group>"; };
 		331C8081294A63A400263BE5 /* RunnerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RunnerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		337D004E2F08B01E00C2F47D /* RenSDK.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = RenSDK.xcframework; sourceTree = "<group>"; };
 		3B3967151E833CAA004F5970 /* AppFrameworkInfo.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = AppFrameworkInfo.plist; path = Flutter/AppFrameworkInfo.plist; sourceTree = "<group>"; };
 		430FB123D0B6C726AECE4EE9 /* Pods-Runner.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner.debug.xcconfig"; path = "Target Support Files/Pods-Runner/Pods-Runner.debug.xcconfig"; sourceTree = "<group>"; };
 		74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Runner-Bridging-Header.h"; sourceTree = "<group>"; };
@@ -76,7 +72,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				337D004F2F08B01E00C2F47D /* RenSDK.xcframework in Frameworks */,
 				7225B61FEA68D10BDDF165F8 /* Pods_Runner.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -103,7 +98,6 @@
 		4E8AAC562034507186907CA1 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
-				337D004E2F08B01E00C2F47D /* RenSDK.xcframework */,
 				0CCED14E2373E220B1355F36 /* Pods_Runner.framework */,
 				A41155BAAE528532572496EC /* Pods_RunnerTests.framework */,
 			);
@@ -478,7 +472,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 13.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				SDKROOT = iphoneos;
 				SUPPORTED_PLATFORMS = iphoneos;
@@ -504,11 +498,6 @@
 				);
 				OTHER_LDFLAGS = (
 					"$(inherited)",
-					"-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a",
-					"-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a",
-					"-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a",
-					"-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a",
-					"-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = taiidzy.ren;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -617,7 +606,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 13.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				MTL_ENABLE_DEBUG_INFO = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
@@ -668,7 +657,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 13.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				SDKROOT = iphoneos;
 				SUPPORTED_PLATFORMS = iphoneos;
@@ -695,11 +684,6 @@
 				);
 				OTHER_LDFLAGS = (
 					"$(inherited)",
-					"-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a",
-					"-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a",
-					"-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a",
-					"-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a",
-					"-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = taiidzy.ren;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -727,11 +711,6 @@
 				);
 				OTHER_LDFLAGS = (
 					"$(inherited)",
-					"-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a",
-					"-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a",
-					"-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a",
-					"-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a",
-					"-Wl,-force_load,$(PROJECT_DIR)/RenSDK.xcframework/ios-arm64/libren_sdk.a",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = taiidzy.ren;
 				PRODUCT_NAME = "$(TARGET_NAME)";

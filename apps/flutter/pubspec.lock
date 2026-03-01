@@ -210,7 +210,7 @@ packages:
     source: hosted
     version: "1.3.3"
   ffi:
-    dependency: "direct main"
+    dependency: transitive
     description:
       name: ffi
       sha256: "289279317b4b16eb2bb7e271abccd4bf84ec9bdcbe999e278a94b804f5630418"
@@ -228,10 +228,9 @@ packages:
   ffmpeg_kit_min_gpl:
     dependency: "direct main"
     description:
-      name: ffmpeg_kit_min_gpl
-      sha256: "123c9955cae4678cafd039dd277ea127456fecdff17120bf690c520fd747b1ea"
-      url: "https://pub.dev"
-    source: hosted
+      path: "local_plugins/ffmpeg_kit_min_gpl_local"
+      relative: true
+    source: path
     version: "6.0.3+2-LTS"
   file:
     dependency: transitive

@@ -1,14 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:isolate';
 
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:ren/core/constants/api_url.dart';
 import 'package:ren/core/cache/chats_local_cache.dart';
 import 'package:ren/core/constants/keys.dart';
-import 'package:ren/core/sdk/ren_sdk.dart';
+import 'package:ren/core/e2ee/signal_protocol_client.dart';
 import 'package:ren/core/secure/secure_storage.dart';
 import 'package:ren/features/chats/data/chats_api.dart';
 import 'package:ren/features/chats/domain/chat_models.dart';
@@ -25,20 +24,9 @@ class OutgoingAttachment {
   });
 }
 
-Future<Map<String, String>?> _encryptAttachmentInIsolate({
-  required Uint8List bytes,
-  required String filename,
-  required String mimetype,
-  required String keyB64,
-}) {
-  return Isolate.run(() {
-    return RenSdk.instance.encryptFileSync(bytes, filename, mimetype, keyB64);
-  });
-}
-
 class ChatsRepository {
   final ChatsApi api;
-  final RenSdk renSdk;
+  final SignalProtocolClient signal;
   final ChatsLocalCache _localCache = ChatsLocalCache();
 
   final ValueNotifier<bool> chatsSyncing = ValueNotifier<bool>(false);
@@ -55,12 +43,13 @@ class ChatsRepository {
   Directory? _ciphertextCacheDirCache;
   Future<Directory>? _ciphertextCacheDirInFlight;
 
-  final Map<int, String> _peerPublicKeyB64Cache = <int, String>{};
+  final Map<int, Map<String, dynamic>> _peerBundleCache =
+      <int, Map<String, dynamic>>{};
   Future<void> _mediaPipelineTail = Future<void>.value();
 
   static const int _maxUploadRetries = 2;
 
-  ChatsRepository(this.api, this.renSdk);
+  ChatsRepository(this.api, this.signal);
 
   bool _isPrivateKind(String kind) => kind.trim().toLowerCase() == 'private';
 
@@ -151,23 +140,11 @@ class ChatsRepository {
     return int.tryParse(myUserIdStr ?? '') ?? 0;
   }
 
-  Future<String?> _getMyPrivateKeyB64() async {
-    final v = await SecureStorage.readKey(Keys.privateKey);
-    return v?.trim();
-  }
-
-  Future<String?> _getMyPublicKeyB64() async {
-    final v = await SecureStorage.readKey(Keys.publicKey);
-    return v?.trim();
-  }
-
-  Future<String> _getPeerPublicKeyB64(int peerId) async {
-    final cached = _peerPublicKeyB64Cache[peerId];
+  Future<Map<String, dynamic>> _getPeerSignalBundle(int peerId) async {
+    final cached = _peerBundleCache[peerId];
     if (cached != null && cached.isNotEmpty) return cached;
-    final v = (await api.getPublicKey(peerId)).trim();
-    if (v.isNotEmpty) {
-      _peerPublicKeyB64Cache[peerId] = v;
-    }
+    final v = await api.getPublicKey(peerId);
+    _peerBundleCache[peerId] = v;
     return v;
   }
 
@@ -441,8 +418,6 @@ class ChatsRepository {
     );
 
     final myUserId = await _getMyUserId();
-    final privateKey = await _getMyPrivateKeyB64();
-
     final out = <ChatMessage>[];
 
     for (final it in raw) {
@@ -474,17 +449,15 @@ class ChatsRepository {
           ? (text: encrypted, key: null)
           : await _tryDecryptMessageAndKey(
               encrypted: encrypted,
-              envelopes: m['envelopes'],
+              senderId: senderId,
               myUserId: myUserId,
-              myPrivateKeyB64: privateKey,
             );
 
-      final msgKey = decrypted.key;
       final attachments = await _tryDecryptAttachments(
         chatId: chatId,
         messageId: messageId,
+        senderId: senderId,
         metadata: m['metadata'],
-        msgKeyB64: msgKey,
       );
 
       out.add(
@@ -588,21 +561,11 @@ class ChatsRepository {
   Future<List<ChatAttachment>> _tryDecryptAttachments({
     required int chatId,
     required int messageId,
+    required int senderId,
     required dynamic metadata,
-    required String? msgKeyB64,
   }) async {
     if (metadata is! List) return const [];
-    final key = msgKeyB64?.trim();
-    final hasKey = key != null && key.isNotEmpty;
-
-    Uint8List? keyBytes;
-    if (hasKey) {
-      try {
-        keyBytes = base64Decode(key);
-      } catch (_) {
-        return const [];
-      }
-    }
+    final myUserId = await _getMyUserId();
 
     final outByIndex = List<ChatAttachment?>.filled(metadata.length, null);
 
@@ -612,54 +575,47 @@ class ChatsRepository {
       final m = item.cast<String, dynamic>();
       final fileIdDyn = m['file_id'];
       final encFile = (m['enc_file'] as String?)?.trim();
-      final nonce = (m['nonce'] as String?)?.trim();
       final filename = (m['filename'] as String?) ?? 'file';
       final mimetype = (m['mimetype'] as String?) ?? 'application/octet-stream';
       final size = (m['size'] is int)
           ? m['size'] as int
           : int.tryParse('${m['size']}') ?? 0;
 
-      Uint8List? ciphertextBytes;
-      String? ciphertextB64;
-
-      int? fileId;
-      if (fileIdDyn is int) {
-        fileId = fileIdDyn;
-      } else if (fileIdDyn is String) {
-        fileId = int.tryParse(fileIdDyn);
-      }
-      if (fileId != null && fileId > 0) {
-        try {
-          ciphertextBytes = await _getCiphertextBytes(fileId);
-        } catch (e) {
-          debugPrint('download media failed fileId=$fileId err=$e');
-          return;
-        }
-      } else if (encFile != null && encFile.isNotEmpty) {
-        ciphertextB64 = encFile;
-      }
-
       Uint8List? bytes;
-      if (hasKey) {
-        if (nonce == null || nonce.isEmpty || keyBytes == null) {
+      int? fileId;
+      final mapDyn = m['ciphertext_by_user'] ?? m['signal_ciphertext_by_user'];
+      if (mapDyn is Map) {
+        final ct = (mapDyn['$myUserId'] as String?)?.trim();
+        if (ct == null || ct.isEmpty) {
           return;
         }
-        bytes = (ciphertextBytes != null)
-            ? await renSdk.decryptFileBytesRawWithKeyBytes(
-                ciphertextBytes,
-                nonce,
-                keyBytes,
-              )
-            : (ciphertextB64 != null && ciphertextB64.isNotEmpty)
-            ? await renSdk.decryptFileBytes(ciphertextB64, nonce, key)
-            : null;
+        try {
+          final plainB64 = await signal.decrypt(
+            peerUserId: senderId,
+            ciphertext: ct,
+          );
+          bytes = Uint8List.fromList(base64Decode(plainB64));
+        } catch (_) {
+          return;
+        }
       } else {
-        // non-E2EE attachments: store bytes as-is
-        if (ciphertextBytes != null) {
-          bytes = ciphertextBytes;
-        } else if (ciphertextB64 != null && ciphertextB64.isNotEmpty) {
+        // Backward compatibility: old non-E2EE server media.
+        Uint8List? ciphertextBytes;
+        if (fileIdDyn is int) {
+          fileId = fileIdDyn;
+        } else if (fileIdDyn is String) {
+          fileId = int.tryParse(fileIdDyn);
+        }
+        if (fileId != null && fileId > 0) {
           try {
-            bytes = Uint8List.fromList(base64Decode(ciphertextB64));
+            ciphertextBytes = await _getCiphertextBytes(fileId);
+            bytes = ciphertextBytes;
+          } catch (_) {
+            bytes = null;
+          }
+        } else if (encFile != null && encFile.isNotEmpty) {
+          try {
+            bytes = Uint8List.fromList(base64Decode(encFile));
           } catch (_) {
             bytes = null;
           }
@@ -706,9 +662,8 @@ class ChatsRepository {
 
   ({String text, String? key}) _decryptMessageWithKey({
     required String encrypted,
-    required dynamic envelopes,
+    required int senderId,
     required int myUserId,
-    required String? myPrivateKeyB64,
   }) {
     if (encrypted.isEmpty) return (text: '', key: null);
 
@@ -716,84 +671,102 @@ class ChatsRepository {
     try {
       payload = jsonDecode(encrypted) as Map<String, dynamic>;
     } catch (_) {
-      // non-E2EE chats may carry plaintext directly in message
-      return (text: encrypted, key: null);
-    }
-
-    final ciphertext = (payload['ciphertext'] as String?)?.trim();
-    final nonce = (payload['nonce'] as String?)?.trim();
-    if (ciphertext == null || nonce == null) {
-      debugPrint('decrypt: missing ciphertext/nonce');
+      // plaintext in DB is treated as encrypted placeholder now.
       return (text: '[encrypted]', key: null);
     }
 
-    final priv = myPrivateKeyB64?.trim();
-    if (priv == null || priv.isEmpty) {
-      debugPrint('decrypt: missing private key');
+    final mapDyn = payload['ciphertext_by_user'];
+    if (mapDyn is! Map) {
       return (text: '[encrypted]', key: null);
     }
-
-    final envMap = (envelopes is Map) ? envelopes : null;
-    if (envMap == null) {
+    final ciphertext = (mapDyn['$myUserId'] as String?)?.trim();
+    if (ciphertext == null || ciphertext.isEmpty) {
       return (text: '[encrypted]', key: null);
     }
-
-    dynamic envDyn = envMap['$myUserId'];
-    envDyn ??= envMap[myUserId];
-    final env = envDyn is Map ? envDyn : null;
-    if (env == null) {
-      return (text: '[encrypted]', key: null);
-    }
-
-    String? asString(dynamic v) =>
-        (v is String && v.trim().isNotEmpty) ? v.trim() : null;
-
-    final wrapped = asString(env['key']) ?? asString(env['wrapped']);
-    final eph =
-        asString(env['ephem_pub_key']) ?? asString(env['ephemeral_public_key']);
-    final wrapNonce = asString(env['iv']) ?? asString(env['nonce']);
-
-    if (wrapped == null || eph == null || wrapNonce == null) {
-      debugPrint(
-        'decrypt: missing wrapped/eph/nonce in envelope for user=$myUserId',
-      );
-      return (text: '[encrypted]', key: null);
-    }
-
-    final msgKeyBytes = renSdk.unwrapSymmetricKeyBytes(
-      wrapped,
-      eph,
-      wrapNonce,
-      priv,
-    );
-    if (msgKeyBytes == null || msgKeyBytes.isEmpty) {
-      return (text: '[encrypted]', key: null);
-    }
-
-    final msgKey = base64Encode(msgKeyBytes);
-    final decrypted = renSdk.decryptMessageWithKeyBytes(
-      ciphertext,
-      nonce,
-      msgKeyBytes,
-    );
-    if (decrypted == null) {
-      debugPrint('decrypt: decryptMessage failed');
-    }
-    return (text: decrypted ?? '[encrypted]', key: msgKey);
+    return (text: ciphertext, key: null);
   }
 
   Future<({String text, String? key})> _tryDecryptMessageAndKey({
     required String encrypted,
-    required dynamic envelopes,
+    required int senderId,
     required int myUserId,
-    required String? myPrivateKeyB64,
   }) async {
-    return _decryptMessageWithKey(
+    final basic = _decryptMessageWithKey(
       encrypted: encrypted,
-      envelopes: envelopes,
+      senderId: senderId,
       myUserId: myUserId,
-      myPrivateKeyB64: myPrivateKeyB64,
     );
+    final maybeCt = basic.text.trim();
+    if (maybeCt.isEmpty || maybeCt == '[encrypted]') return basic;
+    try {
+      final decrypted = await signal.decrypt(
+        peerUserId: senderId,
+        ciphertext: maybeCt,
+      );
+      return (text: decrypted, key: null);
+    } catch (_) {
+      return (text: '[encrypted]', key: null);
+    }
+  }
+
+  Future<void> _ensureSignalSession(int peerUserId) async {
+    final has = await signal.hasSession(peerUserId: peerUserId);
+    if (has) return;
+    final bundle = await _getPeerSignalBundle(peerUserId);
+    await signal.encrypt(
+      peerUserId: peerUserId,
+      plaintext: '',
+      preKeyBundle: bundle,
+    );
+  }
+
+  Future<List<int>> _resolveRecipients({
+    required int chatId,
+    required String chatKind,
+    int? peerId,
+  }) async {
+    final me = await _getMyUserId();
+    if (_isPrivateKind(chatKind)) {
+      final peer = peerId ?? 0;
+      if (peer <= 0) {
+        throw Exception('Некорректный peerId для private-чата');
+      }
+      return <int>{me, peer}.toList(growable: false);
+    }
+
+    final members = await listMembers(chatId);
+    final ids = <int>{
+      me,
+      ...members.map((m) => m.userId).where((id) => id > 0),
+    };
+    if (ids.length > 50) {
+      throw Exception('Signal groups currently support up to 50 participants');
+    }
+    return ids.toList(growable: false);
+  }
+
+  Future<Map<String, String>> _encryptForRecipients({
+    required int chatId,
+    required String chatKind,
+    int? peerId,
+    required String plaintext,
+  }) async {
+    final me = await _getMyUserId();
+    final recipients = await _resolveRecipients(
+      chatId: chatId,
+      chatKind: chatKind,
+      peerId: peerId,
+    );
+
+    final out = <String, String>{};
+    for (final uid in recipients) {
+      if (uid != me) {
+        await _ensureSignalSession(uid);
+      }
+      final ct = await signal.encrypt(peerUserId: uid, plaintext: plaintext);
+      out['$uid'] = ct;
+    }
+    return out;
   }
 
   Future<ChatPreview> createPrivateChat(
@@ -1034,93 +1007,22 @@ class ChatsRepository {
     int? peerId,
     required String plaintext,
   }) async {
-    if (!_isPrivateKind(chatKind)) {
-      return {
-        'chat_id': chatId,
-        'message': plaintext,
-        'message_type': 'text',
-        'envelopes': null,
-        'metadata': null,
-      };
-    }
-
-    final peer = peerId ?? 0;
-    if (peer <= 0) {
-      throw Exception('Некорректный peerId для private-чата');
-    }
-
-    final myUserId = await _getMyUserId();
-    final myPrivateKeyB64 = await _getMyPrivateKeyB64();
-    final myPublicKeyB64 = await _getMyPublicKeyB64();
-
-    if (myUserId == 0) {
-      throw Exception('Не найден userId');
-    }
-    if (myPrivateKeyB64 == null || myPrivateKeyB64.isEmpty) {
-      throw Exception('Не найден приватный ключ');
-    }
-    if (myPublicKeyB64 == null || myPublicKeyB64.isEmpty) {
-      throw Exception('Не найден публичный ключ');
-    }
-
-    final peerPublicKeyB64 = await _getPeerPublicKeyB64(peer);
-
-    final msgKeyB64 = renSdk.generateMessageKey().trim();
-    final enc = renSdk.encryptMessage(plaintext, msgKeyB64);
-    if (enc == null) {
-      throw Exception('Не удалось зашифровать сообщение');
-    }
-
-    final wrappedForMe = renSdk.wrapSymmetricKey(msgKeyB64, myPublicKeyB64);
-    final wrappedForPeer = renSdk.wrapSymmetricKey(msgKeyB64, peerPublicKeyB64);
-    if (wrappedForMe == null || wrappedForPeer == null) {
-      throw Exception('Не удалось сформировать envelopes');
-    }
-
-    // self-check: мы обязаны уметь развернуть свой же envelope
-    final selfWrapped = (wrappedForMe['wrapped'] ?? '').trim();
-    final selfEph = (wrappedForMe['ephemeral_public_key'] ?? '').trim();
-    final selfNonce = (wrappedForMe['nonce'] ?? '').trim();
-    final selfUnwrapped = renSdk.unwrapSymmetricKey(
-      selfWrapped,
-      selfEph,
-      selfNonce,
-      myPrivateKeyB64,
+    final ciphertextByUser = await _encryptForRecipients(
+      chatId: chatId,
+      chatKind: chatKind,
+      peerId: peerId,
+      plaintext: plaintext,
     );
-    if (selfUnwrapped == null || selfUnwrapped.isEmpty) {
-      debugPrint(
-        'e2ee self-check failed: myUserId=$myUserId '
-        'privLen=${myPrivateKeyB64.length} pubLen=${myPublicKeyB64.length} '
-        'wrappedLen=${selfWrapped.length} ephLen=${selfEph.length}',
-      );
-      throw Exception(
-        'Ошибка E2EE: не удалось развернуть собственный envelope (ключи не совпадают)',
-      );
-    }
-
-    Map<String, dynamic> env(String userId, Map<String, String> w) {
-      return {
-        'key': w['wrapped'],
-        'ephem_pub_key': w['ephemeral_public_key'],
-        'iv': w['nonce'],
-      };
-    }
-
-    final envelopes = <String, dynamic>{
-      '$myUserId': env('$myUserId', wrappedForMe),
-      '$peer': env('$peer', wrappedForPeer),
-    };
-
     final messageJson = jsonEncode({
-      'ciphertext': enc['ciphertext'],
-      'nonce': enc['nonce'],
+      'signal_v': 1,
+      'ciphertext_by_user': ciphertextByUser,
     });
 
     return {
       'chat_id': chatId,
       'message': messageJson,
       'message_type': 'text',
-      'envelopes': envelopes,
+      'envelopes': null,
       'metadata': null,
     };
   }
@@ -1133,104 +1035,19 @@ class ChatsRepository {
     required String mimetype,
     required String caption,
   }) async {
-    return _runInMediaPipeline(() async {
-      final myUserId = await _getMyUserId();
-      final myPrivateKeyB64 = await _getMyPrivateKeyB64();
-      final myPublicKeyB64 = await _getMyPublicKeyB64();
-
-      if (myUserId == 0) {
-        throw Exception('Не найден userId');
-      }
-      if (myPrivateKeyB64 == null || myPrivateKeyB64.isEmpty) {
-        throw Exception('Не найден приватный ключ');
-      }
-      if (myPublicKeyB64 == null || myPublicKeyB64.isEmpty) {
-        throw Exception('Не найден публичный ключ');
-      }
-
-      final peerPublicKeyB64 = await _getPeerPublicKeyB64(peerId);
-
-      final msgKeyB64 = renSdk.generateMessageKey().trim();
-      final encMsg = renSdk.encryptMessage(caption, msgKeyB64);
-      if (encMsg == null) {
-        throw Exception('Не удалось зашифровать сообщение');
-      }
-
-      final encFile = await _encryptAttachmentInIsolate(
-        bytes: fileBytes,
-        filename: filename,
-        mimetype: mimetype,
-        keyB64: msgKeyB64,
-      );
-      if (encFile == null) {
-        throw Exception('Не удалось зашифровать файл');
-      }
-
-      // Upload ciphertext bytes to backend (store server-side)
-      final ciphertextBytes = base64Decode(
-        (encFile['ciphertext'] ?? '').toString(),
-      );
-      final uploadResp = await _uploadMediaWithRetry(
-        chatId: chatId,
-        ciphertextBytes: ciphertextBytes,
-        filename: filename,
-        mimetype: mimetype,
-      );
-      final uploadedId = uploadResp['file_id'];
-      final fileId = (uploadedId is int)
-          ? uploadedId
-          : int.tryParse('$uploadedId') ?? 0;
-      if (fileId <= 0) {
-        throw Exception('Не удалось загрузить ciphertext файла');
-      }
-
-      final wrappedForMe = renSdk.wrapSymmetricKey(msgKeyB64, myPublicKeyB64);
-      final wrappedForPeer = renSdk.wrapSymmetricKey(
-        msgKeyB64,
-        peerPublicKeyB64,
-      );
-      if (wrappedForMe == null || wrappedForPeer == null) {
-        throw Exception('Не удалось сформировать envelopes');
-      }
-
-      Map<String, dynamic> env(String userId, Map<String, String> w) {
-        return {
-          'key': w['wrapped'],
-          'ephem_pub_key': w['ephemeral_public_key'],
-          'iv': w['nonce'],
-        };
-      }
-
-      final envelopes = <String, dynamic>{
-        '$myUserId': env('$myUserId', wrappedForMe),
-        '$peerId': env('$peerId', wrappedForPeer),
-      };
-
-      final messageJson = jsonEncode({
-        'ciphertext': encMsg['ciphertext'],
-        'nonce': encMsg['nonce'],
-      });
-
-      final metadata = [
-        {
-          'file_id': fileId,
-          'filename': filename,
-          'mimetype': mimetype,
-          'size': fileBytes.length,
-          'enc_file': null,
-          'nonce': encFile['nonce'],
-          'file_creation_date': null,
-        },
-      ];
-
-      return {
-        'chat_id': chatId,
-        'message': messageJson,
-        'message_type': 'image',
-        'envelopes': envelopes,
-        'metadata': metadata,
-      };
-    });
+    return buildOutgoingWsMediaMessage(
+      chatId: chatId,
+      chatKind: 'private',
+      peerId: peerId,
+      caption: caption,
+      attachments: [
+        OutgoingAttachment(
+          bytes: fileBytes,
+          filename: filename,
+          mimetype: mimetype,
+        ),
+      ],
+    );
   }
 
   Future<Map<String, dynamic>> buildOutgoingWsMediaMessage({
@@ -1241,99 +1058,12 @@ class ChatsRepository {
     required List<OutgoingAttachment> attachments,
   }) async {
     return _runInMediaPipeline(() async {
-      if (!_isPrivateKind(chatKind)) {
-        final metadata = <Map<String, dynamic>>[];
-        for (final att in attachments) {
-          final filename = att.filename.isNotEmpty
-              ? att.filename
-              : 'file_${DateTime.now().millisecondsSinceEpoch}';
-          final mimetype = att.mimetype.isNotEmpty
-              ? att.mimetype
-              : 'application/octet-stream';
-          final rawBytes = att.bytes is Uint8List
-              ? att.bytes as Uint8List
-              : Uint8List.fromList(att.bytes);
-
-          final uploadResp = await _uploadMediaWithRetry(
-            chatId: chatId,
-            ciphertextBytes: rawBytes,
-            filename: filename,
-            mimetype: mimetype,
-          );
-          final uploadedId = uploadResp['file_id'];
-          final fileId = (uploadedId is int)
-              ? uploadedId
-              : int.tryParse('$uploadedId') ?? 0;
-          if (fileId <= 0) {
-            throw Exception('Не удалось загрузить файл');
-          }
-
-          metadata.add({
-            'file_id': fileId,
-            'filename': filename,
-            'mimetype': mimetype,
-            'size': rawBytes.length,
-            'enc_file': null,
-            'nonce': null,
-            'file_creation_date': null,
-          });
-        }
-
-        return {
-          'chat_id': chatId,
-          'message': caption,
-          'message_type': 'media',
-          'envelopes': null,
-          'metadata': metadata,
-        };
-      }
-
-      final peer = peerId ?? 0;
-      if (peer <= 0) {
-        throw Exception('Некорректный peerId');
-      }
-
-      final myId = await _getMyUserId();
-      if (myId <= 0) {
-        throw Exception('Не удалось определить userId');
-      }
-
-      final myPublicKeyB64 = await _getMyPublicKeyB64();
-      if (myPublicKeyB64 == null || myPublicKeyB64.isEmpty) {
-        throw Exception('Отсутствует публичный ключ');
-      }
-
-      final peerPublicKeyB64 = await _getPeerPublicKeyB64(peer);
-
-      final msgKeyB64 = renSdk.generateMessageKey().trim();
-
-      final encMsg = renSdk.encryptMessage(caption, msgKeyB64);
-      if (encMsg == null) {
-        throw Exception('Не удалось зашифровать сообщение');
-      }
-
-      final wrappedForMe = renSdk.wrapSymmetricKey(msgKeyB64, myPublicKeyB64);
-      final wrappedForPeer = renSdk.wrapSymmetricKey(
-        msgKeyB64,
-        peerPublicKeyB64,
+      final msgByUser = await _encryptForRecipients(
+        chatId: chatId,
+        chatKind: chatKind,
+        peerId: peerId,
+        plaintext: caption,
       );
-      if (wrappedForMe == null || wrappedForPeer == null) {
-        throw Exception('Не удалось сформировать envelopes');
-      }
-
-      Map<String, dynamic> env(String userId, Map<String, String> w) {
-        return {
-          'key': w['wrapped'],
-          'ephem_pub_key': w['ephemeral_public_key'],
-          'iv': w['nonce'],
-        };
-      }
-
-      final envelopes = {
-        '$myId': env('$myId', wrappedForMe),
-        '$peer': env('$peer', wrappedForPeer),
-      };
-
       final metadata = <Map<String, dynamic>>[];
       for (final att in attachments) {
         final filename = att.filename.isNotEmpty
@@ -1346,55 +1076,36 @@ class ChatsRepository {
         final rawBytes = att.bytes is Uint8List
             ? att.bytes as Uint8List
             : Uint8List.fromList(att.bytes);
-
-        final encFile = await _encryptAttachmentInIsolate(
-          bytes: rawBytes,
-          filename: filename,
-          mimetype: mimetype,
-          keyB64: msgKeyB64,
-        );
-        if (encFile == null) {
-          throw Exception('Не удалось зашифровать файл');
-        }
-
-        final ciphertextBytes = base64Decode(
-          (encFile['ciphertext'] ?? '').toString(),
-        );
-        final uploadResp = await _uploadMediaWithRetry(
+        final filePlainB64 = base64Encode(rawBytes);
+        final byUser = await _encryptForRecipients(
           chatId: chatId,
-          ciphertextBytes: ciphertextBytes,
-          filename: filename,
-          mimetype: mimetype,
+          chatKind: chatKind,
+          peerId: peerId,
+          plaintext: filePlainB64,
         );
-        final uploadedId = uploadResp['file_id'];
-        final fileId = (uploadedId is int)
-            ? uploadedId
-            : int.tryParse('$uploadedId') ?? 0;
-        if (fileId <= 0) {
-          throw Exception('Не удалось загрузить ciphertext файла');
-        }
 
         metadata.add({
-          'file_id': fileId,
+          'file_id': null,
           'filename': filename,
           'mimetype': mimetype,
           'size': rawBytes.length,
           'enc_file': null,
-          'nonce': encFile['nonce'],
+          'nonce': null,
+          'signal_ciphertext_by_user': byUser,
           'file_creation_date': null,
         });
       }
 
       final messageJson = jsonEncode({
-        'ciphertext': encMsg['ciphertext'],
-        'nonce': encMsg['nonce'],
+        'signal_v': 1,
+        'ciphertext_by_user': msgByUser,
       });
 
       return {
         'chat_id': chatId,
         'message': messageJson,
         'message_type': 'media',
-        'envelopes': envelopes,
+        'envelopes': null,
         'metadata': metadata,
       };
     });
@@ -1404,7 +1115,9 @@ class ChatsRepository {
     required Map<String, dynamic> message,
   }) async {
     final myUserId = await _getMyUserId();
-    final myPrivateKeyB64 = await _getMyPrivateKeyB64();
+    final senderId = (message['sender_id'] is int)
+        ? message['sender_id'] as int
+        : int.tryParse('${message['sender_id'] ?? ''}') ?? 0;
 
     final encrypted = message['message'] as String? ?? '';
     final messageType = ((message['message_type'] as String?) ?? 'text')
@@ -1413,13 +1126,10 @@ class ChatsRepository {
     if (messageType == 'system') {
       return encrypted;
     }
-    final envelopes = message['envelopes'];
-
     final decrypted = await _tryDecryptMessageAndKey(
       encrypted: encrypted,
-      envelopes: envelopes,
+      senderId: senderId,
       myUserId: myUserId,
-      myPrivateKeyB64: myPrivateKeyB64,
     );
 
     return decrypted.text;
@@ -1428,7 +1138,9 @@ class ChatsRepository {
   Future<({String text, List<ChatAttachment> attachments})>
   decryptIncomingWsMessageFull({required Map<String, dynamic> message}) async {
     final myUserId = await _getMyUserId();
-    final myPrivateKeyB64 = await _getMyPrivateKeyB64();
+    final senderId = (message['sender_id'] is int)
+        ? message['sender_id'] as int
+        : int.tryParse('${message['sender_id'] ?? ''}') ?? 0;
 
     final encrypted = message['message'] as String? ?? '';
     final messageType = ((message['message_type'] as String?) ?? 'text')
@@ -1437,13 +1149,10 @@ class ChatsRepository {
     if (messageType == 'system') {
       return (text: encrypted, attachments: const <ChatAttachment>[]);
     }
-    final envelopes = message['envelopes'];
-
     final decrypted = await _tryDecryptMessageAndKey(
       encrypted: encrypted,
-      envelopes: envelopes,
+      senderId: senderId,
       myUserId: myUserId,
-      myPrivateKeyB64: myPrivateKeyB64,
     );
 
     final chatId = (message['chat_id'] is int)
@@ -1456,8 +1165,8 @@ class ChatsRepository {
     final attachments = await _tryDecryptAttachments(
       chatId: chatId,
       messageId: messageId,
+      senderId: senderId,
       metadata: message['metadata'],
-      msgKeyB64: decrypted.key,
     );
 
     return (text: decrypted.text, attachments: attachments);
@@ -1541,7 +1250,7 @@ class ChatsRepository {
   }
 
   void resetSessionState() {
-    _peerPublicKeyB64Cache.clear();
+    _peerBundleCache.clear();
     _chatIndexClearNotifiers();
   }
 

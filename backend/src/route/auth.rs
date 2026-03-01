@@ -160,13 +160,16 @@ async fn login(
 ) -> Result<Json<LoginResponse>, (StatusCode, String)> {
     // P1-7: Check rate limit before processing
     let ip = addr.ip().to_string();
-    if !state.auth_rate_limiter.is_allowed(&ip, Some(&payload.login)) {
+    if !state
+        .auth_rate_limiter
+        .is_allowed(&ip, Some(&payload.login))
+    {
         return Err((
             StatusCode::TOO_MANY_REQUESTS,
             "Слишком много попыток входа. Повторите позже.".into(),
         ));
     }
-    
+
     let row = sqlx::query(
         r#"
         SELECT id, login, username, nickname, avatar, password, pkebymk, pkebyrk, salt, pubk
@@ -186,8 +189,10 @@ async fn login(
 
     let Some(row) = row else {
         // P1-7: Record failed attempt
-        let (_allowed, _lockout_secs) = state.auth_rate_limiter.record_failure(&ip, Some(&payload.login));
-        
+        let (_allowed, _lockout_secs) = state
+            .auth_rate_limiter
+            .record_failure(&ip, Some(&payload.login));
+
         return Err((StatusCode::UNAUTHORIZED, "Неверный логин или пароль".into()));
     };
 
@@ -208,13 +213,17 @@ async fn login(
         .verify_password(payload.password.as_bytes(), &parsed_hash)
         .map_err(|_e| {
             // P1-7: Record failed attempt on password mismatch
-            let (_allowed, _lockout_secs) = state.auth_rate_limiter.record_failure(&ip, Some(&payload.login));
-            
+            let (_allowed, _lockout_secs) = state
+                .auth_rate_limiter
+                .record_failure(&ip, Some(&payload.login));
+
             (StatusCode::UNAUTHORIZED, "Неверный логин или пароль".into())
         })?;
 
     // P1-7: Record successful login - reset counters
-    state.auth_rate_limiter.record_success(&ip, Some(&payload.login));
+    state
+        .auth_rate_limiter
+        .record_success(&ip, Some(&payload.login));
 
     let user = UserAuthResponse {
         id: row.try_get("id").unwrap_or_default(),
@@ -698,7 +707,7 @@ async fn resolve_city(headers: &HeaderMap, ip_address: &str) -> String {
         .unwrap_or_else(|_| "0".to_string())
         .trim()
         .eq("1");
-    
+
     if !enable_external {
         // P2-12: Return "Unknown" instead of making external request
         return "Unknown".to_string();
