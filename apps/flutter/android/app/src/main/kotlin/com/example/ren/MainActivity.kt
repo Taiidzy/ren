@@ -14,6 +14,9 @@ import java.security.SecureRandom
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.time.Instant
+import javax.crypto.Cipher
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
 class MainActivity : FlutterActivity() {
     private val privacyChannel = "ren/privacy_protection"
@@ -152,6 +155,27 @@ class MainActivity : FlutterActivity() {
                             }
                             result.success(signal.getFingerprint(peerUserId, deviceId))
                         }
+                        "exportBackup" -> {
+                            val userId = call.argument<Int>("userId") ?: 0
+                            val deviceId = call.argument<Int>("deviceId") ?: 1
+                            val backupSecret = call.argument<String>("backupSecret") ?: ""
+                            if (userId <= 0 || backupSecret.isEmpty()) {
+                                result.error("bad_args", "Invalid exportBackup args", null)
+                                return@setMethodCallHandler
+                            }
+                            result.success(signal.exportBackup(userId, deviceId, backupSecret))
+                        }
+                        "importBackup" -> {
+                            val userId = call.argument<Int>("userId") ?: 0
+                            val deviceId = call.argument<Int>("deviceId") ?: 1
+                            val backupSecret = call.argument<String>("backupSecret") ?: ""
+                            val payload = call.argument<String>("payload") ?: ""
+                            if (userId <= 0 || backupSecret.isEmpty() || payload.isEmpty()) {
+                                result.error("bad_args", "Invalid importBackup args", null)
+                                return@setMethodCallHandler
+                            }
+                            result.success(signal.importBackup(userId, deviceId, backupSecret, payload))
+                        }
                         else -> result.notImplemented()
                     }
                 } catch (e: Exception) {
@@ -190,6 +214,9 @@ private class SignalRuntime(
     }
 
     private fun k(base: String): String = "${base}_${currentUserId}_${currentDeviceId}"
+
+    private fun scopedBase(base: String, userId: Int, deviceId: Int): String =
+        "${base}_${userId}_${deviceId.coerceAtLeast(1)}"
 
     private fun sessionKey(peerUserId: Int, deviceId: Int): String =
         "${k(storeSessionsPrefix)}_${peerUserId}_${deviceId}"
@@ -871,5 +898,142 @@ private class SignalRuntime(
             throw IllegalStateException("No peer identity for fingerprint")
         }
         return peer
+    }
+
+    private fun exportScopedPrefs(userId: Int, deviceId: Int): JSONObject {
+        val normalizedDeviceId = deviceId.coerceAtLeast(1)
+        val p = requirePrefs()
+        val out = JSONObject()
+        val exactKeys = setOf(
+            scopedBase(storeIdentityPair, userId, normalizedDeviceId),
+            scopedBase(storeRegistrationId, userId, normalizedDeviceId),
+            scopedBase(storeSignedPreKey, userId, normalizedDeviceId),
+            scopedBase(storeKyberPreKey, userId, normalizedDeviceId),
+            scopedBase(storeOneTimePreKeys, userId, normalizedDeviceId),
+        )
+        val prefixKeys = listOf(
+            "${scopedBase(storeSessionsPrefix, userId, normalizedDeviceId)}_",
+            "${scopedBase(storePeerIdentityPrefix, userId, normalizedDeviceId)}_",
+        )
+
+        for ((key, value) in p.all) {
+            val allowed = exactKeys.contains(key) || prefixKeys.any { key.startsWith(it) }
+            if (!allowed || value == null) continue
+            when (value) {
+                is String -> out.put(key, value)
+                is Int -> out.put(key, value)
+                is Long -> out.put(key, value)
+                is Boolean -> out.put(key, value)
+                is Float -> out.put(key, value.toDouble())
+            }
+        }
+        return out
+    }
+
+    private fun importScopedPrefs(userId: Int, deviceId: Int, state: JSONObject) {
+        val normalizedDeviceId = deviceId.coerceAtLeast(1)
+        val p = requirePrefs()
+        val exactKeys = setOf(
+            scopedBase(storeIdentityPair, userId, normalizedDeviceId),
+            scopedBase(storeRegistrationId, userId, normalizedDeviceId),
+            scopedBase(storeSignedPreKey, userId, normalizedDeviceId),
+            scopedBase(storeKyberPreKey, userId, normalizedDeviceId),
+            scopedBase(storeOneTimePreKeys, userId, normalizedDeviceId),
+        )
+        val prefixKeys = listOf(
+            "${scopedBase(storeSessionsPrefix, userId, normalizedDeviceId)}_",
+            "${scopedBase(storePeerIdentityPrefix, userId, normalizedDeviceId)}_",
+        )
+
+        val editor = p.edit()
+        for ((key, _) in p.all) {
+            val allowed = exactKeys.contains(key) || prefixKeys.any { key.startsWith(it) }
+            if (allowed) editor.remove(key)
+        }
+
+        val names = state.keys()
+        while (names.hasNext()) {
+            val key = names.next()
+            val allowed = exactKeys.contains(key) || prefixKeys.any { key.startsWith(it) }
+            if (!allowed) continue
+            val value = state.opt(key)
+            when (value) {
+                is String -> editor.putString(key, value)
+                is Int -> editor.putInt(key, value)
+                is Long -> editor.putLong(key, value)
+                is Boolean -> editor.putBoolean(key, value)
+                is Double -> {
+                    if (key == scopedBase(storeRegistrationId, userId, normalizedDeviceId)) {
+                        editor.putInt(key, value.toInt())
+                    } else {
+                        editor.putString(key, value.toString())
+                    }
+                }
+            }
+        }
+        editor.apply()
+        protocolStore = null
+        currentUserId = userId
+        currentDeviceId = normalizedDeviceId
+    }
+
+    private fun encryptBackup(plain: ByteArray, backupSecretBase64: String): String {
+        val keyBytes = b64d(backupSecretBase64)
+        if (keyBytes.size != 32) {
+            throw IllegalArgumentException("backupSecret must be 32 bytes (base64)")
+        }
+        val iv = ByteArray(12)
+        SecureRandom().nextBytes(iv)
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(keyBytes, "AES"), GCMParameterSpec(128, iv))
+        val encrypted = cipher.doFinal(plain)
+        val payload = JSONObject()
+            .put("v", 1)
+            .put("n", b64(iv))
+            .put("c", b64(encrypted))
+        return b64(payload.toString().toByteArray(Charsets.UTF_8))
+    }
+
+    private fun decryptBackup(payloadB64: String, backupSecretBase64: String): ByteArray {
+        val keyBytes = b64d(backupSecretBase64)
+        if (keyBytes.size != 32) {
+            throw IllegalArgumentException("backupSecret must be 32 bytes (base64)")
+        }
+        val payloadJson = JSONObject(String(b64d(payloadB64), Charsets.UTF_8))
+        val nonce = payloadJson.optString("n")
+        val ciphertext = payloadJson.optString("c")
+        if (nonce.isEmpty() || ciphertext.isEmpty()) {
+            throw IllegalArgumentException("Malformed backup payload")
+        }
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(
+            Cipher.DECRYPT_MODE,
+            SecretKeySpec(keyBytes, "AES"),
+            GCMParameterSpec(128, b64d(nonce)),
+        )
+        return cipher.doFinal(b64d(ciphertext))
+    }
+
+    fun exportBackup(userId: Int, deviceId: Int, backupSecretBase64: String): String {
+        ensureLoaded(userId, deviceId)
+        val state = exportScopedPrefs(userId, deviceId)
+        val backupPayload = JSONObject()
+            .put("v", 1)
+            .put("user_id", userId)
+            .put("device_id", deviceId.coerceAtLeast(1))
+            .put("state", state)
+        return encryptBackup(
+            backupPayload.toString().toByteArray(Charsets.UTF_8),
+            backupSecretBase64,
+        )
+    }
+
+    fun importBackup(userId: Int, deviceId: Int, backupSecretBase64: String, payload: String): Boolean {
+        val plain = decryptBackup(payload, backupSecretBase64)
+        val json = JSONObject(String(plain, Charsets.UTF_8))
+        val state = json.optJSONObject("state") ?: JSONObject()
+        importScopedPrefs(userId, deviceId, state)
+        ensureLoaded(userId, deviceId)
+        return true
     }
 }

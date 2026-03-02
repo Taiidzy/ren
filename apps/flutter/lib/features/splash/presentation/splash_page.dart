@@ -109,6 +109,26 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
       final userId = fallbackUserId ?? storedUserId;
       if (userId <= 0) return;
       try {
+        final backupSecret = await SecureStorage.readKey(
+          Keys.signalBackupSecret,
+        );
+        if (backupSecret != null && backupSecret.isNotEmpty) {
+          try {
+            final backupPayload = await currentContext
+                .read<AuthRepository>()
+                .api
+                .getSignalBackup();
+            if (backupPayload != null && backupPayload.isNotEmpty) {
+              await SignalProtocolClient.instance.importBackup(
+                userId: userId,
+                backupSecretBase64: backupSecret,
+                encryptedPayload: backupPayload,
+              );
+            }
+          } catch (_) {
+            // Continue startup even when backup restore fails.
+          }
+        }
         final bundle = await SignalProtocolClient.instance.initUser(
           userId: userId,
         );
@@ -116,6 +136,17 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
           await currentContext.read<AuthRepository>().api.updateSignalBundle(
             bundle,
           );
+        }
+        if (backupSecret != null && backupSecret.isNotEmpty) {
+          try {
+            final encryptedBackup = await SignalProtocolClient.instance
+                .exportBackup(userId: userId, backupSecretBase64: backupSecret);
+            await currentContext.read<AuthRepository>().api.updateSignalBackup(
+              encryptedBackup,
+            );
+          } catch (_) {
+            // Continue startup even when backup upload fails.
+          }
         }
       } catch (_) {
         // Keep splash resilient: auth/network flow should proceed even if Signal init fails.

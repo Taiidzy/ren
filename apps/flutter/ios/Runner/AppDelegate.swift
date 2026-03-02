@@ -1,4 +1,5 @@
 import Flutter
+import CryptoKit
 import LibSignalClient
 import Security
 import UIKit
@@ -258,6 +259,67 @@ private final class KeychainSignalStore: IdentityKeyStore, PreKeyStore, SignedPr
   func clearSession(for address: ProtocolAddress) {
     deleteData(sessionKey(address: address))
   }
+
+  private func scopedPrefixes(userId: Int, deviceId: UInt32) -> [String] {
+    let scope = "\(userId)_\(deviceId)"
+    return [
+      "identity_pair_\(scope)",
+      "registration_id_\(scope)",
+      "ids_prekey_\(scope)",
+      "prekey_\(scope)_",
+      "signed_prekey_\(scope)_",
+      "kyber_prekey_\(scope)_",
+      "session_\(scope)_",
+      "peer_identity_\(scope)_",
+    ]
+  }
+
+  private func isAllowedBackupKey(_ key: String, userId: Int, deviceId: UInt32) -> Bool {
+    scopedPrefixes(userId: userId, deviceId: deviceId).contains { prefix in
+      key == prefix || key.hasPrefix(prefix)
+    }
+  }
+
+  private func allItemsForService() -> [String: Data] {
+    let query: [String: Any] = [
+      kSecClass as String: kSecClassGenericPassword,
+      kSecAttrService as String: service,
+      kSecReturnAttributes as String: true,
+      kSecReturnData as String: true,
+      kSecMatchLimit as String: kSecMatchLimitAll,
+    ]
+    var item: CFTypeRef?
+    let status = SecItemCopyMatching(query as CFDictionary, &item)
+    guard status == errSecSuccess || status == errSecItemNotFound else { return [:] }
+    guard let rows = item as? [[String: Any]] else { return [:] }
+    var out: [String: Data] = [:]
+    for row in rows {
+      guard let account = row[kSecAttrAccount as String] as? String else { continue }
+      guard let data = row[kSecValueData as String] as? Data else { continue }
+      out[account] = data
+    }
+    return out
+  }
+
+  func exportScopedState(userId: Int, deviceId: UInt32) -> [String: String] {
+    let items = allItemsForService()
+    var out: [String: String] = [:]
+    for (key, value) in items where isAllowedBackupKey(key, userId: userId, deviceId: deviceId) {
+      out[key] = value.base64EncodedString()
+    }
+    return out
+  }
+
+  func importScopedState(userId: Int, deviceId: UInt32, state: [String: String]) {
+    let existing = allItemsForService()
+    for (key, _) in existing where isAllowedBackupKey(key, userId: userId, deviceId: deviceId) {
+      deleteData(key)
+    }
+    for (key, value) in state where isAllowedBackupKey(key, userId: userId, deviceId: deviceId) {
+      guard let data = Data(base64Encoded: value) else { continue }
+      saveData(data, key: key)
+    }
+  }
 }
 
 private final class SignalProtocolManager {
@@ -287,6 +349,49 @@ private final class SignalProtocolManager {
 
   private func nowMillis() -> UInt64 {
     UInt64(Date().timeIntervalSince1970 * 1000)
+  }
+
+  private func parseBackupSecret(_ secretBase64: String) throws -> SymmetricKey {
+    guard let keyData = Data(base64Encoded: secretBase64), keyData.count == 32 else {
+      throw SignalError.invalidArgument("backupSecret must be 32 bytes (base64)")
+    }
+    return SymmetricKey(data: keyData)
+  }
+
+  private func encryptBackup(_ plaintext: Data, backupSecretBase64: String) throws -> String {
+    let key = try parseBackupSecret(backupSecretBase64)
+    let nonce = AES.GCM.Nonce()
+    let sealed = try AES.GCM.seal(plaintext, using: key, nonce: nonce)
+    let payload: [String: Any] = [
+      "v": 1,
+      "n": Data(nonce).base64EncodedString(),
+      "c": (sealed.ciphertext + sealed.tag).base64EncodedString(),
+    ]
+    let data = try JSONSerialization.data(withJSONObject: payload)
+    return data.base64EncodedString()
+  }
+
+  private func decryptBackup(_ payloadBase64: String, backupSecretBase64: String) throws -> Data {
+    guard
+      let payloadData = Data(base64Encoded: payloadBase64),
+      let payload = try JSONSerialization.jsonObject(with: payloadData) as? [String: Any],
+      let nonceB64 = payload["n"] as? String,
+      let cipherB64 = payload["c"] as? String,
+      let nonceData = Data(base64Encoded: nonceB64),
+      let cipherAndTag = Data(base64Encoded: cipherB64),
+      cipherAndTag.count > 16
+    else {
+      throw SignalError.invalidMessage("Malformed Signal backup payload")
+    }
+    let key = try parseBackupSecret(backupSecretBase64)
+    let ciphertext = Data(cipherAndTag.prefix(cipherAndTag.count - 16))
+    let tag = Data(cipherAndTag.suffix(16))
+    let box = try AES.GCM.SealedBox(
+      nonce: AES.GCM.Nonce(data: nonceData),
+      ciphertext: ciphertext,
+      tag: tag
+    )
+    return try AES.GCM.open(box, using: key)
   }
 
   private func ensureLocalIdentity(userId: Int, deviceId: UInt32) throws -> IdentityKeyPair {
@@ -580,6 +685,43 @@ private final class SignalProtocolManager {
     )
     return fp.displayable.formatted
   }
+
+  func exportBackup(userId: Int, deviceId: Int, backupSecretBase64: String) throws -> String {
+    currentUserId = userId
+    currentDeviceId = UInt32(max(1, deviceId))
+    bindContext()
+    let state = store.exportScopedState(userId: userId, deviceId: currentDeviceId)
+    let payload: [String: Any] = [
+      "v": 1,
+      "user_id": userId,
+      "device_id": Int(currentDeviceId),
+      "state": state,
+    ]
+    let plain = try JSONSerialization.data(withJSONObject: payload)
+    return try encryptBackup(plain, backupSecretBase64: backupSecretBase64)
+  }
+
+  func importBackup(
+    userId: Int,
+    deviceId: Int,
+    backupSecretBase64: String,
+    payload: String
+  ) throws -> Bool {
+    currentUserId = userId
+    currentDeviceId = UInt32(max(1, deviceId))
+    bindContext()
+    let plain = try decryptBackup(payload, backupSecretBase64: backupSecretBase64)
+    let obj = try JSONSerialization.jsonObject(with: plain) as? [String: Any]
+    let rawState = obj?["state"] as? [String: Any] ?? [:]
+    var state: [String: String] = [:]
+    for (k, v) in rawState {
+      if let s = v as? String, !s.isEmpty {
+        state[k] = s
+      }
+    }
+    store.importScopedState(userId: userId, deviceId: currentDeviceId, state: state)
+    return true
+  }
 }
 
 @main
@@ -769,6 +911,43 @@ private final class SignalProtocolManager {
             }
             let deviceId = (args["deviceId"] as? Int) ?? UserDefaults.standard.integer(forKey: "signal_current_device_id")
             result(try self.signalManager.fingerprint(peerUserId: peerUserId, deviceId: max(deviceId, 1)))
+
+          case "exportBackup":
+            guard
+              let args = call.arguments as? [String: Any],
+              let userId = args["userId"] as? Int,
+              let backupSecret = args["backupSecret"] as? String,
+              !backupSecret.isEmpty
+            else {
+              result(FlutterError(code: "bad_args", message: "Invalid exportBackup args", details: nil))
+              return
+            }
+            let deviceId = (args["deviceId"] as? Int) ?? 1
+            result(try self.signalManager.exportBackup(
+              userId: userId,
+              deviceId: max(deviceId, 1),
+              backupSecretBase64: backupSecret
+            ))
+
+          case "importBackup":
+            guard
+              let args = call.arguments as? [String: Any],
+              let userId = args["userId"] as? Int,
+              let payload = args["payload"] as? String,
+              !payload.isEmpty,
+              let backupSecret = args["backupSecret"] as? String,
+              !backupSecret.isEmpty
+            else {
+              result(FlutterError(code: "bad_args", message: "Invalid importBackup args", details: nil))
+              return
+            }
+            let deviceId = (args["deviceId"] as? Int) ?? 1
+            result(try self.signalManager.importBackup(
+              userId: userId,
+              deviceId: max(deviceId, 1),
+              backupSecretBase64: backupSecret,
+              payload: payload
+            ))
 
           default:
             result(FlutterMethodNotImplemented)

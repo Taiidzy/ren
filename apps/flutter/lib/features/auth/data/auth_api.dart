@@ -217,4 +217,54 @@ class AuthApi {
       );
     }
   }
+
+  Future<String?> getSignalBackup() async {
+    try {
+      final token = await SecureStorage.readKey(Keys.token);
+      if (token == null || token.isEmpty) {
+        throw ApiException('Нет токена авторизации');
+      }
+      final response = await dio.get(
+        '${Apiurl.api}/users/signal-backup',
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+      final data = response.data;
+      if (data is Map<String, dynamic>) {
+        final payload = data['payload'] as String?;
+        if (payload != null && payload.trim().isNotEmpty) {
+          return payload;
+        }
+      }
+      return null;
+    } on DioException catch (e) {
+      final status = e.response?.statusCode;
+      if (status == 404) return null;
+      final serverMessage = _extractServerMessage(e.response?.data);
+      throw ApiException(
+        serverMessage ??
+            'Ошибка получения Signal backup${status != null ? ' ($status)' : ''}.',
+      );
+    }
+  }
+
+  Future<void> updateSignalBackup(String payload) async {
+    try {
+      final token = await SecureStorage.readKey(Keys.token);
+      if (token == null || token.isEmpty) {
+        throw ApiException('Нет токена авторизации');
+      }
+      await dio.patch(
+        '${Apiurl.api}/users/signal-backup',
+        data: {'payload': payload},
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+    } on DioException catch (e) {
+      final status = e.response?.statusCode;
+      final serverMessage = _extractServerMessage(e.response?.data);
+      throw ApiException(
+        serverMessage ??
+            'Ошибка обновления Signal backup${status != null ? ' ($status)' : ''}.',
+      );
+    }
+  }
 }

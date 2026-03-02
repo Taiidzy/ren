@@ -133,4 +133,35 @@ class SignalProtocolClient {
     }
     return fp;
   }
+
+  Future<String> exportBackup({
+    required int userId,
+    int deviceId = 1,
+    required String backupSecretBase64,
+  }) async {
+    final payload = await _channel.invokeMethod<String>('exportBackup', {
+      'userId': userId,
+      'deviceId': deviceId,
+      'backupSecret': backupSecretBase64,
+    });
+    if (payload == null || payload.isEmpty) {
+      throw StateError('Signal export backup returned empty payload');
+    }
+    return payload;
+  }
+
+  Future<bool> importBackup({
+    required int userId,
+    int deviceId = 1,
+    required String backupSecretBase64,
+    required String encryptedPayload,
+  }) async {
+    final ok = await _channel.invokeMethod<bool>('importBackup', {
+      'userId': userId,
+      'deviceId': deviceId,
+      'backupSecret': backupSecretBase64,
+      'payload': encryptedPayload,
+    });
+    return ok ?? false;
+  }
 }

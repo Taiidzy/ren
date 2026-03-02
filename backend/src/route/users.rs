@@ -37,6 +37,10 @@ pub fn router() -> Router<AppState> {
         .route("/users/avatar", patch(update_avatar).post(update_avatar))
         .route("/users/search", get(search_users))
         .route("/users/signal-bundle", patch(update_signal_bundle))
+        .route(
+            "/users/signal-backup",
+            get(get_signal_backup).patch(update_signal_backup),
+        )
         .route("/users/:id/public-key", get(get_public_key))
         .route("/avatars/*path", get(get_avatar))
 }
@@ -516,6 +520,17 @@ struct UpdateSignalBundleRequest {
     one_time_pre_keys: Option<Value>,
 }
 
+#[derive(Deserialize)]
+struct UpdateSignalBackupRequest {
+    payload: String,
+}
+
+#[derive(Serialize)]
+struct SignalBackupResponse {
+    payload: String,
+    updated_at: String,
+}
+
 fn normalize_identity_pubkey(identity_bytes: &[u8]) -> Result<[u8; 32], (StatusCode, String)> {
     if identity_bytes.len() == 32 {
         let mut out = [0u8; 32];
@@ -672,6 +687,80 @@ async fn update_signal_bundle(
     })?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn update_signal_backup(
+    State(state): State<AppState>,
+    CurrentUser { id, .. }: CurrentUser,
+    Json(payload): Json<UpdateSignalBackupRequest>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let blob = payload.payload.trim();
+    if blob.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "payload is required".into()));
+    }
+    if blob.len() > 2_000_000 {
+        return Err((StatusCode::BAD_REQUEST, "payload is too large".into()));
+    }
+
+    sqlx::query(
+        r#"
+        UPDATE users
+        SET signal_state_backup = $1, signal_state_backup_updated_at = now()
+        WHERE id = $2
+        "#,
+    )
+    .bind(blob)
+    .bind(id)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Ошибка БД: {}", e),
+        )
+    })?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn get_signal_backup(
+    State(state): State<AppState>,
+    CurrentUser { id, .. }: CurrentUser,
+) -> Result<Json<SignalBackupResponse>, (StatusCode, String)> {
+    let row = sqlx::query(
+        r#"
+        SELECT signal_state_backup, signal_state_backup_updated_at
+        FROM users
+        WHERE id = $1
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Ошибка БД: {}", e),
+        )
+    })?;
+
+    let Some(row) = row else {
+        return Err((StatusCode::NOT_FOUND, "Пользователь не найден".into()));
+    };
+
+    let payload: Option<String> = row.try_get("signal_state_backup").ok().flatten();
+    let updated_at: Option<chrono::DateTime<chrono::Utc>> =
+        row.try_get("signal_state_backup_updated_at").ok().flatten();
+
+    let payload = payload.ok_or((StatusCode::NOT_FOUND, "Signal backup not found".into()))?;
+    let updated_at = updated_at
+        .map(|v| v.to_rfc3339())
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+
+    Ok(Json(SignalBackupResponse {
+        payload,
+        updated_at,
+    }))
 }
 
 // Хендлер для получения публичного ключа пользователя (для E2EE)

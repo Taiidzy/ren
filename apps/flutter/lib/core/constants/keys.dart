@@ -5,6 +5,7 @@ class Keys {
   static const String privateKey = 'privateKey';
   static const String publicKey = 'publicKey';
   static const String userId = 'userId';
+  static const String signalBackupSecret = 'signalBackupSecret';
 
   static const String themeMode = 'themeMode';
   static const String themeColorScheme = 'themeColorScheme';
