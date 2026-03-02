@@ -1342,17 +1342,34 @@ class _ChatPageState extends State<ChatPage>
 
       String resolvedText = decoded.text;
       List<ChatAttachment> resolvedAttachments = decoded.attachments;
+      final incomingMessageType = ((m['message_type'] as String?) ?? '')
+          .trim()
+          .toLowerCase();
+      final incomingHasMediaType =
+          incomingMessageType == 'voice_message' ||
+          incomingMessageType == 'video_message' ||
+          incomingMessageType == 'image' ||
+          incomingMessageType == 'photo' ||
+          incomingMessageType == 'file';
 
       // если это echo нашего сообщения, попробуем убрать последний optimistic дубль
       if (isMe && _messages.isNotEmpty) {
         final last = _messages.last;
-        if (last.id.startsWith('local_') && isEncryptedPlaceholder) {
+        final isLocalEcho = last.id.startsWith('local_');
+        if (isLocalEcho && isEncryptedPlaceholder) {
           resolvedText = last.text;
-          if (resolvedAttachments.isEmpty && last.attachments.isNotEmpty) {
-            resolvedAttachments = last.attachments;
-          }
         }
-        if (last.id.startsWith('local_') && last.text == resolvedText) {
+        if (isLocalEcho &&
+            resolvedAttachments.isEmpty &&
+            last.attachments.isNotEmpty &&
+            (incomingHasMediaType || last.text.trim() == resolvedText.trim())) {
+          // For self-echo media, keep local decrypted attachment preview when
+          // WS payload attachment decrypt is temporarily unavailable.
+          resolvedAttachments = last.attachments;
+        }
+        if (isLocalEcho &&
+            last.text.trim() == resolvedText.trim() &&
+            (resolvedAttachments.isNotEmpty || last.attachments.isEmpty)) {
           final removed = _messages.removeLast();
           _messageById.remove(removed.id);
         }

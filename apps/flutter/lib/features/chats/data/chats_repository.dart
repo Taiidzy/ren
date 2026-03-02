@@ -200,9 +200,14 @@ class ChatsRepository {
     return int.tryParse(myUserIdStr ?? '') ?? 0;
   }
 
-  Future<Map<String, dynamic>> _getPeerSignalBundle(int peerId) async {
-    final cached = _peerBundleCache[peerId];
-    if (cached != null && cached.isNotEmpty) return cached;
+  Future<Map<String, dynamic>> _getPeerSignalBundle(
+    int peerId, {
+    bool forceRefresh = false,
+  }) async {
+    if (!forceRefresh) {
+      final cached = _peerBundleCache[peerId];
+      if (cached != null && cached.isNotEmpty) return cached;
+    }
     final v = await api.getPublicKey(peerId);
     _peerBundleCache[peerId] = v;
     return v;
@@ -878,20 +883,85 @@ class ChatsRepository {
 
     final out = <String, String>{};
     for (final uid in recipients) {
-      final has = await signal.hasSession(peerUserId: uid);
-      final bundle = has
-          ? null
-          : (uid == myUserId
-                ? await signal.initUser(userId: myUserId)
-                : await _getPeerSignalBundle(uid));
-      final ct = await signal.encrypt(
-        peerUserId: uid,
+      final ct = await _encryptForRecipientWithRecovery(
+        recipientUserId: uid,
+        myUserId: myUserId,
         plaintext: plaintext,
-        preKeyBundle: bundle,
       );
       out['$uid'] = ct;
     }
+    _ensureCiphertextsComplete(recipients: recipients, ciphertextByUser: out);
     return out;
+  }
+
+  Future<String> _encryptForRecipientWithRecovery({
+    required int recipientUserId,
+    required int myUserId,
+    required String plaintext,
+  }) async {
+    Future<Map<String, dynamic>?> initialBundle() async {
+      final has = await signal.hasSession(peerUserId: recipientUserId);
+      if (has) return null;
+      return recipientUserId == myUserId
+          ? await signal.initUser(userId: myUserId)
+          : await _getPeerSignalBundle(recipientUserId);
+    }
+
+    try {
+      return await signal.encrypt(
+        peerUserId: recipientUserId,
+        plaintext: plaintext,
+        preKeyBundle: await initialBundle(),
+      );
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint(
+          'Signal encrypt failed: to=$recipientUserId me=$myUserId err=$e',
+        );
+      }
+      try {
+        await signal.resetSession(peerUserId: recipientUserId);
+      } catch (_) {
+        // Continue with forced re-bootstrap even if local reset failed.
+      }
+
+      final retryBundle = recipientUserId == myUserId
+          ? await signal.initUser(userId: myUserId)
+          : await _getPeerSignalBundle(recipientUserId, forceRefresh: true);
+      try {
+        return await signal.encrypt(
+          peerUserId: recipientUserId,
+          plaintext: plaintext,
+          preKeyBundle: retryBundle,
+        );
+      } catch (e2) {
+        if (kDebugMode) {
+          debugPrint(
+            'Signal encrypt retry failed: to=$recipientUserId me=$myUserId err=$e2',
+          );
+        }
+        throw Exception(
+          'Signal encryption failed for recipient $recipientUserId: $e2',
+        );
+      }
+    }
+  }
+
+  void _ensureCiphertextsComplete({
+    required List<int> recipients,
+    required Map<String, String> ciphertextByUser,
+  }) {
+    if (ciphertextByUser.length != recipients.length) {
+      throw Exception(
+        'Signal encryption incomplete: ${ciphertextByUser.length}/${recipients.length}',
+      );
+    }
+    for (final uid in recipients) {
+      final ct = ciphertextByUser['$uid']?.trim() ?? '';
+      if (ct.isEmpty) {
+        throw Exception('Signal encryption produced empty ciphertext for $uid');
+      }
+    }
   }
 
   Future<ChatPreview> createPrivateChat(
