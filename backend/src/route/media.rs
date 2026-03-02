@@ -285,3 +285,24 @@ async fn download_media(
             )
         })?)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures_util::TryStreamExt;
+
+    #[tokio::test]
+    async fn reader_stream_keeps_binary_payload_unchanged() {
+        let path = std::env::temp_dir().join(format!("ren_media_test_{}.bin", Uuid::new_v4()));
+        let source = vec![0_u8, 1, 2, 3, 254, 255, 0, 200, 17, 99];
+        fs::write(&path, &source).await.expect("write temp file");
+
+        let file = fs::File::open(&path).await.expect("open temp file");
+        let stream = ReaderStream::new(file).map_ok(Bytes::from);
+        let chunks: Vec<Bytes> = stream.try_collect().await.expect("collect stream");
+        let restored = chunks.into_iter().flatten().collect::<Vec<u8>>();
+
+        assert_eq!(restored, source);
+        let _ = fs::remove_file(&path).await;
+    }
+}

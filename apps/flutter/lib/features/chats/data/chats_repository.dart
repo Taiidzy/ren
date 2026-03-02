@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:ren/core/constants/api_url.dart';
 import 'package:ren/core/cache/chats_local_cache.dart';
 import 'package:ren/core/constants/keys.dart';
+import 'package:ren/core/e2ee/attachment_cipher.dart';
 import 'package:ren/core/e2ee/signal_protocol_client.dart';
 import 'package:ren/core/secure/secure_storage.dart';
 import 'package:ren/features/chats/data/chats_api.dart';
@@ -707,14 +708,16 @@ class ChatsRepository {
       final m = item.cast<String, dynamic>();
       final fileIdDyn = m['file_id'];
       final encFile = (m['enc_file'] as String?)?.trim();
-      final filename = (m['filename'] as String?) ?? 'file';
-      final mimetype = (m['mimetype'] as String?) ?? 'application/octet-stream';
-      final size = (m['size'] is int)
+      var filename = (m['filename'] as String?) ?? 'file';
+      var mimetype = (m['mimetype'] as String?) ?? 'application/octet-stream';
+      var size = (m['size'] is int)
           ? m['size'] as int
           : int.tryParse('${m['size']}') ?? 0;
 
       Uint8List? bytes;
-      int? fileId;
+      int? fileId = (fileIdDyn is int)
+          ? fileIdDyn
+          : (fileIdDyn is String ? int.tryParse(fileIdDyn) : null);
       final mapDyn = m['ciphertext_by_user'] ?? m['signal_ciphertext_by_user'];
       if (mapDyn is Map) {
         final ct = (mapDyn['$myUserId'] as String?)?.trim();
@@ -730,18 +733,54 @@ class ChatsRepository {
           return;
         }
         try {
-          bytes = Uint8List.fromList(base64Decode(plainB64));
+          dynamic payload;
+          try {
+            payload = jsonDecode(plainB64);
+          } catch (_) {
+            payload = null;
+          }
+          if (payload is Map<String, dynamic> &&
+              ((payload['signal_v2_attachment'] == true) ||
+                  (payload['v'] == 2 && payload['kind'] == 'attachment'))) {
+            final descriptorFileId = (payload['file_id'] is int)
+                ? payload['file_id'] as int
+                : int.tryParse('${payload['file_id'] ?? ''}') ?? 0;
+            if (descriptorFileId <= 0) return;
+            final keyB64 = (payload['key'] as String?)?.trim() ?? '';
+            final nonceB64 = (payload['nonce'] as String?)?.trim() ?? '';
+            if (keyB64.isEmpty || nonceB64.isEmpty) return;
+            final cipherBytes = await _getCiphertextBytes(descriptorFileId);
+            final plainBytes = await AttachmentCipher.decrypt(
+              ciphertext: cipherBytes,
+              key: AttachmentCipher.fromBase64(keyB64),
+              nonce: AttachmentCipher.fromBase64(nonceB64),
+            );
+            final expectedSha = (payload['sha256'] as String?)?.trim() ?? '';
+            if (expectedSha.isNotEmpty &&
+                AttachmentCipher.sha256Base64(plainBytes) != expectedSha) {
+              return;
+            }
+            bytes = plainBytes;
+            fileId = descriptorFileId;
+            final descriptorName =
+                (payload['filename'] as String?)?.trim() ?? '';
+            final descriptorMime =
+                (payload['mimetype'] as String?)?.trim() ?? '';
+            final descriptorSize = (payload['size'] is int)
+                ? payload['size'] as int
+                : int.tryParse('${payload['size'] ?? ''}') ?? 0;
+            if (descriptorName.isNotEmpty) filename = descriptorName;
+            if (descriptorMime.isNotEmpty) mimetype = descriptorMime;
+            if (descriptorSize > 0) size = descriptorSize;
+          } else {
+            bytes = Uint8List.fromList(base64Decode(plainB64));
+          }
         } catch (_) {
           return;
         }
       } else {
         // Backward compatibility: old non-E2EE server media.
         Uint8List? ciphertextBytes;
-        if (fileIdDyn is int) {
-          fileId = fileIdDyn;
-        } else if (fileIdDyn is String) {
-          fileId = int.tryParse(fileIdDyn);
-        }
         if (fileId != null && fileId > 0) {
           try {
             ciphertextBytes = await _getCiphertextBytes(fileId);
@@ -811,7 +850,8 @@ class ChatsRepository {
       return (text: '[encrypted]', key: null);
     }
 
-    final mapDyn = payload['ciphertext_by_user'];
+    final mapDyn =
+        payload['ciphertext_by_user'] ?? payload['signal_ciphertext_by_user'];
     if (mapDyn is! Map) {
       return (text: '[encrypted]', key: null);
     }
@@ -1271,21 +1311,48 @@ class ChatsRepository {
         final rawBytes = att.bytes is Uint8List
             ? att.bytes as Uint8List
             : Uint8List.fromList(att.bytes);
-        final filePlainB64 = base64Encode(rawBytes);
+        final encryptedAttachment = await AttachmentCipher.encrypt(rawBytes);
+        final upload = await _uploadMediaWithRetry(
+          chatId: chatId,
+          ciphertextBytes: encryptedAttachment.ciphertext,
+          filename: filename,
+          mimetype: mimetype,
+        );
+        final fileId = (upload['file_id'] is int)
+            ? upload['file_id'] as int
+            : int.tryParse('${upload['file_id'] ?? ''}') ?? 0;
+        if (fileId <= 0) {
+          throw Exception('upload media returned invalid file_id');
+        }
+        final descriptor = jsonEncode({
+          'signal_v2_attachment': true,
+          'v': 2,
+          'kind': 'attachment',
+          'file_id': fileId,
+          'filename': filename,
+          'mimetype': mimetype,
+          'size': rawBytes.length,
+          'ciphertext_size': encryptedAttachment.ciphertext.length,
+          'key': AttachmentCipher.toBase64(encryptedAttachment.key),
+          'nonce': AttachmentCipher.toBase64(encryptedAttachment.nonce),
+          'sha256': encryptedAttachment.plaintextSha256Base64,
+          'ciphertext_sha256': encryptedAttachment.ciphertextSha256Base64,
+        });
         final byUser = await _encryptForRecipients(
           chatId: chatId,
           chatKind: chatKind,
           peerId: peerId,
-          plaintext: filePlainB64,
+          plaintext: descriptor,
         );
 
         metadata.add({
-          'file_id': null,
+          'file_id': fileId,
           'filename': filename,
           'mimetype': mimetype,
           'size': rawBytes.length,
           'enc_file': null,
           'nonce': null,
+          'ciphertext_by_user': byUser,
           'signal_ciphertext_by_user': byUser,
           'file_creation_date': null,
         });
