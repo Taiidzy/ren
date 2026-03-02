@@ -11,7 +11,6 @@ Usage:
   ./scripts/build.sh <ios|macos|windows|linux> [options] [-- <extra flutter args>]
 
 Options:
-  --sdk              Build Ren-SDK before building the app
   --release          Release build (default)
   --debug            Debug build
   --no-codesign      (iOS only) Build without code signing
@@ -28,7 +27,6 @@ if [ -z "$platform" ] || [ "$platform" = "-h" ] || [ "$platform" = "--help" ]; t
 fi
 shift || true
 
-build_sdk=0
 mode="release"
 no_codesign=0
 build_ipa=0
@@ -37,7 +35,6 @@ output_dir=""
 extra_args=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --sdk) build_sdk=1; shift ;;
     --release) mode="release"; shift ;;
     --debug) mode="debug"; shift ;;
     --no-codesign) no_codesign=1; shift ;;
@@ -67,13 +64,6 @@ done
 
 ensure_flutter_app
 flutter_pub_get_if_needed
-
-if [ "$build_sdk" -eq 1 ]; then
-  build_rensdk "$platform"
-  if [ "$platform" = "ios" ]; then
-    sync_rensdk_ios_xcframework
-  fi
-fi
 
 host="$(host_os)"
 case "$platform" in

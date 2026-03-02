@@ -1,44 +1,62 @@
 # Changelog
 
+## 2026-03-02
+
+### Fixed
+- Критический дефект инициализации Signal-сессии: устранена потеря первого prekey-message на отправителе.
+- Fail-closed отправка для E2EE:
+  - сообщение не отправляется, если шифрование не удалось хотя бы для одного получателя;
+  - добавлен recovery-проход (reset session + fresh bundle + повторное шифрование).
+- Android pre-key lifecycle:
+  - синхронизация и автопополнение one-time pre-keys;
+  - устранено повторное «воскрешение» использованных pre-key после перезапуска.
+- iOS key-store namespace:
+  - изоляция session/prekey/identity key state по `userId/deviceId`.
+- Backend `GET /users/:id/public-key`:
+  - атомарная выдача и расходование one-time pre-key (`FOR UPDATE` + update в транзакции).
+- Медиа E2EE для получателя:
+  - backend-модель `FileMetadata` теперь сохраняет/возвращает `ciphertext_by_user` и `signal_ciphertext_by_user`.
+- Self-echo merge для медиа:
+  - в `ChatPage` сохранён локальный fallback вложений, если decrypt вложения из WS временно недоступен.
+
+### Changed
+- In-app top banner:
+  - добавлена анимация появления/скрытия (slide + fade + scale);
+  - добавлен haptic feedback при показе.
+- Realtime sync списка чатов:
+  - убраны лишние `GET /chats` на каждый message event при открытом чате;
+  - добавлен debounce для фоновой синхронизации.
+- Репозиторий очищен от legacy SDK-сборки в dev-скриптах:
+  - удалены `--sdk` флаги из `scripts/build.sh` и `scripts/run.sh`;
+  - удалён устаревший `scripts/run-ios-release-with-sdk.sh`.
+
+### Security
+- Подготовлена инфраструктура под клиентскую подпись Signal bundle:
+  - добавлена колонка `users.key_signature`;
+  - сервер хранит клиентскую подпись в bundle.
+- Валидация подписи на сервере переведена в управляемый режим:
+  - strict-check включается через `STRICT_SIGNAL_SIGNATURE_VERIFY`.
+
 ## 2026-03-01
 
 ### Added
-- Native Signal Protocol bridge for Flutter via `MethodChannel` / `EventChannel` with unified API:
+- Native Signal Protocol bridge для Flutter (`MethodChannel` / `EventChannel`):
   - `initUser`
   - `encrypt`
   - `decrypt`
   - `hasSession`
   - `getFingerprint`
-- Identity change notifications from native layers to Flutter (`identity_changed` event).
-- Backend Signal bundle support for Kyber fields:
+- События смены identity (`identity_changed`) из native слоя в Flutter.
+- Поддержка Kyber полей в Signal bundle на backend:
   - `kyber_pre_key_id`
   - `kyber_pre_key`
   - `kyber_pre_key_signature`
-- Migration documentation:
-  - `apps/flutter/docs/SIGNAL_MIGRATION.md`
 
 ### Changed
-- Flutter app switched from legacy SDK to Signal native client integration:
-  - Added `SignalProtocolClient` bridge in Flutter.
-  - Auth bootstrap now initializes native Signal user and uploads bundle.
-  - Chats encrypt/decrypt paths now call native Signal channel.
-- iOS native implementation rewritten to official `LibSignalClient` protocol flow:
-  - persistent Keychain-backed stores for identity/pre-keys/sessions
-  - pre-key processing and Signal message decrypt/encrypt through native API
-- Android native implementation moved toward official `libsignal-client` session flow:
-  - Signal session bootstrap/encryption/decryption pipeline in native layer
-  - secure state persistence in `EncryptedSharedPreferences` (with `MasterKey`)
-- iOS build configuration updated for `LibSignalClient` integration and module compatibility.
-- Local plugin override added for `ffmpeg_kit_min_gpl` to fix simulator linking:
-  - use CocoaPods binary with simulator-compatible XCFramework slices
+- Flutter переведён с legacy SDK на native Signal-интеграцию.
+- iOS: переход на `LibSignalClient` flow с persistent store в Keychain.
+- Android: переход на `libsignal-client` flow с persistent store в `EncryptedSharedPreferences`.
+- Подправлена iOS-сборка (Signal/FFmpeg зависимости для simulator).
 
 ### Removed
-- Legacy SDK artifacts and bindings:
-  - old Flutter SDK wrapper (`ren_sdk.dart`)
-  - Android `libren_sdk.so` binaries
-  - iOS `RenSDK.xcframework` references and binaries
-
-### Fixed
-- iOS simulator build unblocked:
-  - resolved `SignalFfi` module dependency build blocker
-  - resolved FFmpeg device-only framework linker failure on simulator
+- Legacy SDK артефакты и старые FFI-привязки из Flutter.

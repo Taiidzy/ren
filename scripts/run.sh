@@ -11,14 +11,13 @@ Usage:
   ./scripts/run.sh <ios|macos|windows|linux> [options] [-- <extra flutter args>]
 
 Options:
-  --sdk              Build Ren-SDK before running
   --release          Run release build
   --debug            Run debug build (default)
   --device <id>      Pass -d <id> to flutter run
   -h, --help         Show this help
 
 Examples:
-  ./scripts/run.sh ios --sdk
+  ./scripts/run.sh ios
   ./scripts/run.sh macos --device macos
   ./scripts/run.sh linux -- --verbose
 EOF
@@ -31,14 +30,12 @@ if [ -z "$platform" ] || [ "$platform" = "-h" ] || [ "$platform" = "--help" ]; t
 fi
 shift || true
 
-build_sdk=0
 mode="debug"
 device_id=""
 extra_args=()
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --sdk) build_sdk=1; shift ;;
     --release) mode="release"; shift ;;
     --debug) mode="debug"; shift ;;
     --device)
@@ -66,13 +63,6 @@ done
 
 ensure_flutter_app
 flutter_pub_get_if_needed
-
-if [ "$build_sdk" -eq 1 ]; then
-  build_rensdk "$platform"
-  if [ "$platform" = "ios" ]; then
-    sync_rensdk_ios_xcframework
-  fi
-fi
 
 host="$(host_os)"
 case "$platform" in
