@@ -63,7 +63,10 @@ class AuthRepository {
 
     final registeredId = int.tryParse('${json['id'] ?? ''}') ?? 0;
     if (registeredId > 0) {
-      await signal.initUser(userId: registeredId);
+      final bundle = await signal.initUser(userId: registeredId);
+      if (bundle.isNotEmpty) {
+        await api.updateSignalBundle(bundle);
+      }
     }
 
     return RegisterUser(

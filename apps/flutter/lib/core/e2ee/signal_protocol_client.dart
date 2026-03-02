@@ -113,6 +113,13 @@ class SignalProtocolClient {
     return res;
   }
 
+  Future<void> resetSession({required int peerUserId, int deviceId = 1}) async {
+    await _channel.invokeMethod<void>('resetSession', {
+      'peerUserId': peerUserId,
+      'deviceId': deviceId,
+    });
+  }
+
   Future<String> getFingerprint({
     required int peerUserId,
     int deviceId = 1,

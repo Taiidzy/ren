@@ -80,7 +80,9 @@ private final class KeychainSignalStore: IdentityKeyStore, PreKeyStore, SignedPr
     return UInt32(str)
   }
 
-  private func idsKey(_ bucket: String) -> String { "ids_\(bucket)" }
+  private func activeScope() -> String { "\(activeUserId)_\(activeDeviceId)" }
+
+  private func idsKey(_ bucket: String) -> String { "ids_\(bucket)_\(activeScope())" }
 
   private func loadIds(_ bucket: String) -> [UInt32] {
     guard let str = loadString(idsKey(bucket)), !str.isEmpty else { return [] }
@@ -115,15 +117,15 @@ private final class KeychainSignalStore: IdentityKeyStore, PreKeyStore, SignedPr
   }
 
   private func peerIdentityKey(address: ProtocolAddress) -> String {
-    "peer_identity_\(address.name)_\(address.deviceId)"
+    "peer_identity_\(activeScope())_\(address.name)_\(address.deviceId)"
   }
 
-  private func preKeyKey(id: UInt32) -> String { "prekey_\(id)" }
-  private func signedPreKeyKey(id: UInt32) -> String { "signed_prekey_\(id)" }
-  private func kyberPreKeyKey(id: UInt32) -> String { "kyber_prekey_\(id)" }
+  private func preKeyKey(id: UInt32) -> String { "prekey_\(activeScope())_\(id)" }
+  private func signedPreKeyKey(id: UInt32) -> String { "signed_prekey_\(activeScope())_\(id)" }
+  private func kyberPreKeyKey(id: UInt32) -> String { "kyber_prekey_\(activeScope())_\(id)" }
 
   private func sessionKey(address: ProtocolAddress) -> String {
-    "session_\(address.name)_\(address.deviceId)"
+    "session_\(activeScope())_\(address.name)_\(address.deviceId)"
   }
 
   func saveLocalIdentity(_ pair: IdentityKeyPair, userId: Int, deviceId: UInt32) {
@@ -252,6 +254,10 @@ private final class KeychainSignalStore: IdentityKeyStore, PreKeyStore, SignedPr
   func storeSession(_ record: SessionRecord, for address: ProtocolAddress, context: StoreContext) throws {
     saveData(record.serialize(), key: sessionKey(address: address))
   }
+
+  func clearSession(for address: ProtocolAddress) {
+    deleteData(sessionKey(address: address))
+  }
 }
 
 private final class SignalProtocolManager {
@@ -366,6 +372,11 @@ private final class SignalProtocolManager {
     let signedPreKey = try ensureSignedPreKey(identity: identity)
     let kyberPreKey = try ensureKyberPreKey(identity: identity)
     let oneTimePreKeys = try ensureOneTimePreKeys()
+    let keyVersion: UInt32 = 1
+    var signaturePayload = Data(identity.publicKey.serialize())
+    var keyVersionLe = keyVersion.littleEndian
+    withUnsafeBytes(of: &keyVersionLe) { signaturePayload.append(contentsOf: $0) }
+    let bundleSignature = identity.privateKey.generateSignature(message: signaturePayload)
 
     let signedPreKeyPublic = try signedPreKey.publicKey().serialize().base64EncodedString()
     let kyberPreKeyPublic = try kyberPreKey.publicKey().serialize().base64EncodedString()
@@ -373,8 +384,8 @@ private final class SignalProtocolManager {
     return [
       "public_key": identity.publicKey.serialize().base64EncodedString(),
       "identity_key": identity.identityKey.serialize().base64EncodedString(),
-      "signature": "",
-      "key_version": 1,
+      "signature": bundleSignature.base64EncodedString(),
+      "key_version": Int(keyVersion),
       "signed_at": ISO8601DateFormatter().string(from: Date()),
       "registration_id": Int(registrationId),
       "signed_pre_key_id": Int(Self.signedPreKeyId),
@@ -546,6 +557,11 @@ private final class SignalProtocolManager {
       throw SignalError.invalidMessage("Decrypted payload is not valid UTF-8")
     }
     return text
+  }
+
+  func resetSession(peerUserId: Int, deviceId: Int) throws {
+    let address = try makeAddress(peerUserId: peerUserId, deviceId: deviceId)
+    store.clearSession(for: address)
   }
 
   func fingerprint(peerUserId: Int, deviceId: Int) throws -> String {
@@ -730,6 +746,21 @@ private final class SignalProtocolManager {
               deviceId: max(deviceId, 1),
               ciphertext: ciphertext
             ))
+
+          case "resetSession":
+            guard
+              let args = call.arguments as? [String: Any],
+              let peerUserId = args["peerUserId"] as? Int
+            else {
+              result(FlutterError(code: "bad_args", message: "Invalid resetSession args", details: nil))
+              return
+            }
+            let deviceId = (args["deviceId"] as? Int) ?? UserDefaults.standard.integer(forKey: "signal_current_device_id")
+            try self.signalManager.resetSession(
+              peerUserId: peerUserId,
+              deviceId: max(deviceId, 1)
+            )
+            result(nil)
 
           case "getFingerprint":
             guard let args = call.arguments as? [String: Any], let peerUserId = args["peerUserId"] as? Int else {

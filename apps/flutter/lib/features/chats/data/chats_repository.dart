@@ -48,10 +48,70 @@ class ChatsRepository {
   Future<void> _mediaPipelineTail = Future<void>.value();
 
   static const int _maxUploadRetries = 2;
+  static const String _encryptedPlaceholder = '[encrypted]';
 
   ChatsRepository(this.api, this.signal);
 
   bool _isPrivateKind(String kind) => kind.trim().toLowerCase() == 'private';
+  bool _isEncryptedPlaceholderText(String text) =>
+      text.trim() == _encryptedPlaceholder;
+  bool _isDuplicateSignalDecryptError(Object e) {
+    final s = '$e'.toLowerCase();
+    return s.contains('duplicatedmessage') || s.contains('old counter');
+  }
+
+  bool _isRecoverableSignalDecryptError(Object e) {
+    final s = '$e'.toLowerCase();
+    return s.contains('invalid prekey message');
+  }
+
+  Future<String?> _decryptSignalCiphertextWithRecovery({
+    required int peerUserId,
+    required String ciphertext,
+    required int myUserId,
+  }) async {
+    try {
+      return await signal.decrypt(
+        peerUserId: peerUserId,
+        ciphertext: ciphertext,
+      );
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint(
+          'Signal decrypt failed: sender=$peerUserId me=$myUserId err=$e',
+        );
+      }
+      if (_isDuplicateSignalDecryptError(e)) {
+        // Replay-protection path: do not reset ratchet session on duplicates.
+        return null;
+      }
+      if (peerUserId == myUserId) {
+        // Self-ciphertext can be non-replayable across history sync; avoid resetting self session.
+        return null;
+      }
+      if (!_isRecoverableSignalDecryptError(e)) {
+        return null;
+      }
+      try {
+        await signal.resetSession(peerUserId: peerUserId);
+      } catch (_) {
+        return null;
+      }
+      try {
+        return await signal.decrypt(
+          peerUserId: peerUserId,
+          ciphertext: ciphertext,
+        );
+      } catch (e2) {
+        if (kDebugMode) {
+          debugPrint(
+            'Signal decrypt retry failed after reset: sender=$peerUserId me=$myUserId err=$e2',
+          );
+        }
+        return null;
+      }
+    }
+  }
 
   Future<T> _runInMediaPipeline<T>(Future<T> Function() task) {
     final completer = Completer<T>();
@@ -418,9 +478,31 @@ class ChatsRepository {
     );
 
     final myUserId = await _getMyUserId();
+    final decryptedHistory = await _localCache.readDecryptedTextsForChat(
+      chatId,
+    );
+    final cachedById = <String, ChatMessage>{};
+    final cached = await _localCache.readMessages(chatId);
+    for (final c in cached) {
+      if (c.id.isEmpty) continue;
+      cachedById[c.id] = c;
+    }
     final out = <ChatMessage>[];
+    final orderedRaw = List<dynamic>.from(raw);
+    orderedRaw.sort((a, b) {
+      if (a is! Map || b is! Map) return 0;
+      final am = a.cast<String, dynamic>();
+      final bm = b.cast<String, dynamic>();
+      final aId = (am['id'] is int)
+          ? am['id'] as int
+          : int.tryParse('${am['id'] ?? ''}') ?? 0;
+      final bId = (bm['id'] is int)
+          ? bm['id'] as int
+          : int.tryParse('${bm['id'] ?? ''}') ?? 0;
+      return aId.compareTo(bId);
+    });
 
-    for (final it in raw) {
+    for (final it in orderedRaw) {
       final m = (it as Map).cast<String, dynamic>();
       final messageId = (m['id'] is int)
           ? m['id'] as int
@@ -460,13 +542,41 @@ class ChatsRepository {
         metadata: m['metadata'],
       );
 
+      final idStr = messageId.toString();
+      final cachedMsg = cachedById[idStr];
+      String text = decrypted.text;
+      if (_isEncryptedPlaceholderText(text)) {
+        if (cachedMsg != null && !_isEncryptedPlaceholderText(cachedMsg.text)) {
+          text = cachedMsg.text;
+        } else {
+          final fromHistory = decryptedHistory[idStr];
+          if (fromHistory != null && fromHistory.trim().isNotEmpty) {
+            text = fromHistory;
+          }
+        }
+      }
+      final resolvedAttachments =
+          (attachments.isEmpty &&
+              cachedMsg != null &&
+              cachedMsg.attachments.isNotEmpty)
+          ? cachedMsg.attachments
+          : attachments;
+
+      if (!_isEncryptedPlaceholderText(text) && messageId > 0) {
+        await _localCache.writeDecryptedText(
+          chatId: chatId,
+          messageId: messageId,
+          text: text,
+        );
+      }
+
       out.add(
         ChatMessage(
-          id: messageId.toString(),
+          id: idStr,
           chatId: chatId.toString(),
           isMe: senderId == myUserId,
-          text: decrypted.text,
-          attachments: attachments,
+          text: text,
+          attachments: resolvedAttachments,
           sentAt: createdAt,
           replyToMessageId: (replyId != null && replyId > 0)
               ? replyId.toString()
@@ -501,7 +611,24 @@ class ChatsRepository {
       byId[m.id] = m;
     }
     for (final m in remote) {
-      byId[m.id] = m;
+      final prev = byId[m.id];
+      if (prev == null) {
+        byId[m.id] = m;
+        continue;
+      }
+      final preservedText =
+          (_isEncryptedPlaceholderText(m.text) &&
+              !_isEncryptedPlaceholderText(prev.text))
+          ? prev.text
+          : m.text;
+      final preservedAttachments =
+          (m.attachments.isEmpty && prev.attachments.isNotEmpty)
+          ? prev.attachments
+          : m.attachments;
+      byId[m.id] = m.copyWith(
+        text: preservedText,
+        attachments: preservedAttachments,
+      );
     }
     final merged = byId.values.toList()
       ..sort((a, b) => a.sentAt.compareTo(b.sentAt));
@@ -589,11 +716,15 @@ class ChatsRepository {
         if (ct == null || ct.isEmpty) {
           return;
         }
+        final plainB64 = await _decryptSignalCiphertextWithRecovery(
+          peerUserId: senderId,
+          ciphertext: ct,
+          myUserId: myUserId,
+        );
+        if (plainB64 == null || plainB64.isEmpty) {
+          return;
+        }
         try {
-          final plainB64 = await signal.decrypt(
-            peerUserId: senderId,
-            ciphertext: ct,
-          );
           bytes = Uint8List.fromList(base64Decode(plainB64));
         } catch (_) {
           return;
@@ -698,29 +829,13 @@ class ChatsRepository {
     );
     final maybeCt = basic.text.trim();
     if (maybeCt.isEmpty || maybeCt == '[encrypted]') return basic;
-    try {
-      final decrypted = await signal.decrypt(
-        peerUserId: senderId,
-        ciphertext: maybeCt,
-      );
-      return (text: decrypted, key: null);
-    } catch (_) {
-      return (text: '[encrypted]', key: null);
-    }
-  }
-
-  Future<void> _ensureSignalSession(int peerUserId) async {
-    final has = await signal.hasSession(peerUserId: peerUserId);
-    if (has) return;
-    final myUserId = await _getMyUserId();
-    final bundle = (peerUserId == myUserId)
-        ? await signal.initUser(userId: myUserId)
-        : await _getPeerSignalBundle(peerUserId);
-    await signal.encrypt(
-      peerUserId: peerUserId,
-      plaintext: '',
-      preKeyBundle: bundle,
+    final decrypted = await _decryptSignalCiphertextWithRecovery(
+      peerUserId: senderId,
+      ciphertext: maybeCt,
+      myUserId: myUserId,
     );
+    if (decrypted == null) return (text: '[encrypted]', key: null);
+    return (text: decrypted, key: null);
   }
 
   Future<List<int>> _resolveRecipients({
@@ -754,6 +869,7 @@ class ChatsRepository {
     int? peerId,
     required String plaintext,
   }) async {
+    final myUserId = await _getMyUserId();
     final recipients = await _resolveRecipients(
       chatId: chatId,
       chatKind: chatKind,
@@ -762,10 +878,17 @@ class ChatsRepository {
 
     final out = <String, String>{};
     for (final uid in recipients) {
-      // We also need a local self-session because message payload stores
-      // ciphertext for every recipient including current user.
-      await _ensureSignalSession(uid);
-      final ct = await signal.encrypt(peerUserId: uid, plaintext: plaintext);
+      final has = await signal.hasSession(peerUserId: uid);
+      final bundle = has
+          ? null
+          : (uid == myUserId
+                ? await signal.initUser(userId: myUserId)
+                : await _getPeerSignalBundle(uid));
+      final ct = await signal.encrypt(
+        peerUserId: uid,
+        plaintext: plaintext,
+        preKeyBundle: bundle,
+      );
       out['$uid'] = ct;
     }
     return out;
@@ -1133,8 +1256,29 @@ class ChatsRepository {
       senderId: senderId,
       myUserId: myUserId,
     );
-
-    return decrypted.text;
+    var text = decrypted.text;
+    final chatId = (message['chat_id'] is int)
+        ? message['chat_id'] as int
+        : int.tryParse('${message['chat_id'] ?? ''}') ?? 0;
+    final messageId = (message['id'] is int)
+        ? message['id'] as int
+        : int.tryParse('${message['id'] ?? ''}') ?? 0;
+    if (_isEncryptedPlaceholderText(text) && chatId > 0 && messageId > 0) {
+      final byChat = await _localCache.readDecryptedTextsForChat(chatId);
+      final fallback = byChat['$messageId'];
+      if (fallback != null && fallback.trim().isNotEmpty) {
+        text = fallback;
+      }
+    } else if (!_isEncryptedPlaceholderText(text) &&
+        chatId > 0 &&
+        messageId > 0) {
+      await _localCache.writeDecryptedText(
+        chatId: chatId,
+        messageId: messageId,
+        text: text,
+      );
+    }
+    return text;
   }
 
   Future<({String text, List<ChatAttachment> attachments})>
@@ -1164,6 +1308,23 @@ class ChatsRepository {
         ? message['id'] as int
         : int.tryParse('${message['id'] ?? ''}') ?? 0;
 
+    var text = decrypted.text;
+    if (_isEncryptedPlaceholderText(text) && chatId > 0 && messageId > 0) {
+      final byChat = await _localCache.readDecryptedTextsForChat(chatId);
+      final fallback = byChat['$messageId'];
+      if (fallback != null && fallback.trim().isNotEmpty) {
+        text = fallback;
+      }
+    } else if (!_isEncryptedPlaceholderText(text) &&
+        chatId > 0 &&
+        messageId > 0) {
+      await _localCache.writeDecryptedText(
+        chatId: chatId,
+        messageId: messageId,
+        text: text,
+      );
+    }
+
     final attachments = await _tryDecryptAttachments(
       chatId: chatId,
       messageId: messageId,
@@ -1171,7 +1332,7 @@ class ChatsRepository {
       metadata: message['metadata'],
     );
 
-    return (text: decrypted.text, attachments: attachments);
+    return (text: text, attachments: attachments);
   }
 
   Future<int> getCacheLimitBytes() async {

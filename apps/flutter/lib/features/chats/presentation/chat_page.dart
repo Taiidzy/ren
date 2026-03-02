@@ -1327,6 +1327,7 @@ class _ChatPageState extends State<ChatPage>
 
     final myId = _myUserId ?? 0;
     final isMe = (myId > 0) ? senderId == myId : false;
+    final isEncryptedPlaceholder = decoded.text.trim() == '[encrypted]';
 
     if (kDebugMode) {
       debugPrint('WS message_new routing resolved (isMe=$isMe)');
@@ -1339,10 +1340,19 @@ class _ChatPageState extends State<ChatPage>
         return;
       }
 
+      String resolvedText = decoded.text;
+      List<ChatAttachment> resolvedAttachments = decoded.attachments;
+
       // если это echo нашего сообщения, попробуем убрать последний optimistic дубль
       if (isMe && _messages.isNotEmpty) {
         final last = _messages.last;
-        if (last.id.startsWith('local_') && last.text == decoded.text) {
+        if (last.id.startsWith('local_') && isEncryptedPlaceholder) {
+          resolvedText = last.text;
+          if (resolvedAttachments.isEmpty && last.attachments.isNotEmpty) {
+            resolvedAttachments = last.attachments;
+          }
+        }
+        if (last.id.startsWith('local_') && last.text == resolvedText) {
           final removed = _messages.removeLast();
           _messageById.remove(removed.id);
         }
@@ -1352,8 +1362,8 @@ class _ChatPageState extends State<ChatPage>
         id: '${m['id'] ?? DateTime.now().millisecondsSinceEpoch}',
         chatId: chatId.toString(),
         isMe: isMe,
-        text: decoded.text,
-        attachments: decoded.attachments,
+        text: resolvedText,
+        attachments: resolvedAttachments,
         sentAt: createdAt,
         replyToMessageId: (replyId != null && replyId > 0)
             ? replyId.toString()

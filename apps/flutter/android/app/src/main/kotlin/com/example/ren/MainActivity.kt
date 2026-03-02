@@ -11,6 +11,8 @@ import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 import org.json.JSONObject
 import java.security.SecureRandom
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.time.Instant
 
 class MainActivity : FlutterActivity() {
@@ -131,6 +133,16 @@ class MainActivity : FlutterActivity() {
                             }
                             result.success(signal.decrypt(peerUserId, deviceId, ciphertext))
                         }
+                        "resetSession" -> {
+                            val peerUserId = call.argument<Int>("peerUserId") ?: 0
+                            val deviceId = call.argument<Int>("deviceId") ?: 1
+                            if (peerUserId <= 0) {
+                                result.error("bad_args", "Invalid resetSession args", null)
+                                return@setMethodCallHandler
+                            }
+                            signal.resetSession(peerUserId, deviceId)
+                            result.success(null)
+                        }
                         "getFingerprint" -> {
                             val peerUserId = call.argument<Int>("peerUserId") ?: 0
                             val deviceId = call.argument<Int>("deviceId") ?: 1
@@ -166,6 +178,8 @@ private class SignalRuntime(
     private val storeOneTimePreKeys = "signal_one_time_pre_keys"
     private val storeSessionsPrefix = "signal_session_"
     private val storePeerIdentityPrefix = "signal_peer_identity_"
+    private val oneTimePreKeyStart = 1000
+    private val oneTimePreKeyTargetCount = 50
 
     fun attachPrefs(sharedPrefs: android.content.SharedPreferences) {
         prefs = sharedPrefs
@@ -234,6 +248,82 @@ private class SignalRuntime(
             ?: throw NoSuchMethodException("ctor ${c.name}/${args.size}")
         cons.isAccessible = true
         return cons.newInstance(*args)
+    }
+
+    private fun parseStoredPreKeys(raw: String?): LinkedHashMap<Int, String> {
+        val out = LinkedHashMap<Int, String>()
+        if (raw.isNullOrEmpty()) return out
+        val arr = try {
+            org.json.JSONArray(raw)
+        } catch (_: Exception) {
+            return out
+        }
+        for (i in 0 until arr.length()) {
+            val item = arr.optJSONObject(i) ?: continue
+            val id = item.optInt("id", 0)
+            val recordB64 = item.optString("record")
+            if (id <= 0 || recordB64.isEmpty()) continue
+            out[id] = recordB64
+        }
+        return out
+    }
+
+    private fun persistOneTimePreKeys(records: Map<Int, String>) {
+        val p = requirePrefs()
+        val arr = org.json.JSONArray()
+        for ((id, recordB64) in records.toSortedMap()) {
+            arr.put(JSONObject().put("id", id).put("record", recordB64))
+        }
+        p.edit().putString(k(storeOneTimePreKeys), arr.toString()).apply()
+    }
+
+    private fun syncAndTopUpOneTimePreKeys(store: Any) {
+        val p = requirePrefs()
+        val saved = parseStoredPreKeys(p.getString(k(storeOneTimePreKeys), null))
+        val active = LinkedHashMap<Int, String>()
+
+        for ((id, recordB64) in saved) {
+            val record = try {
+                ctor(
+                    "org.signal.libsignal.protocol.state.PreKeyRecord",
+                    b64d(recordB64),
+                )
+            } catch (_: Exception) {
+                null
+            } ?: continue
+            try {
+                invoke(store, "storePreKey", id, record)
+                val serialized = invoke(record, "serialize") as? ByteArray ?: continue
+                active[id] = b64(serialized)
+            } catch (_: Exception) {
+                // Skip malformed persisted pre-key entries.
+            }
+        }
+
+        if (active.size < oneTimePreKeyTargetCount) {
+            val need = oneTimePreKeyTargetCount - active.size
+            val nextId = maxOf(oneTimePreKeyStart, (active.keys.maxOrNull() ?: (oneTimePreKeyStart - 1)) + 1)
+            val generated = invokeStatic(
+                "org.signal.libsignal.protocol.util.KeyHelper",
+                "generatePreKeys",
+                nextId,
+                need,
+            ) as? List<*> ?: emptyList<Any>()
+
+            for (item in generated) {
+                if (item == null) continue
+                val id = (invoke(item, "getId") as? Number)?.toInt() ?: continue
+                val serialized = invoke(item, "serialize") as? ByteArray ?: continue
+                try {
+                    invoke(store, "storePreKey", id, item)
+                    active[id] = b64(serialized)
+                } catch (_: Exception) {
+                    // Skip failed generated pre-key, continue with others.
+                }
+            }
+        }
+
+        persistOneTimePreKeys(active)
     }
 
     private fun ensureLoaded(userId: Int, deviceId: Int) {
@@ -331,38 +421,8 @@ private class SignalRuntime(
         }
         invokeMaybe(store, "storeKyberPreKey", 1, kyberRecordObj)
 
-        // One-time pre-keys
-        val oneTimeRaw = p.getString(k(storeOneTimePreKeys), null)
-        if (oneTimeRaw.isNullOrEmpty()) {
-            val generated = invokeStatic(
-                "org.signal.libsignal.protocol.util.KeyHelper",
-                "generatePreKeys",
-                1000,
-                50,
-            ) as? List<*> ?: emptyList<Any>()
-            val arr = org.json.JSONArray()
-            for (item in generated) {
-                if (item == null) continue
-                val id = (invoke(item, "getId") as Number).toInt()
-                val ser = invoke(item, "serialize") as ByteArray
-                arr.put(JSONObject().put("id", id).put("record", b64(ser)))
-                invoke(store, "storePreKey", id, item)
-            }
-            p.edit().putString(k(storeOneTimePreKeys), arr.toString()).apply()
-        } else {
-            val arr = org.json.JSONArray(oneTimeRaw)
-            for (i in 0 until arr.length()) {
-                val item = arr.getJSONObject(i)
-                val id = item.optInt("id", 0)
-                val recordB64 = item.optString("record")
-                if (id <= 0 || recordB64.isEmpty()) continue
-                val record = ctor(
-                    "org.signal.libsignal.protocol.state.PreKeyRecord",
-                    b64d(recordB64),
-                )
-                invoke(store, "storePreKey", id, record)
-            }
-        }
+        // One-time pre-keys: load persisted, purge invalid/consumed, and top up pool.
+        syncAndTopUpOneTimePreKeys(store)
 
         // Sessions
         val all = p.all
@@ -576,6 +636,18 @@ private class SignalRuntime(
             ?: throw IllegalStateException("identity public key missing")
         val identityBytes = invoke(identityKey, "serialize") as? ByteArray
             ?: throw IllegalStateException("identity serialize failed")
+        val keyVersion = 1
+        val identityPrivate = invoke(identityPair, "getPrivateKey")
+            ?: throw IllegalStateException("identity private key missing")
+        val signedPayload = ByteBuffer
+            .allocate(identityBytes.size + 4)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .put(identityBytes)
+            .putInt(keyVersion)
+            .array()
+        val identitySignature = (invokeMaybe(identityPrivate, "calculateSignature", signedPayload) as? ByteArray)
+            ?: (invokeMaybe(identityPrivate, "generateSignature", signedPayload) as? ByteArray)
+            ?: throw IllegalStateException("identity signature failed")
 
         val signedRecord = invoke(store, "loadSignedPreKey", 1)
             ?: throw IllegalStateException("signed pre-key missing")
@@ -611,8 +683,8 @@ private class SignalRuntime(
         return mapOf(
             "public_key" to b64(identityBytes),
             "identity_key" to b64(identityBytes),
-            "signature" to "",
-            "key_version" to 1,
+            "signature" to b64(identitySignature),
+            "key_version" to keyVersion,
             "signed_at" to Instant.now().toString(),
             "registration_id" to registrationId,
             "signed_pre_key_id" to 1,
@@ -772,8 +844,24 @@ private class SignalRuntime(
             }
         }
 
+        if (type == "prekey") {
+            syncAndTopUpOneTimePreKeys(store)
+        }
         saveSession(peerUserId, peerDevice, address)
         return String(plainBytes, Charsets.UTF_8)
+    }
+
+    fun resetSession(peerUserId: Int, deviceId: Int) {
+        val me = currentUserId
+        if (me <= 0) throw IllegalStateException("initUser required")
+        val peerDevice = deviceId.coerceAtLeast(1)
+        ensureLoaded(me, currentDeviceId)
+
+        val p = requirePrefs()
+        p.edit().remove(sessionKey(peerUserId, peerDevice)).apply()
+
+        // Force store reload from persisted state on next operation.
+        protocolStore = null
     }
 
     fun getFingerprint(peerUserId: Int, deviceId: Int): String {

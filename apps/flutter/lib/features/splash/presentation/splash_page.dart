@@ -12,6 +12,7 @@ import 'package:ren/shared/widgets/adaptive_page_route.dart';
 
 import 'package:ren/core/secure/secure_storage.dart';
 import 'package:ren/core/constants/keys.dart';
+import 'package:ren/features/auth/data/auth_repository.dart';
 import 'package:ren/features/splash/data/spalsh_repository.dart';
 import 'package:ren/features/splash/data/spalsh_api.dart';
 import 'package:ren/core/e2ee/signal_protocol_client.dart';
@@ -108,7 +109,14 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
       final userId = fallbackUserId ?? storedUserId;
       if (userId <= 0) return;
       try {
-        await SignalProtocolClient.instance.initUser(userId: userId);
+        final bundle = await SignalProtocolClient.instance.initUser(
+          userId: userId,
+        );
+        if (bundle.isNotEmpty) {
+          await currentContext.read<AuthRepository>().api.updateSignalBundle(
+            bundle,
+          );
+        }
       } catch (_) {
         // Keep splash resilient: auth/network flow should proceed even if Signal init fails.
       }

@@ -5,8 +5,10 @@ use axum::{
     response::Response,
     routing::{get, patch},
 };
+use base64::Engine;
+use ring::signature::{ED25519, UnparsedPublicKey};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use sqlx::Row;
 
 use crate::AppState;
@@ -514,6 +516,73 @@ struct UpdateSignalBundleRequest {
     one_time_pre_keys: Option<Value>,
 }
 
+fn normalize_identity_pubkey(identity_bytes: &[u8]) -> Result<[u8; 32], (StatusCode, String)> {
+    if identity_bytes.len() == 32 {
+        let mut out = [0u8; 32];
+        out.copy_from_slice(identity_bytes);
+        return Ok(out);
+    }
+    if identity_bytes.len() == 33 && identity_bytes[0] == 0x05 {
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&identity_bytes[1..]);
+        return Ok(out);
+    }
+    Err((
+        StatusCode::BAD_REQUEST,
+        "identity_key must be Ed25519 (32 bytes or 33 bytes with 0x05 prefix)".into(),
+    ))
+}
+
+fn verify_key_signature(
+    identity_key_b64: &str,
+    public_key_b64: &str,
+    signature_b64: &str,
+    key_version: i32,
+) -> Result<(), (StatusCode, String)> {
+    if key_version <= 0 {
+        return Err((StatusCode::BAD_REQUEST, "key_version must be > 0".into()));
+    }
+
+    let identity_raw = base64::engine::general_purpose::STANDARD
+        .decode(identity_key_b64)
+        .map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                "identity_key must be valid base64".into(),
+            )
+        })?;
+    let verify_key_bytes = normalize_identity_pubkey(&identity_raw)?;
+
+    let public_key_raw = base64::engine::general_purpose::STANDARD
+        .decode(public_key_b64)
+        .map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                "public_key must be valid base64".into(),
+            )
+        })?;
+
+    let signature_raw = base64::engine::general_purpose::STANDARD
+        .decode(signature_b64)
+        .map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                "signature must be valid base64".into(),
+            )
+        })?;
+    if signature_raw.len() != 64 {
+        return Err((StatusCode::BAD_REQUEST, "signature must be 64 bytes".into()));
+    }
+
+    let mut payload = Vec::with_capacity(public_key_raw.len() + 4);
+    payload.extend_from_slice(&public_key_raw);
+    payload.extend_from_slice(&key_version.to_le_bytes());
+
+    UnparsedPublicKey::new(&ED25519, verify_key_bytes)
+        .verify(&payload, &signature_raw)
+        .map_err(|_| (StatusCode::UNAUTHORIZED, "invalid signature".into()))
+}
+
 async fn update_signal_bundle(
     State(state): State<AppState>,
     CurrentUser { id, .. }: CurrentUser,
@@ -523,6 +592,12 @@ async fn update_signal_bundle(
     if public_key.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "public_key is required".into()));
     }
+    let signature = payload
+        .signature
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .ok_or((StatusCode::BAD_REQUEST, "signature is required".into()))?;
 
     let identity_key = payload
         .identity_key
@@ -531,6 +606,7 @@ async fn update_signal_bundle(
         .filter(|v| !v.is_empty())
         .unwrap_or(public_key);
     let key_version = payload.key_version.unwrap_or(1).max(1);
+    verify_key_signature(identity_key, public_key, signature, key_version)?;
 
     let signed_at = payload
         .signed_at
@@ -547,21 +623,23 @@ async fn update_signal_bundle(
             identity_pubk = $2,
             key_version = $3,
             key_signed_at = $4,
-            signed_pre_key_id = $5,
-            signed_pre_key = $6,
-            signed_pre_key_signature = $7,
-            kyber_pre_key_id = $8,
-            kyber_pre_key = $9,
-            kyber_pre_key_signature = $10,
-            one_time_pre_keys = $11,
-            one_time_pre_keys_updated_at = CASE WHEN $11::jsonb IS NULL THEN one_time_pre_keys_updated_at ELSE now() END
-        WHERE id = $12
+            key_signature = $5,
+            signed_pre_key_id = $6,
+            signed_pre_key = $7,
+            signed_pre_key_signature = $8,
+            kyber_pre_key_id = $9,
+            kyber_pre_key = $10,
+            kyber_pre_key_signature = $11,
+            one_time_pre_keys = $12,
+            one_time_pre_keys_updated_at = CASE WHEN $12::jsonb IS NULL THEN one_time_pre_keys_updated_at ELSE now() END
+        WHERE id = $13
         "#,
     )
     .bind(public_key)
     .bind(identity_key)
     .bind(key_version)
     .bind(signed_at_dt)
+    .bind(signature)
     .bind(payload.signed_pre_key_id)
     .bind(payload.signed_pre_key)
     .bind(payload.signed_pre_key_signature)
@@ -579,7 +657,6 @@ async fn update_signal_bundle(
         )
     })?;
 
-    let _ = payload.signature;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -596,6 +673,13 @@ async fn get_public_key(
         )
     })?;
 
+    let mut tx = state.pool.begin().await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Ошибка БД: {}", e),
+        )
+    })?;
+
     let row = sqlx::query(
         r#"
         SELECT
@@ -604,6 +688,7 @@ async fn get_public_key(
             identity_pubk,
             key_version,
             key_signed_at,
+            key_signature,
             signed_pre_key_id,
             signed_pre_key,
             signed_pre_key_signature,
@@ -613,10 +698,11 @@ async fn get_public_key(
             one_time_pre_keys
         FROM users
         WHERE id = $1
+        FOR UPDATE
         "#,
     )
     .bind(user_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(|e| {
         (
@@ -639,6 +725,7 @@ async fn get_public_key(
     let key_version: i32 = row.try_get("key_version").unwrap_or(1);
     let key_signed_at: Option<chrono::DateTime<chrono::Utc>> =
         row.try_get("key_signed_at").ok().flatten();
+    let key_signature: Option<String> = row.try_get("key_signature").ok().flatten();
     let signed_pre_key_id: Option<i32> = row.try_get("signed_pre_key_id").ok().flatten();
     let signed_pre_key: Option<String> = row.try_get("signed_pre_key").ok().flatten();
     let signed_pre_key_signature: Option<String> =
@@ -647,24 +734,61 @@ async fn get_public_key(
     let kyber_pre_key: Option<String> = row.try_get("kyber_pre_key").ok().flatten();
     let kyber_pre_key_signature: Option<String> =
         row.try_get("kyber_pre_key_signature").ok().flatten();
-    let one_time_pre_keys: Option<Value> = row.try_get("one_time_pre_keys").ok().flatten();
+    let one_time_pre_keys_raw: Option<Value> = row.try_get("one_time_pre_keys").ok().flatten();
+    let mut served_one_time_pre_key: Option<Value> = None;
+    if let Some(Value::Array(items)) = one_time_pre_keys_raw.clone() {
+        let mut remaining = Vec::with_capacity(items.len().saturating_sub(1));
+        for item in items {
+            let is_valid = item
+                .get("id")
+                .and_then(|v| v.as_i64())
+                .map(|id| id > 0)
+                .unwrap_or(false)
+                && item
+                    .get("key")
+                    .and_then(|v| v.as_str())
+                    .map(|s| !s.trim().is_empty())
+                    .unwrap_or(false);
+            if served_one_time_pre_key.is_none() && is_valid {
+                served_one_time_pre_key = Some(item);
+                continue;
+            }
+            remaining.push(item);
+        }
+        if served_one_time_pre_key.is_some() {
+            let remaining_value = Value::Array(remaining);
+            sqlx::query(
+                r#"
+                UPDATE users
+                SET one_time_pre_keys = $1, one_time_pre_keys_updated_at = now()
+                WHERE id = $2
+                "#,
+            )
+            .bind(remaining_value)
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Ошибка БД: {}", e),
+                )
+            })?;
+        }
+    }
+    tx.commit().await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Ошибка БД: {}", e),
+        )
+    })?;
+    let one_time_pre_keys = served_one_time_pre_key.map(|item| json!([item]));
     let signed_at = key_signed_at
         .map(|t| t.to_rfc3339())
         .unwrap_or_else(|| "unknown".to_string());
-
-    // P0-2: Для обратной совместимости генерируем подпись на лету,
-    // если она ещё не сохранена в БД
-    // В продакшене подпись должна генерироваться при регистрации/ротации ключа
-    use base64::Engine;
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(pubk.as_bytes());
-    hasher.update(&key_version.to_le_bytes());
-    let hash = hasher.finalize();
-
-    // Для простоты используем hash как "signature" (в продакшене нужна Ed25519 подпись)
-    // Это временное решение до полной реализации подписи
-    let signature = base64::engine::general_purpose::STANDARD.encode(&hash);
+    let signature = key_signature
+        .filter(|s| !s.trim().is_empty())
+        .ok_or((StatusCode::NOT_FOUND, "Подпись ключа не найдена".into()))?;
 
     Ok(Json(PublicKeyResponse {
         user_id,

@@ -52,6 +52,11 @@ class ChatsLocalCache {
     return File('${root.path}/settings.json');
   }
 
+  Future<File> _decryptedTextsFile() async {
+    final root = await _rootDir();
+    return File('${root.path}/decrypted_texts.json');
+  }
+
   Future<Directory> _mediaDir() async {
     final root = await _rootDir();
     final d = Directory('${root.path}/media');
@@ -242,6 +247,50 @@ class ChatsLocalCache {
       'updatedAt': DateTime.now().toIso8601String(),
       'items': messages.map(_messageToJson).toList(),
     });
+  }
+
+  Future<Map<String, String>> readDecryptedTextsForChat(int chatId) async {
+    final file = await _decryptedTextsFile();
+    final decoded = await _readJsonIfExists(file);
+    final all = decoded?['items'];
+    if (all is! Map) return const {};
+    final byChat = all['$chatId'];
+    if (byChat is! Map) return const {};
+    final out = <String, String>{};
+    byChat.forEach((key, value) {
+      final k = key.toString().trim();
+      final v = value is String ? value : value?.toString() ?? '';
+      if (k.isNotEmpty && v.isNotEmpty) {
+        out[k] = v;
+      }
+    });
+    return out;
+  }
+
+  Future<void> writeDecryptedText({
+    required int chatId,
+    required int messageId,
+    required String text,
+  }) async {
+    if (chatId <= 0 || messageId <= 0) return;
+    final normalized = text.trim();
+    if (normalized.isEmpty) return;
+    final file = await _decryptedTextsFile();
+    final decoded = await _readJsonIfExists(file) ?? <String, dynamic>{};
+    final rawItems = decoded['items'];
+    final items = (rawItems is Map<String, dynamic>)
+        ? Map<String, dynamic>.from(rawItems)
+        : <String, dynamic>{};
+    final rawChat = items['$chatId'];
+    final byChat = (rawChat is Map<String, dynamic>)
+        ? Map<String, dynamic>.from(rawChat)
+        : <String, dynamic>{};
+
+    byChat['$messageId'] = normalized;
+    items['$chatId'] = byChat;
+    decoded['items'] = items;
+    decoded['updatedAt'] = DateTime.now().toIso8601String();
+    await _atomicWriteJson(file, decoded);
   }
 
   Future<int> readCacheLimitBytes() async {
