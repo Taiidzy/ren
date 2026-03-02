@@ -1505,7 +1505,6 @@ class _ChatPageState extends State<ChatPage>
       'Не удалось отправить сообщение. Черновик восстановлен.',
       kind: GlassSnackKind.error,
     );
-    print(error);
     _scheduleScrollToBottom(animated: false);
   }
 
