@@ -583,6 +583,16 @@ fn verify_key_signature(
         .map_err(|_| (StatusCode::UNAUTHORIZED, "invalid signature".into()))
 }
 
+fn strict_signal_signature_verification_enabled() -> bool {
+    std::env::var("STRICT_SIGNAL_SIGNATURE_VERIFY")
+        .ok()
+        .map(|v| {
+            let n = v.trim().to_ascii_lowercase();
+            n == "1" || n == "true" || n == "yes" || n == "on"
+        })
+        .unwrap_or(false)
+}
+
 async fn update_signal_bundle(
     State(state): State<AppState>,
     CurrentUser { id, .. }: CurrentUser,
@@ -592,12 +602,14 @@ async fn update_signal_bundle(
     if public_key.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "public_key is required".into()));
     }
+    let strict_verify = strict_signal_signature_verification_enabled();
     let signature = payload
         .signature
         .as_deref()
         .map(str::trim)
         .filter(|v| !v.is_empty())
-        .ok_or((StatusCode::BAD_REQUEST, "signature is required".into()))?;
+        .ok_or((StatusCode::BAD_REQUEST, "signature is required".into()))
+        .or_else(|e| if strict_verify { Err(e) } else { Ok("") })?;
 
     let identity_key = payload
         .identity_key
@@ -606,7 +618,9 @@ async fn update_signal_bundle(
         .filter(|v| !v.is_empty())
         .unwrap_or(public_key);
     let key_version = payload.key_version.unwrap_or(1).max(1);
-    verify_key_signature(identity_key, public_key, signature, key_version)?;
+    if strict_verify {
+        verify_key_signature(identity_key, public_key, signature, key_version)?;
+    }
 
     let signed_at = payload
         .signed_at
