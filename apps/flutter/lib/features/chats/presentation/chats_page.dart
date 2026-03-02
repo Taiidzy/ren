@@ -134,6 +134,7 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
 
   bool _isForeground = true;
   int? _currentOpenChatId;
+  Timer? _realtimeSyncDebounce;
 
   Future<void> _reloadChats() async {
     await _syncChats();
@@ -337,6 +338,7 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _realtimeSyncDebounce?.cancel();
     _topBannerController.dispose();
     _searchCtrl.removeListener(_onSearchTextChanged);
     _userSearchController.dispose();
@@ -358,6 +360,7 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
     required VoidCallback onTap,
     Duration duration = const Duration(seconds: 3),
   }) {
+    unawaited(HapticFeedback.mediumImpact());
     _topBannerController.show(
       context: context,
       title: title,
@@ -540,7 +543,7 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
 
   Future<void> _handleRealtimeEvent(RealtimeEvent evt) async {
     if (!_mounted) return;
-    _handleMessageSyncEvents(evt.type);
+    _handleMessageSyncEvents(evt);
     switch (evt.type) {
       case 'connection':
         _handleConnectionEvent(evt);
@@ -572,13 +575,36 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
 
   bool get _mounted => mounted;
 
-  void _handleMessageSyncEvents(String eventType) {
+  void _scheduleRealtimeChatsSync() {
+    _realtimeSyncDebounce?.cancel();
+    _realtimeSyncDebounce = Timer(const Duration(milliseconds: 450), () {
+      if (!mounted) return;
+      unawaited(_syncChats());
+    });
+  }
+
+  void _handleMessageSyncEvents(RealtimeEvent evt) {
+    final eventType = evt.type;
     if (eventType == 'message_new' ||
         eventType == 'message_updated' ||
         eventType == 'message_deleted' ||
         eventType == 'message_delivered' ||
         eventType == 'message_read') {
-      unawaited(_syncChats());
+      // While a chat is open, ChatPage keeps state fresh via WS and local cache.
+      // Avoid extra chat-list GET requests on every message event.
+      if (_currentOpenChatId != null) return;
+
+      // Ignore self-echo message_new: local preview already updates on send/open chat.
+      if (eventType == 'message_new') {
+        final msg = evt.data['message'];
+        if (msg is Map) {
+          final sender = (msg['sender_id'] is int)
+              ? msg['sender_id'] as int
+              : int.tryParse('${msg['sender_id'] ?? ''}') ?? 0;
+          if (_myUserId > 0 && sender == _myUserId) return;
+        }
+      }
+      _scheduleRealtimeChatsSync();
     }
   }
 
