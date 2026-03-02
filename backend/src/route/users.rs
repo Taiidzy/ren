@@ -786,9 +786,10 @@ async fn get_public_key(
     let signed_at = key_signed_at
         .map(|t| t.to_rfc3339())
         .unwrap_or_else(|| "unknown".to_string());
-    let signature = key_signature
-        .filter(|s| !s.trim().is_empty())
-        .ok_or((StatusCode::NOT_FOUND, "Подпись ключа не найдена".into()))?;
+    // Transitional compatibility: old users may not have key_signature yet.
+    // We still return bundle so clients can bootstrap sessions; signature
+    // verification is enforced on subsequent bundle updates.
+    let signature = key_signature.unwrap_or_default();
 
     Ok(Json(PublicKeyResponse {
         user_id,
