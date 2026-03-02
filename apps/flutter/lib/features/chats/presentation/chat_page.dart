@@ -1001,6 +1001,9 @@ class _ChatPageState extends State<ChatPage>
     required ChatsRepository repo,
   }) async {
     switch (evt.type) {
+      case 'error':
+        _handleRealtimeErrorEvent(evt, chatId: chatId);
+        return;
       case 'presence':
         _handlePresenceEvent(evt);
         return;
@@ -1036,6 +1039,21 @@ class _ChatPageState extends State<ChatPage>
       default:
         return;
     }
+  }
+
+  void _handleRealtimeErrorEvent(RealtimeEvent evt, {required int chatId}) {
+    final evtChatId = _asInt(evt.data['chat_id'] ?? evt.data['chatId']);
+    if (evtChatId > 0 && evtChatId != chatId) return;
+
+    final raw = (evt.data['error'] ?? evt.data['message'] ?? '')
+        .toString()
+        .trim();
+    final message = raw.isNotEmpty ? raw : 'Не удалось отправить сообщение';
+    if (kDebugMode) {
+      debugPrint('WS error event: $message');
+    }
+    if (!mounted) return;
+    showGlassSnack(context, message, kind: GlassSnackKind.error);
   }
 
   void _handlePresenceEvent(RealtimeEvent evt) {
@@ -1477,6 +1495,7 @@ class _ChatPageState extends State<ChatPage>
       'Не удалось отправить сообщение. Черновик восстановлен.',
       kind: GlassSnackKind.error,
     );
+    print(error);
     _scheduleScrollToBottom(animated: false);
   }
 
@@ -1492,12 +1511,27 @@ class _ChatPageState extends State<ChatPage>
     if (_isSendingMessage) return;
     final chatId = int.tryParse(widget.chat.id) ?? 0;
     final peerId = widget.chat.peerId ?? 0;
+    if (chatId <= 0) {
+      showGlassSnack(
+        context,
+        'Некорректный идентификатор чата. Перезайдите в чат.',
+        kind: GlassSnackKind.error,
+      );
+      return;
+    }
     final text = _controller.text.trim();
     final pendingToSend = _pendingController.queuedPendingAttachments();
     final pendingIds = pendingToSend.map((p) => p.clientId).toSet();
     final hasAttachments = pendingToSend.isNotEmpty;
     if (text.isEmpty && !hasAttachments) return;
-    if (_isPrivateChat && peerId <= 0) return;
+    if (_isPrivateChat && peerId <= 0) {
+      showGlassSnack(
+        context,
+        'Не удалось определить собеседника в этом чате.',
+        kind: GlassSnackKind.error,
+      );
+      return;
+    }
 
     final repo = context.read<ChatsRepository>();
     _rt ??= context.read<RealtimeClient>();
@@ -1656,8 +1690,22 @@ class _ChatPageState extends State<ChatPage>
     }
     final chatId = int.tryParse(widget.chat.id) ?? 0;
     final peerId = widget.chat.peerId ?? 0;
-    if (chatId <= 0) return;
-    if (_isPrivateChat && peerId <= 0) return;
+    if (chatId <= 0) {
+      showGlassSnack(
+        context,
+        'Некорректный идентификатор чата. Перезайдите в чат.',
+        kind: GlassSnackKind.error,
+      );
+      return;
+    }
+    if (_isPrivateChat && peerId <= 0) {
+      showGlassSnack(
+        context,
+        'Не удалось определить собеседника в этом чате.',
+        kind: GlassSnackKind.error,
+      );
+      return;
+    }
     if (!_canAttachFileSize(attachment.sizeBytes)) return;
 
     final repo = context.read<ChatsRepository>();

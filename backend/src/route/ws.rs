@@ -15,6 +15,7 @@ use tokio::{
     sync::{broadcast, mpsc},
     task::JoinHandle,
 };
+use uuid::Uuid;
 
 use crate::AppState;
 use crate::middleware::{CurrentUser, ensure_can_send_message, ensure_member};
@@ -669,6 +670,27 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
 
                         let msg_type = message_type.unwrap_or_else(|| "text".to_string());
                         let has_files = metadata.as_ref().map(|m| !m.is_empty());
+                        let client_message_uuid = match client_message_id
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|v| !v.is_empty())
+                        {
+                            Some(v) => match Uuid::parse_str(v) {
+                                Ok(uuid) => Some(uuid),
+                                Err(_) => {
+                                    let err_msg = serde_json::to_string(&ServerEvent::Error {
+                                        error:
+                                            "Некорректный client_message_id: ожидается UUID",
+                                    })
+                                    .unwrap_or_else(|_| {
+                                        "{\"type\":\"error\",\"error\":\"Некорректный client_message_id: ожидается UUID\"}".to_string()
+                                    });
+                                    let _ = out_tx.send(WsMessage::Text(err_msg));
+                                    continue;
+                                }
+                            },
+                            None => None,
+                        };
 
                         // Сериализуем envelopes и metadata в JSON
                         let envelopes_json =
@@ -680,7 +702,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
 
                         // P1-6: Check for idempotency - if client_message_id is provided,
                         // check if we already have this message and return it instead of creating duplicate
-                        if let Some(client_msg_id) = &client_message_id {
+                        if let Some(client_msg_id) = client_message_uuid {
                             let existing = sqlx::query(
                                 r#"
                                 SELECT
@@ -831,7 +853,7 @@ async fn handle_socket(socket: WebSocket, state: AppState, user_id: i32) {
                         .bind(&envelopes_json)
                         .bind(&metadata_json)
                         .bind(reply_to_message_id.map(|v| v as i32))
-                        .bind(client_message_id.as_ref().map(|s| s.as_str()))
+                        .bind(client_message_uuid)
                         .fetch_one(&state.pool)
                         .await {
                             Ok(r) => r,

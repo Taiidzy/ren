@@ -712,7 +712,10 @@ class ChatsRepository {
   Future<void> _ensureSignalSession(int peerUserId) async {
     final has = await signal.hasSession(peerUserId: peerUserId);
     if (has) return;
-    final bundle = await _getPeerSignalBundle(peerUserId);
+    final myUserId = await _getMyUserId();
+    final bundle = (peerUserId == myUserId)
+        ? await signal.initUser(userId: myUserId)
+        : await _getPeerSignalBundle(peerUserId);
     await signal.encrypt(
       peerUserId: peerUserId,
       plaintext: '',
@@ -751,7 +754,6 @@ class ChatsRepository {
     int? peerId,
     required String plaintext,
   }) async {
-    final me = await _getMyUserId();
     final recipients = await _resolveRecipients(
       chatId: chatId,
       chatKind: chatKind,
@@ -760,9 +762,9 @@ class ChatsRepository {
 
     final out = <String, String>{};
     for (final uid in recipients) {
-      if (uid != me) {
-        await _ensureSignalSession(uid);
-      }
+      // We also need a local self-session because message payload stores
+      // ciphertext for every recipient including current user.
+      await _ensureSignalSession(uid);
       final ct = await signal.encrypt(peerUserId: uid, plaintext: plaintext);
       out['$uid'] = ct;
     }

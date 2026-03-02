@@ -392,13 +392,30 @@ private final class SignalProtocolManager {
     return try store.loadSession(for: address, context: context) != nil
   }
 
-  private func preKeyBundleFromMap(_ map: [String: Any]) throws -> PreKeyBundle {
+  private func preKeyBundleFromMap(_ map: [String: Any], fallbackDeviceId: Int) throws -> PreKeyBundle {
+    func readInt(_ key: String) -> Int? {
+      if let v = map[key] as? Int { return v }
+      if let v = map[key] as? NSNumber { return v.intValue }
+      if let v = map[key] as? String { return Int(v.trimmingCharacters(in: .whitespacesAndNewlines)) }
+      return nil
+    }
+    func readInt(from any: Any?) -> Int? {
+      if let v = any as? Int { return v }
+      if let v = any as? NSNumber { return v.intValue }
+      if let v = any as? String { return Int(v.trimmingCharacters(in: .whitespacesAndNewlines)) }
+      return nil
+    }
+
+    let reg = readInt("registration_id") ?? 1
+    let signedPreKeyId = readInt("signed_pre_key_id") ?? 1
+    let signedPreKeyB64 = ((map["signed_pre_key"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    let signedPreKeySigB64 = ((map["signed_pre_key_signature"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    let identityB64 = (((map["identity_key"] as? String) ?? (map["public_key"] as? String) ?? "")).trimmingCharacters(in: .whitespacesAndNewlines)
+
     guard
-      let reg = map["registration_id"] as? Int,
-      let signedPreKeyId = map["signed_pre_key_id"] as? Int,
-      let signedPreKeyB64 = map["signed_pre_key"] as? String,
-      let signedPreKeySigB64 = map["signed_pre_key_signature"] as? String,
-      let identityB64 = map["identity_key"] as? String,
+      !signedPreKeyB64.isEmpty,
+      !signedPreKeySigB64.isEmpty,
+      !identityB64.isEmpty,
       let signedPreKeyBytes = Data(base64Encoded: signedPreKeyB64),
       let signedPreKeySig = Data(base64Encoded: signedPreKeySigB64),
       let identityBytes = Data(base64Encoded: identityB64)
@@ -408,49 +425,49 @@ private final class SignalProtocolManager {
 
     let signedPreKey = try PublicKey(signedPreKeyBytes)
     let identity = try IdentityKey(bytes: identityBytes)
-    guard
-      let kyberId = map["kyber_pre_key_id"] as? Int,
-      let kyberB64 = map["kyber_pre_key"] as? String,
-      let kyberSigB64 = map["kyber_pre_key_signature"] as? String,
-      let kyberBytes = Data(base64Encoded: kyberB64),
-      let kyberSig = Data(base64Encoded: kyberSigB64)
-    else {
+    let remoteDeviceId = UInt32(max(1, readInt("device_id") ?? fallbackDeviceId))
+    let kyberId = readInt("kyber_pre_key_id")
+    let kyberB64 = ((map["kyber_pre_key"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    let kyberSigB64 = ((map["kyber_pre_key_signature"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    let kyberBytes = Data(base64Encoded: kyberB64)
+    let kyberSig = Data(base64Encoded: kyberSigB64)
+    let kyberKey = try kyberBytes.map { try KEMPublicKey($0) }
+    guard let finalKyberId = kyberId, let finalKyberKey = kyberKey, let finalKyberSig = kyberSig else {
       throw SignalError.invalidArgument("Malformed preKeyBundle: missing Kyber fields")
     }
-    let kyberKey = try KEMPublicKey(kyberBytes)
 
-    let preKeys = map["one_time_pre_keys"] as? [[String: Any]] ?? []
-    if let first = preKeys.first,
-      let preId = first["id"] as? Int,
+    let preKeys = (map["one_time_pre_keys"] as? [Any]) ?? []
+    if let first = preKeys.first as? [String: Any],
+      let preId = readInt(from: first["id"]),
       let preB64 = first["key"] as? String,
       let preBytes = Data(base64Encoded: preB64)
     {
       let preKey = try PublicKey(preBytes)
       return try PreKeyBundle(
         registrationId: UInt32(reg),
-        deviceId: currentDeviceId,
+        deviceId: remoteDeviceId,
         prekeyId: UInt32(preId),
         prekey: preKey,
         signedPrekeyId: UInt32(signedPreKeyId),
         signedPrekey: signedPreKey,
         signedPrekeySignature: signedPreKeySig,
         identity: identity,
-        kyberPrekeyId: UInt32(kyberId),
-        kyberPrekey: kyberKey,
-        kyberPrekeySignature: kyberSig
+        kyberPrekeyId: UInt32(finalKyberId),
+        kyberPrekey: finalKyberKey,
+        kyberPrekeySignature: finalKyberSig
       )
     }
 
     return try PreKeyBundle(
       registrationId: UInt32(reg),
-      deviceId: currentDeviceId,
+      deviceId: remoteDeviceId,
       signedPrekeyId: UInt32(signedPreKeyId),
       signedPrekey: signedPreKey,
       signedPrekeySignature: signedPreKeySig,
       identity: identity,
-      kyberPrekeyId: UInt32(kyberId),
-      kyberPrekey: kyberKey,
-      kyberPrekeySignature: kyberSig
+      kyberPrekeyId: UInt32(finalKyberId),
+      kyberPrekey: finalKyberKey,
+      kyberPrekeySignature: finalKyberSig
     )
   }
 
@@ -461,7 +478,7 @@ private final class SignalProtocolManager {
       guard let bundle = preKeyBundle else {
         throw SignalError.invalidState("missing preKeyBundle for new session")
       }
-      let parsedBundle = try preKeyBundleFromMap(bundle)
+      let parsedBundle = try preKeyBundleFromMap(bundle, fallbackDeviceId: deviceId)
       try processPreKeyBundle(
         parsedBundle,
         for: address,
@@ -726,7 +743,9 @@ private final class SignalProtocolManager {
             result(FlutterMethodNotImplemented)
           }
         } catch {
-          result(FlutterError(code: "signal_error", message: error.localizedDescription, details: nil))
+          let details = String(describing: error)
+          let message = details.isEmpty ? error.localizedDescription : details
+          result(FlutterError(code: "signal_error", message: message, details: nil))
         }
       }
     }
