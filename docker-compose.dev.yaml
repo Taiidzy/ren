@@ -1,0 +1,38 @@
+version: "3.9"
+
+services:
+  backend:
+    image: rust:latest
+    container_name: backend-dev
+    working_dir: /app
+    volumes:
+      - ./backend:/app
+    command: cargo run
+    depends_on:
+      - db
+    environment:
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: dev_user
+      POSTGRES_PASSWORD: dev_password
+      POSTGRES_DB: dev_db
+      POSTGRES_HOST: db
+      JWT_SECRET: dev_jwt_secret_change_in_production
+    ports:
+      - "8081:8081"
+    restart: unless-stopped
+
+  db:
+    image: postgres:16
+    container_name: db-dev
+    environment:
+      POSTGRES_USER: dev_user
+      POSTGRES_PASSWORD: dev_password
+      POSTGRES_DB: dev_db
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    restart: unless-stopped
+
+volumes:
+  postgres_dev_data:

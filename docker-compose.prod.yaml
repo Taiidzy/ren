@@ -1,0 +1,47 @@
+version: "3.9"
+
+services:
+  backend:
+    image: rust:latest
+    container_name: backend-prod
+    working_dir: /app
+    volumes:
+      - ./backend:/app
+      - cargo_cache:/usr/local/cargo/registry
+      - target_cache:/app/target
+    depends_on:
+      - db
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_PORT: ${POSTGRES_PORT}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      JWT_SECRET: ${JWT_SECRET}
+    ports:
+      - "${PORT:-8081}:${PORT:-8081}"
+    command: >
+      sh -c "
+        cargo build --release &&
+        cp target/release/backend /app/backend-bin &&
+        /app/backend-bin
+      "
+    restart: unless-stopped
+
+  db:
+    image: postgres:16
+    container_name: db-prod
+    env_file:
+      - .env
+    volumes:
+      - postgres_prod_data:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5432}:${POSTGRES_PORT:-5432}"
+    restart: unless-stopped
+
+volumes:
+  postgres_prod_data:
+  cargo_cache:
+  target_cache:

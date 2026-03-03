@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-03-03
+
+### Added
+- Docker Compose конфигурация для dev и prod окружений:
+  - `docker-compose.dev.yaml` — запуск через `cargo run`, отдельная dev БД;
+  - `docker-compose.prod.yaml` — сборка в release режиме и запуск бинарника, отдельная prod БД;
+  - использование `.env` для управления переменными окружения.
+
 ## 2026-03-02
 
 ### Fixed
