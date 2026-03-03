@@ -60,6 +60,16 @@ class ChatsRepository {
   ChatsRepository(this.api, this.signal);
 
   bool _isPrivateKind(String kind) => kind.trim().toLowerCase() == 'private';
+  bool _isMediaMessageType(String messageType) {
+    final t = messageType.trim().toLowerCase();
+    return t == 'media' ||
+        t == 'voice_message' ||
+        t == 'video_message' ||
+        t == 'image' ||
+        t == 'photo' ||
+        t == 'file';
+  }
+
   bool _isEncryptedPlaceholderText(String text) =>
       text.trim() == _encryptedPlaceholder;
   bool _isDuplicateSignalDecryptError(Object e) {
@@ -756,6 +766,11 @@ class ChatsRepository {
               cachedMsg.attachments.isNotEmpty)
           ? cachedMsg.attachments
           : attachments;
+      if (_isMediaMessageType(messageType) &&
+          _isEncryptedPlaceholderText(text) &&
+          resolvedAttachments.isNotEmpty) {
+        text = '';
+      }
 
       if (!_isEncryptedPlaceholderText(text) && messageId > 0) {
         await _localCache.writeDecryptedText(
@@ -1774,6 +1789,13 @@ class ChatsRepository {
         ciphertextHash: _ciphertextFingerprint(encrypted),
       );
     }
+    final metadata = message['metadata'];
+    final hasMetadata = metadata is List && metadata.isNotEmpty;
+    if (_isMediaMessageType(messageType) &&
+        _isEncryptedPlaceholderText(text) &&
+        hasMetadata) {
+      return '';
+    }
     return text;
   }
 
@@ -1824,6 +1846,13 @@ class ChatsRepository {
         text: text,
         ciphertextHash: _ciphertextFingerprint(encrypted),
       );
+    }
+    final metadata = message['metadata'];
+    final hasMetadata = metadata is List && metadata.isNotEmpty;
+    if (_isMediaMessageType(messageType) &&
+        _isEncryptedPlaceholderText(text) &&
+        hasMetadata) {
+      text = '';
     }
 
     final attachments = await _tryDecryptAttachments(
@@ -1891,11 +1920,13 @@ class ChatsRepository {
     bool includeMedia = true,
     bool includeChats = true,
     bool includeMessages = true,
+    bool includeDecryptedHistory = false,
   }) async {
     await _localCache.clearCache(
       includeMedia: includeMedia,
       includeChats: includeChats,
       includeMessages: includeMessages,
+      includeDecryptedHistory: includeDecryptedHistory,
     );
     if (includeChats) {
       chatsSyncing.value = false;

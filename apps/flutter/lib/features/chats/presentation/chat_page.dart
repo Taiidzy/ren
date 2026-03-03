@@ -324,6 +324,16 @@ class _ChatPageState extends State<ChatPage>
     return filename.startsWith('video_') || filename.startsWith('square_');
   }
 
+  bool _isMediaMessageType(String messageType) {
+    final t = messageType.trim().toLowerCase();
+    return t == 'media' ||
+        t == 'voice_message' ||
+        t == 'video_message' ||
+        t == 'image' ||
+        t == 'photo' ||
+        t == 'file';
+  }
+
   Future<void> _ensureWsReady(int chatId) async {
     _rt ??= context.read<RealtimeClient>();
     final rt = _rt!;
@@ -1626,33 +1636,59 @@ class _ChatPageState extends State<ChatPage>
           incomingMessageType == 'photo' ||
           incomingMessageType == 'file';
 
-      // если это echo нашего сообщения, попробуем убрать последний optimistic дубль
+      // Self-echo reconciliation: replace matching local optimistic message.
       if (isMe && _messages.isNotEmpty) {
-        final last = _messages.last;
-        final isLocalEcho = last.id.startsWith('local_');
-        if (isLocalEcho && isEncryptedPlaceholder) {
-          resolvedText = last.text;
+        final metadata = m['metadata'];
+        final metadataList = metadata is List ? metadata : const <dynamic>[];
+        ChatMessage? localEcho;
+        var localEchoIndex = -1;
+        for (var i = _messages.length - 1; i >= 0; i--) {
+          final candidate = _messages[i];
+          if (!candidate.isMe || !candidate.id.startsWith('local_')) continue;
+          final dtMs = candidate.sentAt
+              .difference(createdAt)
+              .inMilliseconds
+              .abs();
+          if (dtMs > 10 * 60 * 1000) continue;
+          if (_isMediaMessageType(incomingMessageType)) {
+            if (candidate.attachments.isEmpty) continue;
+            if (metadataList.isNotEmpty &&
+                candidate.attachments.length != metadataList.length) {
+              continue;
+            }
+          } else {
+            if (candidate.attachments.isNotEmpty) continue;
+            if (!isEncryptedPlaceholder &&
+                candidate.text.trim() != resolvedText.trim()) {
+              continue;
+            }
+          }
+          localEcho = candidate;
+          localEchoIndex = i;
+          break;
         }
-        if (isLocalEcho &&
-            resolvedAttachments.isNotEmpty &&
-            last.attachments.isNotEmpty) {
-          // Keep local sender preview instead of re-downloading own media echo.
-          resolvedAttachments = last.attachments;
-        }
-        if (isLocalEcho &&
-            resolvedAttachments.isEmpty &&
-            last.attachments.isNotEmpty &&
-            (incomingHasMediaType || last.text.trim() == resolvedText.trim())) {
-          // For self-echo media, keep local decrypted attachment preview when
-          // WS payload attachment decrypt is temporarily unavailable.
-          resolvedAttachments = last.attachments;
-        }
-        if (isLocalEcho &&
-            last.text.trim() == resolvedText.trim() &&
-            (resolvedAttachments.isNotEmpty || last.attachments.isEmpty)) {
-          final removed = _messages.removeLast();
-          _messageById.remove(removed.id);
-          removedLocalMessageId = removed.id;
+
+        if (localEcho != null) {
+          if (isEncryptedPlaceholder) {
+            resolvedText = localEcho.text;
+          }
+          if (localEcho.attachments.isNotEmpty &&
+              (resolvedAttachments.isEmpty || incomingHasMediaType)) {
+            resolvedAttachments = localEcho.attachments;
+          }
+          if (_isMediaMessageType(incomingMessageType) &&
+              resolvedText.trim() == '[encrypted]') {
+            resolvedText = '';
+          }
+
+          final shouldReplace =
+              incomingHasMediaType ||
+              localEcho.text.trim() == resolvedText.trim();
+          if (shouldReplace && localEchoIndex >= 0) {
+            final removed = _messages.removeAt(localEchoIndex);
+            _messageById.remove(removed.id);
+            removedLocalMessageId = removed.id;
+          }
         }
       }
 

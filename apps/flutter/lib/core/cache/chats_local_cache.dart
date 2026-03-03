@@ -514,6 +514,7 @@ class ChatsLocalCache {
     bool includeMedia = true,
     bool includeChats = true,
     bool includeMessages = true,
+    bool includeDecryptedHistory = false,
   }) async {
     final root = await _rootDir();
     if (!await root.exists()) return;
@@ -537,11 +538,13 @@ class ChatsLocalCache {
           } catch (_) {}
         }
       }
-      final decrypted = await _decryptedTextsFile();
-      if (await decrypted.exists()) {
-        try {
-          await decrypted.delete();
-        } catch (_) {}
+      if (includeDecryptedHistory) {
+        final decrypted = await _decryptedTextsFile();
+        if (await decrypted.exists()) {
+          try {
+            await decrypted.delete();
+          } catch (_) {}
+        }
       }
       final pending = await _pendingMediaUploadsFile();
       if (await pending.exists()) {

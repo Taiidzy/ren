@@ -343,7 +343,63 @@ void main() {
     },
   );
 
-  test('clearCache(includeMessages) removes decrypted text entries', () async {
+  test(
+    'media message without caption does not render [encrypted] text',
+    () async {
+      final repo = ChatsRepository(
+        _FakeChatsApi(),
+        _FakeSignalProtocolClient(),
+      );
+      final text = await repo.decryptIncomingWsMessage(
+        message: <String, dynamic>{
+          'id': 101,
+          'chat_id': 42,
+          'sender_id': 9,
+          'message_type': 'media',
+          'message': jsonEncode(<String, dynamic>{
+            'ciphertext_by_user': <String, dynamic>{
+              '7': base64Encode(utf8.encode('broken_payload')),
+            },
+          }),
+          'metadata': <dynamic>[
+            <String, dynamic>{
+              'file_id': 1,
+              'filename': 'photo.jpg',
+              'mimetype': 'image/jpeg',
+              'size': 123,
+            },
+          ],
+        },
+      );
+
+      expect(text, '');
+    },
+  );
+
+  test(
+    'clearCache(includeMessages) keeps decrypted text entries by default',
+    () async {
+      final cache = ChatsLocalCache();
+      await cache.writeDecryptedText(
+        chatId: 42,
+        messageId: 11,
+        text: 'hello',
+        ciphertextHash: base64Encode(utf8.encode('hash1')),
+      );
+      final before = await cache.readDecryptedTextEntriesForChat(42);
+      expect(before['11']?.text, 'hello');
+
+      await cache.clearCache(
+        includeChats: false,
+        includeMedia: false,
+        includeMessages: true,
+      );
+      final after = await cache.readDecryptedTextEntriesForChat(42);
+      expect(after['11']?.text, 'hello');
+    },
+  );
+
+  test('clearCache can remove decrypted text entries explicitly', () async {
     final cache = ChatsLocalCache();
     await cache.writeDecryptedText(
       chatId: 42,
@@ -351,13 +407,12 @@ void main() {
       text: 'hello',
       ciphertextHash: base64Encode(utf8.encode('hash1')),
     );
-    final before = await cache.readDecryptedTextEntriesForChat(42);
-    expect(before['11']?.text, 'hello');
 
     await cache.clearCache(
       includeChats: false,
       includeMedia: false,
       includeMessages: true,
+      includeDecryptedHistory: true,
     );
     final after = await cache.readDecryptedTextEntriesForChat(42);
     expect(after, isEmpty);
