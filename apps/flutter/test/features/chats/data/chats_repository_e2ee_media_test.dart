@@ -199,10 +199,7 @@ void main() {
   test(
     'decryptIncomingWsMessage supports signal_ciphertext_by_user alias',
     () async {
-      final repo = ChatsRepository(
-        _FakeChatsApi(),
-        _FakeSignalProtocolClient(),
-      );
+      final repo = ChatsRepository(_FakeChatsApi());
       final decrypted = await repo.decryptIncomingWsMessage(
         message: <String, dynamic>{
           'sender_id': 9,
@@ -224,7 +221,7 @@ void main() {
     () async {
       final api = _FakeChatsApi();
       final signal = _FakeSignalProtocolClient();
-      final repo = ChatsRepository(api, signal);
+      final repo = ChatsRepository(api);
       final raw = Uint8List.fromList(<int>[1, 2, 3, 4, 5, 6, 7, 8, 9]);
 
       final payload = await repo.buildOutgoingWsMediaMessage(
@@ -270,7 +267,7 @@ void main() {
     () async {
       final api = _FakeChatsApi();
       final signal = _FakeSignalProtocolClient();
-      final repo = ChatsRepository(api, signal);
+      final repo = ChatsRepository(api);
       final raw = Uint8List.fromList(<int>[11, 22, 33, 44, 55]);
       final legacyCiphertext = await signal.encrypt(
         peerUserId: 7,
@@ -321,10 +318,7 @@ void main() {
         ciphertextHash: base64Encode(utf8.encode('old_hash')),
       );
 
-      final repo = ChatsRepository(
-        _FakeChatsApi(),
-        _FakeSignalProtocolClient(),
-      );
+      final repo = ChatsRepository(_FakeChatsApi());
       final text = await repo.decryptIncomingWsMessage(
         message: <String, dynamic>{
           'id': 2,
@@ -346,10 +340,7 @@ void main() {
   test(
     'media message without caption does not render [encrypted] text',
     () async {
-      final repo = ChatsRepository(
-        _FakeChatsApi(),
-        _FakeSignalProtocolClient(),
-      );
+      final repo = ChatsRepository(_FakeChatsApi());
       final text = await repo.decryptIncomingWsMessage(
         message: <String, dynamic>{
           'id': 101,

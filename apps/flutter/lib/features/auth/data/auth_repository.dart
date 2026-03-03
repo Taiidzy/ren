@@ -4,15 +4,11 @@ import 'package:ren/features/auth/domain/auth_models.dart';
 
 import 'package:ren/core/secure/secure_storage.dart';
 import 'package:ren/core/constants/keys.dart';
-import 'package:ren/core/cryptography/backup_secret.dart';
-
-import 'package:ren/core/e2ee/signal_protocol_client.dart';
 
 class AuthRepository {
   final AuthApi api;
-  final SignalProtocolClient signal;
 
-  AuthRepository(this.api, this.signal);
+  AuthRepository(this.api);
 
   Future<AuthUser> login(String login, String password, bool rememberMe) async {
     final json = await api.login(login, password, rememberMe);
@@ -23,42 +19,6 @@ class AuthRepository {
     await SecureStorage.writeKey(Keys.refreshToken, resp.refreshToken);
     await SecureStorage.writeKey(Keys.sessionId, resp.sessionId);
     await SecureStorage.writeKey(Keys.userId, resp.user.id.toString());
-    final salt = (resp.user.salt ?? '').trim();
-    if (salt.isNotEmpty && password.trim().isNotEmpty) {
-      final backupSecret = await deriveSignalBackupSecretBase64(
-        password: password,
-        salt: salt,
-      );
-      await SecureStorage.writeKey(Keys.signalBackupSecret, backupSecret);
-      try {
-        final backupPayload = await api.getSignalBackup();
-        if (backupPayload != null && backupPayload.isNotEmpty) {
-          await signal.importBackup(
-            userId: resp.user.id,
-            backupSecretBase64: backupSecret,
-            encryptedPayload: backupPayload,
-          );
-        }
-      } catch (_) {
-        // Backup restore is best effort and must not break login.
-      }
-    }
-    final bundle = await signal.initUser(userId: resp.user.id);
-    if (bundle.isNotEmpty) {
-      await api.updateSignalBundle(bundle);
-    }
-    final backupSecret = await SecureStorage.readKey(Keys.signalBackupSecret);
-    if (backupSecret != null && backupSecret.isNotEmpty) {
-      try {
-        final encryptedBackup = await signal.exportBackup(
-          userId: resp.user.id,
-          backupSecretBase64: backupSecret,
-        );
-        await api.updateSignalBackup(encryptedBackup);
-      } catch (_) {
-        // Backup upload is best effort and must not block auth.
-      }
-    }
 
     return AuthUser(
       id: resp.user.id,
@@ -93,14 +53,6 @@ class AuthRepository {
       '',
       nickname,
     );
-
-    final registeredId = int.tryParse('${json['id'] ?? ''}') ?? 0;
-    if (registeredId > 0) {
-      final bundle = await signal.initUser(userId: registeredId);
-      if (bundle.isNotEmpty) {
-        await api.updateSignalBundle(bundle);
-      }
-    }
 
     return RegisterUser(
       id: (json['id'] ?? '').toString(),

@@ -1,8 +1,5 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
-
 class IdentityChangeEvent {
   final int peerUserId;
   final String? previousFingerprint;
@@ -20,63 +17,23 @@ class SignalProtocolClient {
 
   static final SignalProtocolClient instance = SignalProtocolClient._();
 
-  static const MethodChannel _channel = MethodChannel('ren/signal_protocol');
-  static const EventChannel _events = EventChannel(
-    'ren/signal_protocol/events',
-  );
-
   final StreamController<IdentityChangeEvent> _identityChangesController =
       StreamController<IdentityChangeEvent>.broadcast();
 
   Stream<IdentityChangeEvent> get identityChanges =>
       _identityChangesController.stream;
 
-  bool _eventsSubscribed = false;
-
-  Future<void> initialize() async {
-    if (_eventsSubscribed) return;
-    _eventsSubscribed = true;
-
-    _events.receiveBroadcastStream().listen(
-      (dynamic raw) {
-        if (raw is! Map) return;
-        final map = Map<String, dynamic>.from(raw);
-        if ((map['type'] as String?) != 'identity_changed') return;
-        final peer = (map['peer_user_id'] is int)
-            ? map['peer_user_id'] as int
-            : int.tryParse('${map['peer_user_id'] ?? ''}') ?? 0;
-        if (peer <= 0) return;
-        _identityChangesController.add(
-          IdentityChangeEvent(
-            peerUserId: peer,
-            previousFingerprint: map['previous_fingerprint'] as String?,
-            currentFingerprint: map['current_fingerprint'] as String?,
-          ),
-        );
-      },
-      onError: (Object error, StackTrace stackTrace) {
-        debugPrint('signal events error: $error');
-      },
-    );
-  }
+  Future<void> initialize() async {}
 
   Future<Map<String, dynamic>> initUser({
     required int userId,
     int deviceId = 1,
   }) async {
-    final res = await _channel.invokeMethod<Map>('initUser', {
-      'userId': userId,
-      'deviceId': deviceId,
-    });
-    return (res ?? const {}).cast<String, dynamic>();
+    return const <String, dynamic>{};
   }
 
   Future<bool> hasSession({required int peerUserId, int deviceId = 1}) async {
-    final has = await _channel.invokeMethod<bool>('hasSession', {
-      'peerUserId': peerUserId,
-      'deviceId': deviceId,
-    });
-    return has ?? false;
+    return false;
   }
 
   Future<String> encrypt({
@@ -85,16 +42,7 @@ class SignalProtocolClient {
     int deviceId = 1,
     Map<String, dynamic>? preKeyBundle,
   }) async {
-    final res = await _channel.invokeMethod<String>('encrypt', {
-      'peerUserId': peerUserId,
-      'deviceId': deviceId,
-      'plaintext': plaintext,
-      if (preKeyBundle != null) 'preKeyBundle': preKeyBundle,
-    });
-    if (res == null || res.isEmpty) {
-      throw StateError('Signal encrypt returned empty ciphertext');
-    }
-    return res;
+    throw UnsupportedError('Signal runtime is disabled');
   }
 
   Future<String> decrypt({
@@ -102,36 +50,19 @@ class SignalProtocolClient {
     required String ciphertext,
     int deviceId = 1,
   }) async {
-    final res = await _channel.invokeMethod<String>('decrypt', {
-      'peerUserId': peerUserId,
-      'deviceId': deviceId,
-      'ciphertext': ciphertext,
-    });
-    if (res == null) {
-      throw StateError('Signal decrypt returned null');
-    }
-    return res;
+    throw UnsupportedError('Signal runtime is disabled');
   }
 
-  Future<void> resetSession({required int peerUserId, int deviceId = 1}) async {
-    await _channel.invokeMethod<void>('resetSession', {
-      'peerUserId': peerUserId,
-      'deviceId': deviceId,
-    });
-  }
+  Future<void> resetSession({
+    required int peerUserId,
+    int deviceId = 1,
+  }) async {}
 
   Future<String> getFingerprint({
     required int peerUserId,
     int deviceId = 1,
   }) async {
-    final fp = await _channel.invokeMethod<String>('getFingerprint', {
-      'peerUserId': peerUserId,
-      'deviceId': deviceId,
-    });
-    if (fp == null || fp.isEmpty) {
-      throw StateError('Signal fingerprint is empty');
-    }
-    return fp;
+    throw UnsupportedError('Signal runtime is disabled');
   }
 
   Future<String> exportBackup({
@@ -139,15 +70,7 @@ class SignalProtocolClient {
     int deviceId = 1,
     required String backupSecretBase64,
   }) async {
-    final payload = await _channel.invokeMethod<String>('exportBackup', {
-      'userId': userId,
-      'deviceId': deviceId,
-      'backupSecret': backupSecretBase64,
-    });
-    if (payload == null || payload.isEmpty) {
-      throw StateError('Signal export backup returned empty payload');
-    }
-    return payload;
+    throw UnsupportedError('Signal runtime is disabled');
   }
 
   Future<bool> importBackup({
@@ -156,12 +79,6 @@ class SignalProtocolClient {
     required String backupSecretBase64,
     required String encryptedPayload,
   }) async {
-    final ok = await _channel.invokeMethod<bool>('importBackup', {
-      'userId': userId,
-      'deviceId': deviceId,
-      'backupSecret': backupSecretBase64,
-      'payload': encryptedPayload,
-    });
-    return ok ?? false;
+    return false;
   }
 }

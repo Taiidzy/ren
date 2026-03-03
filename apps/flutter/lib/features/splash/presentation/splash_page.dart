@@ -12,10 +12,8 @@ import 'package:ren/shared/widgets/adaptive_page_route.dart';
 
 import 'package:ren/core/secure/secure_storage.dart';
 import 'package:ren/core/constants/keys.dart';
-import 'package:ren/features/auth/data/auth_repository.dart';
 import 'package:ren/features/splash/data/spalsh_repository.dart';
 import 'package:ren/features/splash/data/spalsh_api.dart';
-import 'package:ren/core/e2ee/signal_protocol_client.dart';
 
 class SplashPage extends StatefulWidget {
   const SplashPage({super.key});
@@ -102,57 +100,6 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
     // Сохраняем контекст до начала асинхронных операций
     final currentContext = context;
     SplashRepository? repo;
-    final storedUserIdRaw = await SecureStorage.readKey(Keys.userId);
-    final storedUserId = int.tryParse(storedUserIdRaw ?? '') ?? 0;
-
-    Future<void> ensureSignalReady([int? fallbackUserId]) async {
-      final userId = fallbackUserId ?? storedUserId;
-      if (userId <= 0) return;
-      try {
-        final backupSecret = await SecureStorage.readKey(
-          Keys.signalBackupSecret,
-        );
-        if (backupSecret != null && backupSecret.isNotEmpty) {
-          try {
-            final backupPayload = await currentContext
-                .read<AuthRepository>()
-                .api
-                .getSignalBackup();
-            if (backupPayload != null && backupPayload.isNotEmpty) {
-              await SignalProtocolClient.instance.importBackup(
-                userId: userId,
-                backupSecretBase64: backupSecret,
-                encryptedPayload: backupPayload,
-              );
-            }
-          } catch (_) {
-            // Continue startup even when backup restore fails.
-          }
-        }
-        final bundle = await SignalProtocolClient.instance.initUser(
-          userId: userId,
-        );
-        if (bundle.isNotEmpty) {
-          await currentContext.read<AuthRepository>().api.updateSignalBundle(
-            bundle,
-          );
-        }
-        if (backupSecret != null && backupSecret.isNotEmpty) {
-          try {
-            final encryptedBackup = await SignalProtocolClient.instance
-                .exportBackup(userId: userId, backupSecretBase64: backupSecret);
-            await currentContext.read<AuthRepository>().api.updateSignalBackup(
-              encryptedBackup,
-            );
-          } catch (_) {
-            // Continue startup even when backup upload fails.
-          }
-        }
-      } catch (_) {
-        // Keep splash resilient: auth/network flow should proceed even if Signal init fails.
-      }
-    }
-
     Future<void> goAuth() async {
       if (!mounted) return;
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -194,10 +141,6 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
       final hasUser = userJson['id'] != null;
 
       if (hasUser) {
-        final verifiedUserId = (userJson['id'] is int)
-            ? userJson['id'] as int
-            : int.tryParse('${userJson['id']}') ?? storedUserId;
-        await ensureSignalReady(verifiedUserId);
         unawaited(currentContext.read<RealtimeClient>().connect());
         await goChats();
       } else {
@@ -211,12 +154,10 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
         return;
       }
       // Сеть/сервер недоступны: при существующем токене пускаем в приложение оффлайн.
-      await ensureSignalReady();
       unawaited(currentContext.read<RealtimeClient>().connect());
       await goChats();
     } catch (e) {
       // Любая не-401 ошибка и наличие токена -> главный экран.
-      await ensureSignalReady();
       unawaited(currentContext.read<RealtimeClient>().connect());
       await goChats();
     }

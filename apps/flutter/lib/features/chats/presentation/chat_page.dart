@@ -51,6 +51,7 @@ class _ChatPageState extends State<ChatPage>
     with TickerProviderStateMixin, WidgetsBindingObserver {
   static const int _maxSingleAttachmentBytes = 25 * 1024 * 1024;
   static const int _maxPendingAttachmentsBytes = 80 * 1024 * 1024;
+  static const bool _messageTransportDisabled = true;
 
   final _controller = TextEditingController();
   final _focusNode = FocusNode();
@@ -152,6 +153,14 @@ class _ChatPageState extends State<ChatPage>
 
   String _newPendingMediaTaskId() {
     return 'media_${DateTime.now().microsecondsSinceEpoch}_${math.Random.secure().nextInt(1 << 32)}';
+  }
+
+  void _showSendingDisabledNotice() {
+    showGlassSnack(
+      context,
+      'Отправка сообщений отключена в этом билде.',
+      kind: GlassSnackKind.info,
+    );
   }
 
   String _optimisticMessageIdForTask(String taskId) => 'local_media_$taskId';
@@ -409,6 +418,27 @@ class _ChatPageState extends State<ChatPage>
     PendingMediaUploadTaskEntry task, {
     required String optimisticMessageId,
   }) async {
+    if (_messageTransportDisabled) {
+      await _removePendingMediaTaskIfAny(task.taskId);
+      if (!mounted) return;
+      setState(() {
+        final idx = _messages.indexWhere((m) => m.id == optimisticMessageId);
+        if (idx < 0) return;
+        final msg = _messages[idx];
+        final failed = msg.attachments
+            .map(
+              (a) => a.copyWith(
+                transferState: AttachmentTransferState.failed,
+                transferProgress: 0.0,
+              ),
+            )
+            .toList(growable: false);
+        final updated = msg.copyWith(attachments: failed);
+        _messages[idx] = updated;
+        _messageById[optimisticMessageId] = updated;
+      });
+      return;
+    }
     if (_pendingMediaTaskIdsInFlight.contains(task.taskId)) return;
     _pendingMediaTaskIdsInFlight.add(task.taskId);
     try {
@@ -1908,6 +1938,10 @@ class _ChatPageState extends State<ChatPage>
   }
 
   Future<void> _send() async {
+    if (_messageTransportDisabled) {
+      _showSendingDisabledNotice();
+      return;
+    }
     if (!_canSendInCurrentChat) {
       showGlassSnack(
         context,
@@ -2108,6 +2142,10 @@ class _ChatPageState extends State<ChatPage>
     required String wsType,
     required String sendErrorMessage,
   }) async {
+    if (_messageTransportDisabled) {
+      _showSendingDisabledNotice();
+      return;
+    }
     if (!_canSendInCurrentChat) {
       showGlassSnack(
         context,
@@ -3590,6 +3628,10 @@ class _ChatPageState extends State<ChatPage>
   }
 
   Future<void> _forwardSelected() async {
+    if (_messageTransportDisabled) {
+      _showSendingDisabledNotice();
+      return;
+    }
     if (!mounted) return;
     final chatId = int.tryParse(widget.chat.id) ?? 0;
     if (chatId <= 0) return;

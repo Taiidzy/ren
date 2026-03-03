@@ -16,7 +16,6 @@ import 'package:ren/core/providers/background_settings.dart';
 import 'package:ren/core/providers/notifications_settings.dart';
 import 'package:ren/core/providers/theme_settings.dart';
 
-import 'package:ren/core/e2ee/signal_protocol_client.dart';
 import 'package:ren/features/auth/data/auth_api.dart';
 import 'package:ren/features/auth/data/auth_repository.dart';
 import 'package:ren/features/splash/data/spalsh_api.dart';
@@ -43,8 +42,6 @@ Future<void> main() async {
   runZonedGuarded(
     () async {
       WidgetsFlutterBinding.ensureInitialized();
-
-      await SignalProtocolClient.instance.initialize();
 
       await LocalNotifications.instance.initialize();
       await PrivacyProtection.configure();
@@ -131,9 +128,6 @@ class _MyAppState extends State<MyApp> {
           create: (_) => NotificationsSettings(),
         ),
         ChangeNotifierProvider<ThemeSettings>(create: (_) => ThemeSettings()),
-        Provider<SignalProtocolClient>.value(
-          value: SignalProtocolClient.instance,
-        ),
         Provider<Dio>(
           create: (_) {
             final dio = Dio();
@@ -159,15 +153,14 @@ class _MyAppState extends State<MyApp> {
         ProxyProvider<Dio, SplashApi>(update: (_, dio, __) => SplashApi(dio)),
         ProxyProvider<Dio, ChatsApi>(update: (_, dio, __) => ChatsApi(dio)),
         ProxyProvider<Dio, ProfileApi>(update: (_, dio, __) => ProfileApi(dio)),
-        ProxyProvider2<AuthApi, SignalProtocolClient, AuthRepository>(
-          update: (_, api, signal, __) => AuthRepository(api, signal),
+        ProxyProvider<AuthApi, AuthRepository>(
+          update: (_, api, __) => AuthRepository(api),
         ),
         ProxyProvider<SplashApi, SplashRepository>(
           update: (_, api, __) => SplashRepository(api),
         ),
-        ProxyProvider2<ChatsApi, SignalProtocolClient, ChatsRepository>(
-          update: (_, api, signal, prev) =>
-              prev ?? ChatsRepository(api, signal),
+        ProxyProvider<ChatsApi, ChatsRepository>(
+          update: (_, api, prev) => prev ?? ChatsRepository(api),
         ),
 
         Provider<RealtimeClient>(create: (_) => RealtimeClient()),
