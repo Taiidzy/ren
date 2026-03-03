@@ -103,12 +103,16 @@ class ChatAttachment {
   final String filename;
   final String mimetype;
   final int size;
+  final AttachmentTransferState transferState;
+  final double transferProgress;
 
   const ChatAttachment({
     required this.localPath,
     required this.filename,
     required this.mimetype,
     required this.size,
+    this.transferState = AttachmentTransferState.ready,
+    this.transferProgress = 1.0,
   });
 
   ChatAttachment copyWith({
@@ -116,17 +120,30 @@ class ChatAttachment {
     String? filename,
     String? mimetype,
     int? size,
+    AttachmentTransferState? transferState,
+    double? transferProgress,
   }) {
     return ChatAttachment(
       localPath: localPath ?? this.localPath,
       filename: filename ?? this.filename,
       mimetype: mimetype ?? this.mimetype,
       size: size ?? this.size,
+      transferState: transferState ?? this.transferState,
+      transferProgress: transferProgress ?? this.transferProgress,
     );
   }
 
   bool get isImage => mimetype.startsWith('image/');
   bool get isVideo => mimetype.startsWith('video/');
+  bool get isReady => transferState == AttachmentTransferState.ready;
+}
+
+enum AttachmentTransferState {
+  ready,
+  uploading,
+  downloading,
+  decrypting,
+  failed,
 }
 
 class ChatPreview {

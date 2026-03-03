@@ -44,8 +44,8 @@ pub struct FileMetadata {
     pub size: i64,
     pub ciphertext_by_user: Option<Value>, // per-recipient Signal ciphertext map
     pub signal_ciphertext_by_user: Option<Value>, // backward-compatible alias
-    pub enc_file: Option<String>, // зашифрованный файл (base64) или null
-    pub nonce: Option<String>,    // nonce для файла (base64) или null
+    pub enc_file: Option<String>,          // зашифрованный файл (base64) или null
+    pub nonce: Option<String>,             // nonce для файла (base64) или null
     pub file_creation_date: Option<String>,
     // Для chunked файлов:
     pub nonces: Option<Vec<String>>,

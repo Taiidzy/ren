@@ -1,12 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:ren/core/cache/chats_local_cache.dart';
 import 'package:ren/core/constants/keys.dart';
 import 'package:ren/core/e2ee/attachment_cipher.dart';
 import 'package:ren/core/e2ee/signal_protocol_client.dart';
@@ -87,6 +87,8 @@ class _FakeChatsApi extends ChatsApi {
   _FakeChatsApi() : super(Dio());
 
   final List<Uint8List> uploaded = <Uint8List>[];
+  final Map<String, List<int>> _chunked = <String, List<int>>{};
+  int _uploadCounter = 0;
 
   @override
   Future<Map<String, dynamic>> uploadMedia({
@@ -103,6 +105,53 @@ class _FakeChatsApi extends ChatsApi {
       'size': ciphertextBytes.length,
     };
   }
+
+  @override
+  Future<Map<String, dynamic>> initChunkedMediaUpload({
+    required int chatId,
+    required String filename,
+    required String mimetype,
+    required int totalSize,
+    required int totalChunks,
+    required int chunkSize,
+  }) async {
+    _uploadCounter += 1;
+    final id = 'u$_uploadCounter';
+    _chunked[id] = <int>[];
+    return <String, dynamic>{'upload_id': id, 'next_chunk_index': 0};
+  }
+
+  @override
+  Future<Map<String, dynamic>> uploadMediaChunk({
+    required String uploadId,
+    required int chunkIndex,
+    required int totalChunks,
+    required List<int> chunkBytes,
+  }) async {
+    final acc = _chunked.putIfAbsent(uploadId, () => <int>[]);
+    acc.addAll(chunkBytes);
+    return <String, dynamic>{
+      'upload_id': uploadId,
+      'next_chunk_index': chunkIndex + 1,
+      'total_chunks': totalChunks,
+      'received_size': acc.length,
+      'total_size': acc.length,
+    };
+  }
+
+  @override
+  Future<Map<String, dynamic>> finalizeChunkedMediaUpload({
+    required String uploadId,
+  }) async {
+    final bytes = Uint8List.fromList(_chunked[uploadId] ?? <int>[]);
+    uploaded.add(bytes);
+    return <String, dynamic>{
+      'file_id': 1000 + uploaded.length,
+      'filename': 'chunked.bin',
+      'mimetype': 'application/octet-stream',
+      'size': bytes.length,
+    };
+  }
 }
 
 void main() {
@@ -112,6 +161,7 @@ void main() {
   setUp(() {
     FlutterSecureStorage.setMockInitialValues(<String, String>{
       Keys.userId: '7',
+      Keys.token: 'test-token',
     });
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(pathProviderChannel, (call) async {
@@ -253,9 +303,96 @@ void main() {
       );
 
       expect(decoded.attachments.length, 1);
-      final file = File(decoded.attachments.first.localPath!);
+      final localPath = decoded.attachments.first.localPath;
+      final file = File(localPath);
       final restored = await file.readAsBytes();
       expect(restored, raw);
     },
   );
+
+  test(
+    'decrypt fallback does not reuse stale text when ciphertext hash mismatches',
+    () async {
+      final cache = ChatsLocalCache();
+      await cache.writeDecryptedText(
+        chatId: 42,
+        messageId: 2,
+        text: 'как у тебя дела?',
+        ciphertextHash: base64Encode(utf8.encode('old_hash')),
+      );
+
+      final repo = ChatsRepository(
+        _FakeChatsApi(),
+        _FakeSignalProtocolClient(),
+      );
+      final text = await repo.decryptIncomingWsMessage(
+        message: <String, dynamic>{
+          'id': 2,
+          'chat_id': 42,
+          'sender_id': 9,
+          'message_type': 'text',
+          'message': jsonEncode(<String, dynamic>{
+            'ciphertext_by_user': <String, dynamic>{
+              '7': base64Encode(utf8.encode('broken_payload')),
+            },
+          }),
+        },
+      );
+
+      expect(text, '[encrypted]');
+    },
+  );
+
+  test('clearCache(includeMessages) removes decrypted text entries', () async {
+    final cache = ChatsLocalCache();
+    await cache.writeDecryptedText(
+      chatId: 42,
+      messageId: 11,
+      text: 'hello',
+      ciphertextHash: base64Encode(utf8.encode('hash1')),
+    );
+    final before = await cache.readDecryptedTextEntriesForChat(42);
+    expect(before['11']?.text, 'hello');
+
+    await cache.clearCache(
+      includeChats: false,
+      includeMedia: false,
+      includeMessages: true,
+    );
+    final after = await cache.readDecryptedTextEntriesForChat(42);
+    expect(after, isEmpty);
+  });
+
+  test('pending media upload task cache persists and removes by id', () async {
+    final cache = ChatsLocalCache();
+    final task = PendingMediaUploadTaskEntry(
+      taskId: 'task_1',
+      clientMessageId: '11111111-1111-4111-8111-111111111111',
+      chatId: 42,
+      chatKind: 'private',
+      peerId: 9,
+      wsType: 'send_message',
+      caption: 'hello',
+      replyToMessageId: null,
+      createdAt: DateTime.now(),
+      attachments: const <PendingMediaUploadAttachmentEntry>[
+        PendingMediaUploadAttachmentEntry(
+          localPath: '/tmp/media.bin',
+          filename: 'media.bin',
+          mimetype: 'application/octet-stream',
+          sizeBytes: 7,
+        ),
+      ],
+    );
+
+    await cache.upsertPendingMediaUploadTask(task);
+    final saved = await cache.readPendingMediaUploadTasksForChat(42);
+    expect(saved.length, 1);
+    expect(saved.first.taskId, 'task_1');
+    expect(saved.first.clientMessageId, '11111111-1111-4111-8111-111111111111');
+
+    await cache.removePendingMediaUploadTask('task_1');
+    final after = await cache.readPendingMediaUploadTasksForChat(42);
+    expect(after, isEmpty);
+  });
 }

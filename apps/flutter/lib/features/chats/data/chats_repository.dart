@@ -1,8 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
+import 'package:crypto/crypto.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:ren/core/constants/api_url.dart';
 import 'package:ren/core/cache/chats_local_cache.dart';
@@ -14,12 +17,14 @@ import 'package:ren/features/chats/data/chats_api.dart';
 import 'package:ren/features/chats/domain/chat_models.dart';
 
 class OutgoingAttachment {
-  final List<int> bytes;
+  final List<int>? bytes;
+  final String? localPath;
   final String filename;
   final String mimetype;
 
   const OutgoingAttachment({
-    required this.bytes,
+    this.bytes,
+    this.localPath,
     required this.filename,
     required this.mimetype,
   });
@@ -49,6 +54,7 @@ class ChatsRepository {
   Future<void> _mediaPipelineTail = Future<void>.value();
 
   static const int _maxUploadRetries = 2;
+  static const int _uploadChunkPlainSize = 256 * 1024;
   static const String _encryptedPlaceholder = '[encrypted]';
 
   ChatsRepository(this.api, this.signal);
@@ -64,6 +70,30 @@ class ChatsRepository {
   bool _isRecoverableSignalDecryptError(Object e) {
     final s = '$e'.toLowerCase();
     return s.contains('invalid prekey message');
+  }
+
+  String _ciphertextFingerprint(String encrypted) {
+    if (encrypted.isEmpty) return '';
+    return base64Encode(sha256.convert(utf8.encode(encrypted)).bytes);
+  }
+
+  String? _fallbackDecryptedText({
+    required Map<String, DecryptedTextCacheEntry> history,
+    required int messageId,
+    required String encrypted,
+  }) {
+    if (messageId <= 0 || encrypted.isEmpty) return null;
+    final entry = history['$messageId'];
+    if (entry == null) return null;
+    if (entry.text.trim().isEmpty) return null;
+    final hash = entry.ciphertextHash?.trim();
+    if (hash == null || hash.isEmpty) {
+      // Legacy entries without hash are unsafe when server IDs were reset.
+      return null;
+    }
+    final current = _ciphertextFingerprint(encrypted);
+    if (current.isEmpty || current != hash) return null;
+    return entry.text;
   }
 
   Future<String?> _decryptSignalCiphertextWithRecovery({
@@ -128,19 +158,50 @@ class ChatsRepository {
 
   Future<Map<String, dynamic>> _uploadMediaWithRetry({
     required int chatId,
-    required Uint8List ciphertextBytes,
+    required File ciphertextFile,
+    required int chunkSize,
     required String filename,
     required String mimetype,
+    void Function(double progress)? onProgress,
   }) async {
     Object? lastError;
     for (var attempt = 0; attempt <= _maxUploadRetries; attempt++) {
       try {
-        return await api.uploadMedia(
+        final totalSize = await ciphertextFile.length();
+        final totalChunks = (totalSize / chunkSize).ceil();
+        final init = await api.initChunkedMediaUpload(
           chatId: chatId,
-          ciphertextBytes: ciphertextBytes,
           filename: filename,
           mimetype: mimetype,
+          totalSize: totalSize,
+          totalChunks: totalChunks,
+          chunkSize: chunkSize,
         );
+        final uploadId = (init['upload_id'] as String?)?.trim() ?? '';
+        if (uploadId.isEmpty) {
+          throw Exception('chunk upload init returned empty upload_id');
+        }
+        final raf = await ciphertextFile.open(mode: FileMode.read);
+        try {
+          var chunkIndex = 0;
+          while (true) {
+            final chunk = await raf.read(chunkSize);
+            if (chunk.isEmpty) break;
+            await api.uploadMediaChunk(
+              uploadId: uploadId,
+              chunkIndex: chunkIndex,
+              totalChunks: totalChunks,
+              chunkBytes: chunk,
+            );
+            chunkIndex += 1;
+            onProgress?.call(chunkIndex / totalChunks);
+          }
+        } finally {
+          await raf.close();
+        }
+        final done = await api.finalizeChunkedMediaUpload(uploadId: uploadId);
+        onProgress?.call(1.0);
+        return done;
       } catch (e) {
         lastError = e;
         if (attempt >= _maxUploadRetries) break;
@@ -148,6 +209,122 @@ class ChatsRepository {
       }
     }
     throw Exception('upload media failed: $lastError');
+  }
+
+  Future<
+    ({
+      File file,
+      Uint8List key,
+      Uint8List nonce,
+      String plaintextSha,
+      String ciphertextSha,
+      int plainSize,
+      int cipherSize,
+      int chunkSize,
+      int chunkCount,
+    })
+  >
+  _encryptAttachmentToChunkedCipherFile({
+    required OutgoingAttachment attachment,
+  }) async {
+    final tempDir = await _getTempDir();
+    final outFile = File(
+      '${tempDir.path}/ren_media_${DateTime.now().microsecondsSinceEpoch}.bin',
+    );
+    final sink = outFile.openWrite(mode: FileMode.writeOnly);
+    final random = math.Random.secure();
+    final key = Uint8List.fromList(
+      List<int>.generate(
+        AttachmentCipher.keyLength,
+        (_) => random.nextInt(256),
+      ),
+    );
+    final baseNonce = Uint8List.fromList(
+      List<int>.generate(
+        AttachmentCipher.nonceLength,
+        (_) => random.nextInt(256),
+      ),
+    );
+    var chunkIndex = 0;
+    var cipherSize = 0;
+    late int plainSize;
+    final hasPath =
+        attachment.localPath != null && attachment.localPath!.trim().isNotEmpty;
+    if (hasPath) {
+      final source = File(attachment.localPath!);
+      plainSize = await source.length();
+      final raf = await source.open(mode: FileMode.read);
+      try {
+        while (true) {
+          final plainChunk = await raf.read(_uploadChunkPlainSize);
+          if (plainChunk.isEmpty) break;
+          final cipherChunk = await AttachmentCipher.encryptChunk(
+            plaintextChunk: Uint8List.fromList(plainChunk),
+            key: key,
+            baseNonce: baseNonce,
+            chunkIndex: chunkIndex,
+          );
+          sink.add(cipherChunk);
+          cipherSize += cipherChunk.length;
+          chunkIndex += 1;
+        }
+      } finally {
+        await raf.close();
+      }
+    } else {
+      final bytes = attachment.bytes;
+      if (bytes == null || bytes.isEmpty) {
+        throw StateError('Outgoing attachment bytes are missing');
+      }
+      final plaintext = Uint8List.fromList(bytes);
+      plainSize = plaintext.length;
+      var offset = 0;
+      while (offset < plaintext.length) {
+        final end = math.min(offset + _uploadChunkPlainSize, plaintext.length);
+        final plainChunk = Uint8List.fromList(plaintext.sublist(offset, end));
+        final cipherChunk = await AttachmentCipher.encryptChunk(
+          plaintextChunk: plainChunk,
+          key: key,
+          baseNonce: baseNonce,
+          chunkIndex: chunkIndex,
+        );
+        sink.add(cipherChunk);
+        cipherSize += cipherChunk.length;
+        offset = end;
+        chunkIndex += 1;
+      }
+    }
+    await sink.flush();
+    await sink.close();
+    final plainDigest = await _sha256FileOrBytes(
+      localPath: hasPath ? attachment.localPath : null,
+      bytes: attachment.bytes,
+    );
+    final cipherDigest = sha256.convert(await outFile.readAsBytes());
+
+    return (
+      file: outFile,
+      key: key,
+      nonce: baseNonce,
+      plaintextSha: base64Encode(plainDigest.bytes),
+      ciphertextSha: base64Encode(cipherDigest.bytes),
+      plainSize: plainSize,
+      cipherSize: cipherSize,
+      chunkSize: _uploadChunkPlainSize,
+      chunkCount: chunkIndex,
+    );
+  }
+
+  Future<Digest> _sha256FileOrBytes({
+    required String? localPath,
+    required List<int>? bytes,
+  }) async {
+    if (localPath != null && localPath.trim().isNotEmpty) {
+      final file = File(localPath);
+      return await sha256.bind(file.openRead()).first;
+    }
+    final b = bytes ?? const <int>[];
+    return sha256.convert(b);
   }
 
   ValueNotifier<bool> messagesSyncingNotifier(int chatId) {
@@ -214,7 +391,10 @@ class ChatsRepository {
     return v;
   }
 
-  Future<Uint8List> _getCiphertextBytes(int fileId) async {
+  Future<Uint8List> _getCiphertextBytes(
+    int fileId, {
+    void Function(double progress)? onProgress,
+  }) async {
     final cached = _ciphertextMemoryCache[fileId];
     if (cached != null) {
       return cached;
@@ -235,7 +415,16 @@ class ChatsRepository {
         return bytes;
       }
 
-      final bytes = await api.downloadMedia(fileId);
+      final bytes = await api.downloadMediaWithProgress(
+        fileId,
+        onProgress: (received, total) {
+          if (total <= 0) {
+            onProgress?.call(0);
+          } else {
+            onProgress?.call((received / total).clamp(0.0, 1.0));
+          }
+        },
+      );
       _ciphertextMemoryCache[fileId] = bytes;
       try {
         await cacheFile.writeAsBytes(bytes);
@@ -484,7 +673,7 @@ class ChatsRepository {
     );
 
     final myUserId = await _getMyUserId();
-    final decryptedHistory = await _localCache.readDecryptedTextsForChat(
+    final decryptedHistory = await _localCache.readDecryptedTextEntriesForChat(
       chatId,
     );
     final cachedById = <String, ChatMessage>{};
@@ -552,13 +741,13 @@ class ChatsRepository {
       final cachedMsg = cachedById[idStr];
       String text = decrypted.text;
       if (_isEncryptedPlaceholderText(text)) {
-        if (cachedMsg != null && !_isEncryptedPlaceholderText(cachedMsg.text)) {
-          text = cachedMsg.text;
-        } else {
-          final fromHistory = decryptedHistory[idStr];
-          if (fromHistory != null && fromHistory.trim().isNotEmpty) {
-            text = fromHistory;
-          }
+        final fromHistory = _fallbackDecryptedText(
+          history: decryptedHistory,
+          messageId: messageId,
+          encrypted: encrypted,
+        );
+        if (fromHistory != null && fromHistory.trim().isNotEmpty) {
+          text = fromHistory;
         }
       }
       final resolvedAttachments =
@@ -573,6 +762,7 @@ class ChatsRepository {
           chatId: chatId,
           messageId: messageId,
           text: text,
+          ciphertextHash: _ciphertextFingerprint(encrypted),
         );
       }
 
@@ -696,6 +886,8 @@ class ChatsRepository {
     required int messageId,
     required int senderId,
     required dynamic metadata,
+    void Function(int index, AttachmentTransferState state, double progress)?
+    onAttachmentProgress,
   }) async {
     if (metadata is! List) return const [];
     final myUserId = await _getMyUserId();
@@ -749,12 +941,88 @@ class ChatsRepository {
             final keyB64 = (payload['key'] as String?)?.trim() ?? '';
             final nonceB64 = (payload['nonce'] as String?)?.trim() ?? '';
             if (keyB64.isEmpty || nonceB64.isEmpty) return;
-            final cipherBytes = await _getCiphertextBytes(descriptorFileId);
-            final plainBytes = await AttachmentCipher.decrypt(
-              ciphertext: cipherBytes,
-              key: AttachmentCipher.fromBase64(keyB64),
-              nonce: AttachmentCipher.fromBase64(nonceB64),
+            onAttachmentProgress?.call(
+              index,
+              AttachmentTransferState.downloading,
+              0.01,
             );
+            final cipherBytes = await _getCiphertextBytes(
+              descriptorFileId,
+              onProgress: (p) {
+                onAttachmentProgress?.call(
+                  index,
+                  AttachmentTransferState.downloading,
+                  p,
+                );
+              },
+            );
+            final key = AttachmentCipher.fromBase64(keyB64);
+            final nonce = AttachmentCipher.fromBase64(nonceB64);
+            final chunked = payload['chunked'] == true;
+            Uint8List plainBytes;
+            if (chunked) {
+              final plainSize = (payload['size'] is int)
+                  ? payload['size'] as int
+                  : int.tryParse('${payload['size'] ?? ''}') ?? 0;
+              final chunkSize = (payload['chunk_size'] is int)
+                  ? payload['chunk_size'] as int
+                  : int.tryParse('${payload['chunk_size'] ?? ''}') ??
+                        _uploadChunkPlainSize;
+              final chunkCount = (payload['chunk_count'] is int)
+                  ? payload['chunk_count'] as int
+                  : int.tryParse('${payload['chunk_count'] ?? ''}') ?? 0;
+              if (plainSize <= 0 || chunkSize <= 0 || chunkCount <= 0) return;
+              final out = BytesBuilder(copy: false);
+              var cursor = 0;
+              onAttachmentProgress?.call(
+                index,
+                AttachmentTransferState.decrypting,
+                0.0,
+              );
+              for (var ci = 0; ci < chunkCount; ci++) {
+                final plainChunkSize = math.min(
+                  chunkSize,
+                  math.max(0, plainSize - (ci * chunkSize)),
+                );
+                final cipherChunkSize =
+                    plainChunkSize + AttachmentCipher.macLength;
+                final end = cursor + cipherChunkSize;
+                if (end > cipherBytes.length) return;
+                final cipherChunk = Uint8List.fromList(
+                  cipherBytes.sublist(cursor, end),
+                );
+                final plainChunk = await AttachmentCipher.decryptChunk(
+                  ciphertextChunk: cipherChunk,
+                  key: key,
+                  baseNonce: nonce,
+                  chunkIndex: ci,
+                );
+                out.add(plainChunk);
+                cursor = end;
+                onAttachmentProgress?.call(
+                  index,
+                  AttachmentTransferState.decrypting,
+                  ((ci + 1) / chunkCount).clamp(0.0, 1.0),
+                );
+              }
+              plainBytes = out.takeBytes();
+            } else {
+              onAttachmentProgress?.call(
+                index,
+                AttachmentTransferState.decrypting,
+                0.0,
+              );
+              plainBytes = await AttachmentCipher.decrypt(
+                ciphertext: cipherBytes,
+                key: key,
+                nonce: nonce,
+              );
+              onAttachmentProgress?.call(
+                index,
+                AttachmentTransferState.decrypting,
+                1.0,
+              );
+            }
             final expectedSha = (payload['sha256'] as String?)?.trim() ?? '';
             if (expectedSha.isNotEmpty &&
                 AttachmentCipher.sha256Base64(plainBytes) != expectedSha) {
@@ -776,6 +1044,11 @@ class ChatsRepository {
             bytes = Uint8List.fromList(base64Decode(plainB64));
           }
         } catch (_) {
+          onAttachmentProgress?.call(
+            index,
+            AttachmentTransferState.failed,
+            0.0,
+          );
           return;
         }
       } else {
@@ -783,7 +1056,21 @@ class ChatsRepository {
         Uint8List? ciphertextBytes;
         if (fileId != null && fileId > 0) {
           try {
-            ciphertextBytes = await _getCiphertextBytes(fileId);
+            onAttachmentProgress?.call(
+              index,
+              AttachmentTransferState.downloading,
+              0.0,
+            );
+            ciphertextBytes = await _getCiphertextBytes(
+              fileId,
+              onProgress: (p) {
+                onAttachmentProgress?.call(
+                  index,
+                  AttachmentTransferState.downloading,
+                  p,
+                );
+              },
+            );
             bytes = ciphertextBytes;
           } catch (_) {
             bytes = null;
@@ -811,7 +1098,10 @@ class ChatsRepository {
         filename: filename,
         mimetype: mimetype,
         size: size,
+        transferState: AttachmentTransferState.ready,
+        transferProgress: 1.0,
       );
+      onAttachmentProgress?.call(index, AttachmentTransferState.ready, 1.0);
     }
 
     const maxConcurrent = 3;
@@ -833,6 +1123,49 @@ class ChatsRepository {
       if (a != null) out.add(a);
     }
     return out;
+  }
+
+  List<ChatAttachment> buildIncomingAttachmentPlaceholders(dynamic metadata) {
+    if (metadata is! List) return const <ChatAttachment>[];
+    final out = <ChatAttachment>[];
+    for (final item in metadata) {
+      if (item is! Map) continue;
+      final m = item.cast<String, dynamic>();
+      final name = (m['filename'] as String?)?.trim();
+      final mimetype =
+          (m['mimetype'] as String?)?.trim() ?? 'application/octet-stream';
+      final size = (m['size'] is int)
+          ? m['size'] as int
+          : int.tryParse('${m['size'] ?? ''}') ?? 0;
+      out.add(
+        ChatAttachment(
+          localPath: '',
+          filename: (name == null || name.isEmpty) ? 'file' : name,
+          mimetype: mimetype,
+          size: size,
+          transferState: AttachmentTransferState.downloading,
+          transferProgress: 0.0,
+        ),
+      );
+    }
+    return out;
+  }
+
+  Future<List<ChatAttachment>> decryptIncomingAttachments({
+    required int chatId,
+    required int messageId,
+    required int senderId,
+    required dynamic metadata,
+    void Function(int index, AttachmentTransferState state, double progress)?
+    onAttachmentProgress,
+  }) async {
+    return _tryDecryptAttachments(
+      chatId: chatId,
+      messageId: messageId,
+      senderId: senderId,
+      metadata: metadata,
+      onAttachmentProgress: onAttachmentProgress,
+    );
   }
 
   ({String text, String? key}) _decryptMessageWithKey({
@@ -1291,6 +1624,7 @@ class ChatsRepository {
     int? peerId,
     required String caption,
     required List<OutgoingAttachment> attachments,
+    void Function(int attachmentIndex, double progress)? onAttachmentProgress,
   }) async {
     return _runInMediaPipeline(() async {
       final msgByUser = await _encryptForRecipients(
@@ -1301,6 +1635,7 @@ class ChatsRepository {
       );
       final metadata = <Map<String, dynamic>>[];
       for (final att in attachments) {
+        final attachmentIndex = metadata.length;
         final filename = att.filename.isNotEmpty
             ? att.filename
             : 'file_${DateTime.now().millisecondsSinceEpoch}';
@@ -1308,16 +1643,31 @@ class ChatsRepository {
             ? att.mimetype
             : 'application/octet-stream';
 
-        final rawBytes = att.bytes is Uint8List
-            ? att.bytes as Uint8List
-            : Uint8List.fromList(att.bytes);
-        final encryptedAttachment = await AttachmentCipher.encrypt(rawBytes);
-        final upload = await _uploadMediaWithRetry(
-          chatId: chatId,
-          ciphertextBytes: encryptedAttachment.ciphertext,
-          filename: filename,
-          mimetype: mimetype,
+        onAttachmentProgress?.call(attachmentIndex, 0.05);
+        final encryptedAttachment = await _encryptAttachmentToChunkedCipherFile(
+          attachment: att,
         );
+        onAttachmentProgress?.call(attachmentIndex, 0.45);
+        Map<String, dynamic> upload;
+        try {
+          upload = await _uploadMediaWithRetry(
+            chatId: chatId,
+            ciphertextFile: encryptedAttachment.file,
+            chunkSize: _uploadChunkPlainSize + AttachmentCipher.macLength,
+            filename: filename,
+            mimetype: mimetype,
+            onProgress: (p) {
+              onAttachmentProgress?.call(
+                attachmentIndex,
+                (0.45 + (p * 0.5)).clamp(0.0, 0.95),
+              );
+            },
+          );
+        } finally {
+          try {
+            await encryptedAttachment.file.delete();
+          } catch (_) {}
+        }
         final fileId = (upload['file_id'] is int)
             ? upload['file_id'] as int
             : int.tryParse('${upload['file_id'] ?? ''}') ?? 0;
@@ -1331,12 +1681,15 @@ class ChatsRepository {
           'file_id': fileId,
           'filename': filename,
           'mimetype': mimetype,
-          'size': rawBytes.length,
-          'ciphertext_size': encryptedAttachment.ciphertext.length,
+          'size': encryptedAttachment.plainSize,
+          'ciphertext_size': encryptedAttachment.cipherSize,
           'key': AttachmentCipher.toBase64(encryptedAttachment.key),
           'nonce': AttachmentCipher.toBase64(encryptedAttachment.nonce),
-          'sha256': encryptedAttachment.plaintextSha256Base64,
-          'ciphertext_sha256': encryptedAttachment.ciphertextSha256Base64,
+          'sha256': encryptedAttachment.plaintextSha,
+          'ciphertext_sha256': encryptedAttachment.ciphertextSha,
+          'chunked': true,
+          'chunk_size': encryptedAttachment.chunkSize,
+          'chunk_count': encryptedAttachment.chunkCount,
         });
         final byUser = await _encryptForRecipients(
           chatId: chatId,
@@ -1349,13 +1702,14 @@ class ChatsRepository {
           'file_id': fileId,
           'filename': filename,
           'mimetype': mimetype,
-          'size': rawBytes.length,
+          'size': encryptedAttachment.plainSize,
           'enc_file': null,
           'nonce': null,
           'ciphertext_by_user': byUser,
           'signal_ciphertext_by_user': byUser,
           'file_creation_date': null,
         });
+        onAttachmentProgress?.call(attachmentIndex, 1.0);
       }
 
       final messageJson = jsonEncode({
@@ -1401,8 +1755,12 @@ class ChatsRepository {
         ? message['id'] as int
         : int.tryParse('${message['id'] ?? ''}') ?? 0;
     if (_isEncryptedPlaceholderText(text) && chatId > 0 && messageId > 0) {
-      final byChat = await _localCache.readDecryptedTextsForChat(chatId);
-      final fallback = byChat['$messageId'];
+      final byChat = await _localCache.readDecryptedTextEntriesForChat(chatId);
+      final fallback = _fallbackDecryptedText(
+        history: byChat,
+        messageId: messageId,
+        encrypted: encrypted,
+      );
       if (fallback != null && fallback.trim().isNotEmpty) {
         text = fallback;
       }
@@ -1413,6 +1771,7 @@ class ChatsRepository {
         chatId: chatId,
         messageId: messageId,
         text: text,
+        ciphertextHash: _ciphertextFingerprint(encrypted),
       );
     }
     return text;
@@ -1447,8 +1806,12 @@ class ChatsRepository {
 
     var text = decrypted.text;
     if (_isEncryptedPlaceholderText(text) && chatId > 0 && messageId > 0) {
-      final byChat = await _localCache.readDecryptedTextsForChat(chatId);
-      final fallback = byChat['$messageId'];
+      final byChat = await _localCache.readDecryptedTextEntriesForChat(chatId);
+      final fallback = _fallbackDecryptedText(
+        history: byChat,
+        messageId: messageId,
+        encrypted: encrypted,
+      );
       if (fallback != null && fallback.trim().isNotEmpty) {
         text = fallback;
       }
@@ -1459,6 +1822,7 @@ class ChatsRepository {
         chatId: chatId,
         messageId: messageId,
         text: text,
+        ciphertextHash: _ciphertextFingerprint(encrypted),
       );
     }
 
@@ -1505,6 +1869,22 @@ class ChatsRepository {
 
   Future<void> saveChatScrollOffset(String chatId, double offset) async {
     await _localCache.writeChatScrollOffset(chatId, offset);
+  }
+
+  Future<List<PendingMediaUploadTaskEntry>> loadPendingMediaUploadTasksForChat(
+    int chatId,
+  ) async {
+    return _localCache.readPendingMediaUploadTasksForChat(chatId);
+  }
+
+  Future<void> savePendingMediaUploadTask(
+    PendingMediaUploadTaskEntry task,
+  ) async {
+    await _localCache.upsertPendingMediaUploadTask(task);
+  }
+
+  Future<void> removePendingMediaUploadTask(String taskId) async {
+    await _localCache.removePendingMediaUploadTask(taskId);
   }
 
   Future<void> clearAppCache({

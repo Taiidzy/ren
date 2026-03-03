@@ -26,10 +26,13 @@ class ChatAttachmentsPreparer {
   ) async {
     final outgoing = <OutgoingAttachment>[];
     for (final pending in pendingToSend) {
-      final bytes = await readPendingAttachmentBytes(pending);
+      final path = pending.localPath;
       outgoing.add(
         OutgoingAttachment(
-          bytes: bytes,
+          bytes: (path == null || path.isEmpty)
+              ? await readPendingAttachmentBytes(pending)
+              : null,
+          localPath: (path != null && path.isNotEmpty) ? path : null,
           filename: pending.filename,
           mimetype: pending.mimetype,
         ),

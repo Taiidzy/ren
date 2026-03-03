@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui';
 
@@ -11,6 +12,7 @@ import 'package:camera/camera.dart';
 
 import 'package:ren/core/constants/api_url.dart';
 import 'package:ren/core/constants/keys.dart';
+import 'package:ren/core/cache/chats_local_cache.dart';
 import 'package:ren/core/secure/secure_storage.dart';
 import 'package:ren/features/chats/data/chats_repository.dart';
 import 'package:ren/features/chats/domain/chat_models.dart';
@@ -135,6 +137,32 @@ class _ChatPageState extends State<ChatPage>
   late final AnimationController _videoLockedTransition;
   late final AnimationController _videoPulse;
   late final AnimationController _jumpBadgePulse;
+  bool _resumePendingMediaInProgress = false;
+  final Set<String> _pendingMediaTaskIdsInFlight = <String>{};
+
+  String _newUuidV4() {
+    final random = math.Random.secure();
+    final bytes = List<int>.generate(16, (_) => random.nextInt(256));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    String hex(int b) => b.toRadixString(16).padLeft(2, '0');
+    final h = bytes.map(hex).join();
+    return '${h.substring(0, 8)}-${h.substring(8, 12)}-${h.substring(12, 16)}-${h.substring(16, 20)}-${h.substring(20, 32)}';
+  }
+
+  String _newPendingMediaTaskId() {
+    return 'media_${DateTime.now().microsecondsSinceEpoch}_${math.Random.secure().nextInt(1 << 32)}';
+  }
+
+  String _optimisticMessageIdForTask(String taskId) => 'local_media_$taskId';
+
+  String? _extractTaskIdFromOptimisticMessageId(String messageId) {
+    const prefix = 'local_media_';
+    if (!messageId.startsWith(prefix) || messageId.length <= prefix.length) {
+      return null;
+    }
+    return messageId.substring(prefix.length);
+  }
 
   void _setVideoRecordingOverlay({required bool show}) {
     if (_showVideoRecordingOverlay == show) return;
@@ -281,12 +309,15 @@ class _ChatPageState extends State<ChatPage>
   bool _isVoiceMessage(ChatMessage msg) {
     if (msg.attachments.length != 1) return false;
     final att = msg.attachments.first;
-    return att.mimetype.startsWith('audio/');
+    return att.mimetype.startsWith('audio/') &&
+        att.isReady &&
+        att.localPath.trim().isNotEmpty;
   }
 
   bool _isSquareVideoMessage(ChatMessage msg) {
     if (msg.attachments.length != 1) return false;
     final att = msg.attachments.first;
+    if (!att.isReady || att.localPath.trim().isEmpty) return false;
     if (!att.mimetype.startsWith('video/')) return false;
     // Проверяем, что это квадратик по имени файла (начинается с video_)
     final filename = att.filename.toLowerCase();
@@ -302,9 +333,244 @@ class _ChatPageState extends State<ChatPage>
     rt.joinChat(chatId);
   }
 
+  PendingMediaUploadTaskEntry? _buildPendingTaskFromQueuedAttachments({
+    required int chatId,
+    required String chatKind,
+    required int? peerId,
+    required String wsType,
+    required String caption,
+    required int? replyToMessageId,
+    required List<PendingChatAttachment> pendingToSend,
+  }) {
+    if (pendingToSend.isEmpty) return null;
+    final out = <PendingMediaUploadAttachmentEntry>[];
+    for (final p in pendingToSend) {
+      final path = (p.localPath ?? '').trim();
+      if (path.isEmpty) return null;
+      out.add(
+        PendingMediaUploadAttachmentEntry(
+          localPath: path,
+          filename: p.filename,
+          mimetype: p.mimetype,
+          sizeBytes: p.sizeBytes,
+        ),
+      );
+    }
+    return PendingMediaUploadTaskEntry(
+      taskId: _newPendingMediaTaskId(),
+      clientMessageId: _newUuidV4(),
+      chatId: chatId,
+      chatKind: chatKind.trim().toLowerCase(),
+      peerId: peerId,
+      wsType: wsType.trim().toLowerCase(),
+      caption: caption,
+      replyToMessageId: replyToMessageId,
+      createdAt: DateTime.now(),
+      attachments: out,
+    );
+  }
+
+  List<ChatAttachment> _optimisticAttachmentsFromPendingTask(
+    PendingMediaUploadTaskEntry task,
+  ) {
+    return task.attachments
+        .map(
+          (a) => ChatAttachment(
+            localPath: a.localPath,
+            filename: a.filename,
+            mimetype: a.mimetype,
+            size: a.sizeBytes,
+            transferState: AttachmentTransferState.uploading,
+            transferProgress: 0.0,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  Future<void> _removePendingMediaTaskIfAny(String? taskId) async {
+    final id = (taskId ?? '').trim();
+    if (id.isEmpty) return;
+    try {
+      await _repo.removePendingMediaUploadTask(id);
+    } catch (_) {}
+  }
+
+  Future<void> _dispatchPendingMediaTask(
+    PendingMediaUploadTaskEntry task, {
+    required String optimisticMessageId,
+  }) async {
+    if (_pendingMediaTaskIdsInFlight.contains(task.taskId)) return;
+    _pendingMediaTaskIdsInFlight.add(task.taskId);
+    try {
+      final chatId = int.tryParse(widget.chat.id) ?? 0;
+      if (chatId <= 0 || task.chatId != chatId) return;
+      final peerId = task.peerId ?? widget.chat.peerId ?? 0;
+      final outgoingAttachments = task.attachments
+          .map(
+            (a) => OutgoingAttachment(
+              localPath: a.localPath,
+              filename: a.filename,
+              mimetype: a.mimetype,
+            ),
+          )
+          .toList(growable: false);
+      final payload = await _buildSendPayload(
+        hasAttachments: true,
+        repo: _repo,
+        chatId: chatId,
+        peerId: peerId,
+        text: task.caption,
+        outgoingAttachments: outgoingAttachments,
+        optimisticMessageId: optimisticMessageId,
+      );
+      await _ensureWsReady(chatId);
+      final rt = _rt!;
+      rt.sendMessage(
+        chatId: chatId,
+        message: payload['message'] as String,
+        wsType: task.wsType,
+        messageType: payload['message_type'] as String?,
+        envelopes: payload['envelopes'] as Map<String, dynamic>?,
+        metadata: payload['metadata'] as List<dynamic>?,
+        replyToMessageId: task.replyToMessageId,
+        clientMessageId: task.clientMessageId,
+      );
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        final idx = _messages.indexWhere((m) => m.id == optimisticMessageId);
+        if (idx < 0) return;
+        final msg = _messages[idx];
+        final failed = msg.attachments
+            .map(
+              (a) => a.copyWith(
+                transferState: AttachmentTransferState.failed,
+                transferProgress: 0.0,
+              ),
+            )
+            .toList(growable: false);
+        final updated = msg.copyWith(attachments: failed);
+        _messages[idx] = updated;
+        _messageById[optimisticMessageId] = updated;
+      });
+    } finally {
+      _pendingMediaTaskIdsInFlight.remove(task.taskId);
+    }
+  }
+
+  bool _looksAlreadyDelivered(PendingMediaUploadTaskEntry task) {
+    final caption = task.caption.trim();
+    for (var i = _messages.length - 1; i >= 0; i--) {
+      final m = _messages[i];
+      if (!m.isMe || m.id.startsWith('local_')) continue;
+      if (m.text.trim() != caption) continue;
+      if (m.attachments.length != task.attachments.length) continue;
+      var matchesAttachments = true;
+      for (var j = 0; j < task.attachments.length; j++) {
+        final expected = task.attachments[j];
+        final actual = m.attachments[j];
+        if (actual.filename.trim() != expected.filename.trim() ||
+            actual.mimetype.trim().toLowerCase() !=
+                expected.mimetype.trim().toLowerCase()) {
+          matchesAttachments = false;
+          break;
+        }
+      }
+      if (matchesAttachments) return true;
+    }
+    return false;
+  }
+
+  Future<void> _resumePendingMediaUploads({required String reason}) async {
+    if (_resumePendingMediaInProgress) return;
+    final chatId = int.tryParse(widget.chat.id) ?? 0;
+    if (chatId <= 0) return;
+    _resumePendingMediaInProgress = true;
+    try {
+      final tasks = await _repo.loadPendingMediaUploadTasksForChat(chatId);
+      for (final task in tasks) {
+        if (task.attachments.isEmpty) {
+          await _removePendingMediaTaskIfAny(task.taskId);
+          continue;
+        }
+        if (_looksAlreadyDelivered(task)) {
+          await _removePendingMediaTaskIfAny(task.taskId);
+          continue;
+        }
+        var missingSource = false;
+        for (final a in task.attachments) {
+          if (!await File(a.localPath).exists()) {
+            missingSource = true;
+            break;
+          }
+        }
+        if (missingSource) {
+          await _removePendingMediaTaskIfAny(task.taskId);
+          continue;
+        }
+
+        final optimisticId = _optimisticMessageIdForTask(task.taskId);
+        if (!_messageById.containsKey(optimisticId) && mounted) {
+          setState(() {
+            _messages.add(
+              ChatMessage(
+                id: optimisticId,
+                chatId: chatId.toString(),
+                isMe: true,
+                text: task.caption,
+                attachments: _optimisticAttachmentsFromPendingTask(task),
+                sentAt: task.createdAt,
+                replyToMessageId: task.replyToMessageId?.toString(),
+                isDelivered: false,
+                isRead: false,
+              ),
+            );
+            _reindexMessages();
+          });
+        }
+
+        await _dispatchPendingMediaTask(
+          task,
+          optimisticMessageId: optimisticId,
+        );
+      }
+      if (kDebugMode) {
+        debugPrint(
+          'Pending media resume finished: chat=$chatId reason=$reason tasks=${tasks.length}',
+        );
+      }
+    } catch (_) {
+      // ignore resume errors; tasks stay persisted for next retry
+    } finally {
+      _resumePendingMediaInProgress = false;
+    }
+  }
+
   ChatMessage? _findMessageById(String? id) {
     if (id == null || id.isEmpty) return null;
     return _messageById[id];
+  }
+
+  void _updateMessageAttachmentTransfer({
+    required String messageId,
+    required int attachmentIndex,
+    required AttachmentTransferState state,
+    required double progress,
+  }) {
+    final idx = _messages.indexWhere((m) => m.id == messageId);
+    if (idx < 0) return;
+    final msg = _messages[idx];
+    if (attachmentIndex < 0 || attachmentIndex >= msg.attachments.length) {
+      return;
+    }
+    final updatedAtt = List<ChatAttachment>.from(msg.attachments);
+    updatedAtt[attachmentIndex] = updatedAtt[attachmentIndex].copyWith(
+      transferState: state,
+      transferProgress: progress.clamp(0.0, 1.0),
+    );
+    final updatedMsg = msg.copyWith(attachments: updatedAtt);
+    _messages[idx] = updatedMsg;
+    _messageById[messageId] = updatedMsg;
   }
 
   String _formatTime(DateTime dt) {
@@ -365,7 +631,9 @@ class _ChatPageState extends State<ChatPage>
     final out = <ChatAttachment>[];
     for (final m in _messages) {
       if (m.attachments.isEmpty) continue;
-      out.addAll(m.attachments);
+      out.addAll(
+        m.attachments.where((a) => a.isReady && a.localPath.trim().isNotEmpty),
+      );
     }
     return out;
   }
@@ -957,6 +1225,7 @@ class _ChatPageState extends State<ChatPage>
 
     await _ensureRealtime();
     await _refreshMyChatRole();
+    unawaited(_resumePendingMediaUploads(reason: 'init'));
   }
 
   Future<void> _resyncAfterReconnect() async {
@@ -1085,6 +1354,7 @@ class _ChatPageState extends State<ChatPage>
     if (reconnected) {
       unawaited(_resyncAfterReconnect());
       unawaited(_refreshMyChatRole());
+      unawaited(_resumePendingMediaUploads(reason: 'reconnect'));
     }
   }
 
@@ -1219,7 +1489,7 @@ class _ChatPageState extends State<ChatPage>
             msg.entries.map((e) => MapEntry(e.key.toString(), e.value)),
           );
 
-    final decoded = await repo.decryptIncomingWsMessageFull(message: m);
+    final decodedText = await repo.decryptIncomingWsMessage(message: m);
     final incomingId = '${m['id'] ?? ''}';
     if (incomingId.isEmpty) return;
 
@@ -1234,7 +1504,7 @@ class _ChatPageState extends State<ChatPage>
       }
       if (idx < 0) return;
       final old = _messages[idx];
-      final updated = old.copyWith(text: decoded.text);
+      final updated = old.copyWith(text: decodedText);
 
       _messages[idx] = updated;
       _messageById[incomingId] = updated;
@@ -1311,7 +1581,10 @@ class _ChatPageState extends State<ChatPage>
       debugPrint('WS message_new payload keys: ${m.keys.toList()}');
     }
 
-    final decoded = await repo.decryptIncomingWsMessageFull(message: m);
+    final decodedText = await repo.decryptIncomingWsMessage(message: m);
+    final placeholderAttachments = repo.buildIncomingAttachmentPlaceholders(
+      m['metadata'],
+    );
 
     final senderId = m['sender_id'] is int
         ? m['sender_id'] as int
@@ -1327,12 +1600,13 @@ class _ChatPageState extends State<ChatPage>
 
     final myId = _myUserId ?? 0;
     final isMe = (myId > 0) ? senderId == myId : false;
-    final isEncryptedPlaceholder = decoded.text.trim() == '[encrypted]';
+    final isEncryptedPlaceholder = decodedText.trim() == '[encrypted]';
 
     if (kDebugMode) {
       debugPrint('WS message_new routing resolved (isMe=$isMe)');
     }
 
+    String? removedLocalMessageId;
     if (!mounted) return;
     setState(() {
       final incomingId = '${m['id'] ?? ''}';
@@ -1340,8 +1614,8 @@ class _ChatPageState extends State<ChatPage>
         return;
       }
 
-      String resolvedText = decoded.text;
-      List<ChatAttachment> resolvedAttachments = decoded.attachments;
+      String resolvedText = decodedText;
+      List<ChatAttachment> resolvedAttachments = placeholderAttachments;
       final incomingMessageType = ((m['message_type'] as String?) ?? '')
           .trim()
           .toLowerCase();
@@ -1360,6 +1634,12 @@ class _ChatPageState extends State<ChatPage>
           resolvedText = last.text;
         }
         if (isLocalEcho &&
+            resolvedAttachments.isNotEmpty &&
+            last.attachments.isNotEmpty) {
+          // Keep local sender preview instead of re-downloading own media echo.
+          resolvedAttachments = last.attachments;
+        }
+        if (isLocalEcho &&
             resolvedAttachments.isEmpty &&
             last.attachments.isNotEmpty &&
             (incomingHasMediaType || last.text.trim() == resolvedText.trim())) {
@@ -1372,6 +1652,7 @@ class _ChatPageState extends State<ChatPage>
             (resolvedAttachments.isNotEmpty || last.attachments.isEmpty)) {
           final removed = _messages.removeLast();
           _messageById.remove(removed.id);
+          removedLocalMessageId = removed.id;
         }
       }
 
@@ -1391,6 +1672,47 @@ class _ChatPageState extends State<ChatPage>
       _messages.add(created);
       _messageById[created.id] = created;
     });
+    final removedTaskId = _extractTaskIdFromOptimisticMessageId(
+      removedLocalMessageId ?? '',
+    );
+    if (removedTaskId != null) {
+      unawaited(_removePendingMediaTaskIfAny(removedTaskId));
+    }
+
+    final incomingId = '${m['id'] ?? ''}';
+    final incomingMessageId = int.tryParse(incomingId) ?? 0;
+    if (!isMe && incomingMessageId > 0 && placeholderAttachments.isNotEmpty) {
+      unawaited(
+        repo
+            .decryptIncomingAttachments(
+              chatId: chatId,
+              messageId: incomingMessageId,
+              senderId: senderId,
+              metadata: m['metadata'],
+              onAttachmentProgress: (index, state, progress) {
+                if (!mounted) return;
+                setState(() {
+                  _updateMessageAttachmentTransfer(
+                    messageId: incomingId,
+                    attachmentIndex: index,
+                    state: state,
+                    progress: progress,
+                  );
+                });
+              },
+            )
+            .then((resolved) {
+              if (!mounted || resolved.isEmpty) return;
+              setState(() {
+                final idx = _messages.indexWhere((x) => x.id == incomingId);
+                if (idx < 0) return;
+                final updated = _messages[idx].copyWith(attachments: resolved);
+                _messages[idx] = updated;
+                _messageById[incomingId] = updated;
+              });
+            }),
+      );
+    }
 
     if (isMe || _isAtBottom) {
       _scheduleScrollToBottom(animated: true);
@@ -1433,8 +1755,18 @@ class _ChatPageState extends State<ChatPage>
     required String text,
     required List<ChatAttachment> optimisticAttachments,
     required ChatMessage? replyTo,
+    String? messageId,
   }) {
-    final optimisticId = 'local_${DateTime.now().millisecondsSinceEpoch}';
+    final optimisticId =
+        messageId ?? 'local_${DateTime.now().millisecondsSinceEpoch}';
+    final initialAttachments = optimisticAttachments
+        .map(
+          (a) => a.copyWith(
+            transferState: AttachmentTransferState.uploading,
+            transferProgress: 0.0,
+          ),
+        )
+        .toList(growable: false);
     setState(() {
       _messages.add(
         ChatMessage(
@@ -1442,7 +1774,7 @@ class _ChatPageState extends State<ChatPage>
           chatId: chatId.toString(),
           isMe: true,
           text: text,
-          attachments: optimisticAttachments,
+          attachments: initialAttachments,
           sentAt: DateTime.now(),
           replyToMessageId: replyTo?.id,
           isDelivered: false,
@@ -1461,6 +1793,7 @@ class _ChatPageState extends State<ChatPage>
     required int peerId,
     required String text,
     required List<OutgoingAttachment> outgoingAttachments,
+    String? optimisticMessageId,
   }) async {
     if (hasAttachments) {
       return await repo.buildOutgoingWsMediaMessage(
@@ -1469,6 +1802,19 @@ class _ChatPageState extends State<ChatPage>
         peerId: peerId > 0 ? peerId : null,
         caption: text,
         attachments: outgoingAttachments,
+        onAttachmentProgress: optimisticMessageId == null
+            ? null
+            : (index, progress) {
+                if (!mounted) return;
+                setState(() {
+                  _updateMessageAttachmentTransfer(
+                    messageId: optimisticMessageId,
+                    attachmentIndex: index,
+                    state: AttachmentTransferState.uploading,
+                    progress: progress,
+                  );
+                });
+              },
       );
     }
     return await repo.buildOutgoingWsTextMessage(
@@ -1570,6 +1916,7 @@ class _ChatPageState extends State<ChatPage>
     final replyTo = _replyTo;
     final editing = _editing;
     String? optimisticId;
+    PendingMediaUploadTaskEntry? pendingMediaTask;
     setState(() {
       _isSendingMessage = true;
       _pendingController.setStateByIds(
@@ -1618,12 +1965,30 @@ class _ChatPageState extends State<ChatPage>
 
       final optimisticAtt = await _attachmentsPreparer
           .buildOptimisticAttachments(pendingToSend);
+      final wsType = _resolveWsType(pendingToSend);
+      if (hasAttachments) {
+        pendingMediaTask = _buildPendingTaskFromQueuedAttachments(
+          chatId: chatId,
+          chatKind: widget.chat.kind,
+          peerId: _isPrivateChat ? peerId : null,
+          wsType: wsType,
+          caption: text,
+          replyToMessageId: replyTo == null ? null : int.tryParse(replyTo.id),
+          pendingToSend: pendingToSend,
+        );
+      }
       optimisticId = _addOptimisticLocalMessage(
         chatId: chatId,
         text: text,
         optimisticAttachments: optimisticAtt,
         replyTo: replyTo,
+        messageId: pendingMediaTask == null
+            ? null
+            : _optimisticMessageIdForTask(pendingMediaTask.taskId),
       );
+      if (pendingMediaTask != null) {
+        await _repo.savePendingMediaUploadTask(pendingMediaTask);
+      }
 
       _scheduleScrollToBottom(animated: true);
 
@@ -1638,9 +2003,8 @@ class _ChatPageState extends State<ChatPage>
         peerId: peerId,
         text: text,
         outgoingAttachments: outgoingAttachments,
+        optimisticMessageId: optimisticId,
       );
-
-      final wsType = _resolveWsType(pendingToSend);
 
       if (!rt.isConnected) {
         await rt.connect();
@@ -1655,12 +2019,14 @@ class _ChatPageState extends State<ChatPage>
         envelopes: payload['envelopes'] as Map<String, dynamic>?,
         metadata: payload['metadata'] as List<dynamic>?,
         replyToMessageId: replyTo == null ? null : int.tryParse(replyTo.id),
+        clientMessageId: pendingMediaTask?.clientMessageId,
       );
       if (!mounted) return;
       setState(() {
         _pendingController.removeByIds(pendingIds);
       });
     } catch (e) {
+      await _removePendingMediaTaskIfAny(pendingMediaTask?.taskId);
       if (!mounted) return;
       _restoreDraftAfterSendError(
         optimisticId: optimisticId,
@@ -1745,7 +2111,26 @@ class _ChatPageState extends State<ChatPage>
     final path = preview.localPath;
 
     final replyTo = _replyTo;
-    final optimisticId = 'local_${DateTime.now().millisecondsSinceEpoch}';
+    final pendingTask = PendingMediaUploadTaskEntry(
+      taskId: _newPendingMediaTaskId(),
+      clientMessageId: _newUuidV4(),
+      chatId: chatId,
+      chatKind: widget.chat.kind.trim().toLowerCase(),
+      peerId: _isPrivateChat ? peerId : null,
+      wsType: wsType,
+      caption: '',
+      replyToMessageId: replyTo == null ? null : int.tryParse(replyTo.id),
+      createdAt: DateTime.now(),
+      attachments: <PendingMediaUploadAttachmentEntry>[
+        PendingMediaUploadAttachmentEntry(
+          localPath: attachment.localPath ?? path,
+          filename: safeName,
+          mimetype: attachment.mimetype,
+          sizeBytes: attachment.sizeBytes,
+        ),
+      ],
+    );
+    final optimisticId = _optimisticMessageIdForTask(pendingTask.taskId);
     if (mounted) {
       setState(() {
         _replyTo = null;
@@ -1761,6 +2146,8 @@ class _ChatPageState extends State<ChatPage>
                 filename: safeName,
                 mimetype: attachment.mimetype,
                 size: attachment.sizeBytes,
+                transferState: AttachmentTransferState.uploading,
+                transferProgress: 0,
               ),
             ],
             sentAt: DateTime.now(),
@@ -1775,6 +2162,7 @@ class _ChatPageState extends State<ChatPage>
     _scheduleScrollToBottom(animated: true);
 
     try {
+      await _repo.savePendingMediaUploadTask(pendingTask);
       final payload = await repo.buildOutgoingWsMediaMessage(
         chatId: chatId,
         chatKind: widget.chat.kind,
@@ -1782,13 +2170,28 @@ class _ChatPageState extends State<ChatPage>
         caption: '',
         attachments: [
           OutgoingAttachment(
-            bytes: await _attachmentsPreparer.readPendingAttachmentBytes(
-              attachment,
-            ),
+            localPath: attachment.localPath ?? path,
+            bytes:
+                (attachment.localPath == null || attachment.localPath!.isEmpty)
+                ? await _attachmentsPreparer.readPendingAttachmentBytes(
+                    attachment,
+                  )
+                : null,
             filename: safeName,
             mimetype: attachment.mimetype,
           ),
         ],
+        onAttachmentProgress: (index, progress) {
+          if (!mounted) return;
+          setState(() {
+            _updateMessageAttachmentTransfer(
+              messageId: optimisticId,
+              attachmentIndex: index,
+              state: AttachmentTransferState.uploading,
+              progress: progress,
+            );
+          });
+        },
       );
 
       await _ensureWsReady(chatId);
@@ -1801,8 +2204,10 @@ class _ChatPageState extends State<ChatPage>
         envelopes: payload['envelopes'] as Map<String, dynamic>?,
         metadata: payload['metadata'] as List<dynamic>?,
         replyToMessageId: replyTo == null ? null : int.tryParse(replyTo.id),
+        clientMessageId: pendingTask.clientMessageId,
       );
     } catch (_) {
+      await _removePendingMediaTaskIfAny(pendingTask.taskId);
       if (!mounted) return;
       setState(() {
         _messages.removeWhere((m) => m.id == optimisticId);

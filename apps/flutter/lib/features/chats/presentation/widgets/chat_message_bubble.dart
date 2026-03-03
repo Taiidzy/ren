@@ -60,7 +60,7 @@ class ChatMessageBubble extends StatelessWidget {
     final images = <ChatAttachment>[];
     final otherAttachments = <ChatAttachment>[];
     for (final a in attachments) {
-      if (a.isImage) {
+      if (a.isImage && a.isReady && a.localPath.trim().isNotEmpty) {
         images.add(a);
       } else {
         otherAttachments.add(a);
@@ -141,7 +141,68 @@ class ChatMessageBubble extends StatelessWidget {
                 const SizedBox(height: 6),
               ],
               for (final a in otherAttachments) ...[
-                if (a.isVideo)
+                if (!a.isReady || a.localPath.trim().isEmpty)
+                  Container(
+                    width: attachmentWidth,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.surface.withOpacity(0.75),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: theme.colorScheme.onSurface.withOpacity(0.10),
+                      ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: double.infinity,
+                          height: 56,
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.onSurface.withOpacity(
+                              0.07,
+                            ),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          a.filename.isEmpty ? 'Файл' : a.filename,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: theme.colorScheme.onSurface.withOpacity(
+                              0.82,
+                            ),
+                            fontSize: 12,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          _transferLabel(a.transferState),
+                          style: TextStyle(
+                            color: theme.colorScheme.onSurface.withOpacity(0.6),
+                            fontSize: 11,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(999),
+                          child: LinearProgressIndicator(
+                            value:
+                                (a.transferProgress <= 0 ||
+                                    a.transferProgress >= 1)
+                                ? null
+                                : a.transferProgress,
+                            minHeight: 6,
+                            backgroundColor: theme.colorScheme.onSurface
+                                .withOpacity(0.12),
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                else if (a.isVideo)
                   Material(
                     color: Colors.transparent,
                     child: InkWell(
@@ -277,6 +338,21 @@ class ChatMessageBubble extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  String _transferLabel(AttachmentTransferState state) {
+    switch (state) {
+      case AttachmentTransferState.uploading:
+        return 'Отправка...';
+      case AttachmentTransferState.downloading:
+        return 'Загрузка...';
+      case AttachmentTransferState.decrypting:
+        return 'Расшифровка...';
+      case AttachmentTransferState.failed:
+        return 'Ошибка передачи';
+      case AttachmentTransferState.ready:
+        return 'Готово';
+    }
   }
 }
 

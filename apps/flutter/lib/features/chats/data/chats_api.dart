@@ -445,7 +445,97 @@ class ChatsApi {
     }
   }
 
+  Future<Map<String, dynamic>> initChunkedMediaUpload({
+    required int chatId,
+    required String filename,
+    required String mimetype,
+    required int totalSize,
+    required int totalChunks,
+    required int chunkSize,
+  }) async {
+    final token = await _requireToken();
+    try {
+      final resp = await dio.post(
+        '${Apiurl.api}/media/upload/init',
+        data: {
+          'chat_id': chatId,
+          'filename': filename,
+          'mimetype': mimetype,
+          'total_size': totalSize,
+          'total_chunks': totalChunks,
+          'chunk_size': chunkSize,
+        },
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+      return (resp.data as Map<String, dynamic>?) ?? <String, dynamic>{};
+    } on DioException catch (e) {
+      throw ApiException(
+        (e.response?.data is String)
+            ? e.response?.data as String
+            : 'Ошибка инициализации chunk upload',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
+  Future<Map<String, dynamic>> uploadMediaChunk({
+    required String uploadId,
+    required int chunkIndex,
+    required int totalChunks,
+    required List<int> chunkBytes,
+  }) async {
+    final token = await _requireToken();
+    try {
+      final resp = await dio.put(
+        '${Apiurl.api}/media/upload/$uploadId/chunk/$chunkIndex',
+        data: Stream.fromIterable(<List<int>>[chunkBytes]),
+        options: Options(
+          headers: {
+            'Authorization': 'Bearer $token',
+            'Content-Type': 'application/octet-stream',
+            'X-Total-Chunks': '$totalChunks',
+          },
+        ),
+      );
+      return (resp.data as Map<String, dynamic>?) ?? <String, dynamic>{};
+    } on DioException catch (e) {
+      throw ApiException(
+        (e.response?.data is String)
+            ? e.response?.data as String
+            : 'Ошибка загрузки чанка',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
+  Future<Map<String, dynamic>> finalizeChunkedMediaUpload({
+    required String uploadId,
+  }) async {
+    final token = await _requireToken();
+    try {
+      final resp = await dio.post(
+        '${Apiurl.api}/media/upload/$uploadId/finalize',
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+      return (resp.data as Map<String, dynamic>?) ?? <String, dynamic>{};
+    } on DioException catch (e) {
+      throw ApiException(
+        (e.response?.data is String)
+            ? e.response?.data as String
+            : 'Ошибка финализации upload',
+        statusCode: e.response?.statusCode,
+      );
+    }
+  }
+
   Future<Uint8List> downloadMedia(int fileId) async {
+    return downloadMediaWithProgress(fileId);
+  }
+
+  Future<Uint8List> downloadMediaWithProgress(
+    int fileId, {
+    void Function(int received, int total)? onProgress,
+  }) async {
     final token = await _requireToken();
     try {
       final resp = await dio.get<List<int>>(
@@ -454,6 +544,7 @@ class ChatsApi {
           headers: {'Authorization': 'Bearer $token'},
           responseType: ResponseType.bytes,
         ),
+        onReceiveProgress: onProgress,
       );
       final data = resp.data ?? <int>[];
       return Uint8List.fromList(data);
