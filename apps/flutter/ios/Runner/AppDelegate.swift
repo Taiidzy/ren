@@ -66,6 +66,8 @@ import UIKit
     GeneratedPluginRegistrant.register(with: self)
 
     if let controller = window?.rootViewController as? FlutterViewController {
+      SignalProtocolBridge().register(with: controller)
+
       let privacy = FlutterMethodChannel(name: privacyChannel, binaryMessenger: controller.binaryMessenger)
       privacy.setMethodCallHandler { [weak self] call, result in
         guard let self = self else {

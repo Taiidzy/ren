@@ -3,10 +3,13 @@ package com.example.ren
 import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
-    private val privacyChannel = "ren/privacy_protection"
+  private val privacyChannel = "ren/privacy_protection"
+  private val signalChannel = "ren/signal_protocol"
+  private val signalEvents = "ren/signal_protocol/events"
 
     private fun applySecureFlag(enabled: Boolean) {
         if (enabled) {
@@ -33,5 +36,11 @@ class MainActivity : FlutterActivity() {
                 }
             }
 
+        val signalBridge = SignalProtocolBridge(
+            this,
+            MethodChannel(flutterEngine.dartExecutor.binaryMessenger, signalChannel),
+            EventChannel(flutterEngine.dartExecutor.binaryMessenger, signalEvents)
+        )
+        signalBridge.register()
     }
 }

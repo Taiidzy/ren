@@ -139,6 +139,35 @@ fn normalize_member_role(kind: &str, role: Option<&str>) -> Result<String, (Stat
     }
 }
 
+async fn ensure_private_chat_kind(
+    state: &AppState,
+    chat_id: i32,
+) -> Result<(), (StatusCode, String)> {
+    let row = sqlx::query("SELECT kind FROM chats WHERE id = $1")
+        .bind(chat_id)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Ошибка БД: {}", e),
+            )
+        })?;
+
+    let Some(row) = row else {
+        return Err((StatusCode::NOT_FOUND, "Чат не найден".into()));
+    };
+
+    let kind: String = row.try_get("kind").unwrap_or_else(|_| "private".into());
+    if kind.trim().to_lowercase() != "private" {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Группы и каналы отключены".into(),
+        ));
+    }
+    Ok(())
+}
+
 async fn load_chat_recipients(
     state: &AppState,
     chat_id: i32,
@@ -320,6 +349,14 @@ async fn update_chat_info(
     }: CurrentUser,
     Json(body): Json<UpdateChatInfoRequest>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    let _ = (state, id, current_user_id, body);
+    return Err((
+        StatusCode::BAD_REQUEST,
+        "Группы и каналы отключены".into(),
+    ));
+
+    #[allow(unreachable_code)]
+    {
     if body.title.is_none() && body.avatar.is_none() {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -406,6 +443,7 @@ async fn update_chat_info(
     }
 
     Ok(StatusCode::NO_CONTENT)
+    }
 }
 
 async fn update_chat_avatar(
@@ -417,6 +455,14 @@ async fn update_chat_avatar(
     }: CurrentUser,
     mut multipart: MultipartExtractor,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    let _ = (state, id, current_user_id, multipart);
+    return Err((
+        StatusCode::BAD_REQUEST,
+        "Группы и каналы отключены".into(),
+    ));
+
+    #[allow(unreachable_code)]
+    {
     let (kind, role, title_for_event) =
         load_chat_kind_role_and_title(&state, id, current_user_id).await?;
     if kind != "group" && kind != "channel" {
@@ -565,6 +611,7 @@ async fn update_chat_avatar(
     );
 
     Ok(StatusCode::NO_CONTENT)
+    }
 }
 
 // ---------------------------
@@ -579,35 +626,17 @@ async fn create_chat(
     Json(body): Json<CreateChatRequest>,
 ) -> Result<Json<Chat>, (StatusCode, String)> {
     // Простые проверки
-    match body.kind.as_str() {
-        "private" => {
-            if body.user_ids.len() != 2 || !body.user_ids.contains(&current_user_id) {
-                return Err((
-                    StatusCode::BAD_REQUEST,
-                    "Для private-чата нужно ровно 2 участника, включая текущего пользователя"
-                        .into(),
-                ));
-            }
-        }
-        "group" => {
-            if body.title.as_deref().unwrap_or("").trim().is_empty() {
-                return Err((StatusCode::BAD_REQUEST, "Для group обязателен title".into()));
-            }
-        }
-        "channel" => {
-            if body.title.as_deref().unwrap_or("").trim().is_empty() {
-                return Err((
-                    StatusCode::BAD_REQUEST,
-                    "Для channel обязателен title".into(),
-                ));
-            }
-        }
-        _ => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                "kind должен быть одним из: private, group, channel".into(),
-            ));
-        }
+    if body.kind.as_str() != "private" {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "В приложении доступны только private-чаты".into(),
+        ));
+    }
+    if body.user_ids.len() != 2 || !body.user_ids.contains(&current_user_id) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Для private-чата нужно ровно 2 участника, включая текущего пользователя".into(),
+        ));
     }
 
     let mut tx: Transaction<'_, Postgres> = state.pool.begin().await.map_err(|e| {
@@ -1022,6 +1051,7 @@ async fn list_chats(
             )
         )
         WHERE p.user_id = $1
+          AND c.kind = 'private'
         ORDER BY c.updated_at DESC
         "#,
     )
@@ -1407,6 +1437,7 @@ async fn list_members(
     Path(id): Path<i32>,
 ) -> Result<Json<Vec<ChatMember>>, (StatusCode, String)> {
     ensure_member(&state, id, current_user_id).await?;
+    ensure_private_chat_kind(&state, id).await?;
 
     let rows = sqlx::query(
         r#"
@@ -1465,7 +1496,17 @@ async fn add_member(
     Path(id): Path<i32>,
     Json(body): Json<AddMemberRequest>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    crate::middleware::ensure_admin(&state, id, current_user_id).await?;
+    let _ = (state, current_user_id, id, body);
+    return Err((
+        StatusCode::BAD_REQUEST,
+        "Группы и каналы отключены".into(),
+    ));
+
+    #[allow(unreachable_code)]
+    {
+        ensure_private_chat_kind(&state, id).await?;
+        crate::middleware::ensure_admin(&state, id, current_user_id).await?;
+    }
 
     let chat_row = sqlx::query("SELECT kind FROM chats WHERE id = $1")
         .bind(id)
@@ -1581,7 +1622,16 @@ async fn update_member_role(
     Path((id, user_id)): Path<(i32, i32)>,
     Json(body): Json<UpdateMemberRoleRequest>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    crate::middleware::ensure_admin(&state, id, current_user_id).await?;
+    ensure_private_chat_kind(&state, id).await?;
+    return Err((
+        StatusCode::BAD_REQUEST,
+        "Операция недоступна".into(),
+    ));
+
+    #[allow(unreachable_code)]
+    {
+        crate::middleware::ensure_admin(&state, id, current_user_id).await?;
+    }
 
     let chat_row = sqlx::query("SELECT kind FROM chats WHERE id = $1")
         .bind(id)
@@ -1680,6 +1730,16 @@ async fn remove_member(
     }: CurrentUser,
     Path((id, user_id)): Path<(i32, i32)>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    let _ = (state, current_user_id, id, user_id);
+    return Err((
+        StatusCode::BAD_REQUEST,
+        "Группы и каналы отключены".into(),
+    ));
+
+    #[allow(unreachable_code)]
+    {
+        ensure_private_chat_kind(&state, id).await?;
+    }
     crate::middleware::ensure_admin(&state, id, current_user_id).await?;
 
     let chat_row = sqlx::query("SELECT kind FROM chats WHERE id = $1")
@@ -1800,6 +1860,13 @@ async fn delete_or_leave_chat(
     };
     let kind: String = row.try_get("kind").unwrap_or_default();
     let role: String = row.try_get("role").unwrap_or_else(|_| "member".to_string());
+
+    if kind != "private" {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Группы и каналы отключены".into(),
+        ));
+    }
 
     if kind == "group" || kind == "channel" {
         // group/channel:

@@ -495,6 +495,7 @@ struct PublicKeyResponse {
     key_version: u32,
     signed_at: String,
     identity_key: String,
+    registration_id: Option<i32>,
     signed_pre_key_id: Option<i32>,
     signed_pre_key: Option<String>,
     signed_pre_key_signature: Option<String>,
@@ -511,6 +512,7 @@ struct UpdateSignalBundleRequest {
     signature: Option<String>,
     key_version: Option<i32>,
     signed_at: Option<String>,
+    registration_id: Option<i32>,
     signed_pre_key_id: Option<i32>,
     signed_pre_key: Option<String>,
     signed_pre_key_signature: Option<String>,
@@ -653,15 +655,16 @@ async fn update_signal_bundle(
             key_version = $3,
             key_signed_at = $4,
             key_signature = $5,
-            signed_pre_key_id = $6,
-            signed_pre_key = $7,
-            signed_pre_key_signature = $8,
-            kyber_pre_key_id = $9,
-            kyber_pre_key = $10,
-            kyber_pre_key_signature = $11,
-            one_time_pre_keys = $12,
-            one_time_pre_keys_updated_at = CASE WHEN $12::jsonb IS NULL THEN one_time_pre_keys_updated_at ELSE now() END
-        WHERE id = $13
+            registration_id = $6,
+            signed_pre_key_id = $7,
+            signed_pre_key = $8,
+            signed_pre_key_signature = $9,
+            kyber_pre_key_id = $10,
+            kyber_pre_key = $11,
+            kyber_pre_key_signature = $12,
+            one_time_pre_keys = $13,
+            one_time_pre_keys_updated_at = CASE WHEN $13::jsonb IS NULL THEN one_time_pre_keys_updated_at ELSE now() END
+        WHERE id = $14
         "#,
     )
     .bind(public_key)
@@ -669,6 +672,7 @@ async fn update_signal_bundle(
     .bind(key_version)
     .bind(signed_at_dt)
     .bind(signature)
+    .bind(payload.registration_id)
     .bind(payload.signed_pre_key_id)
     .bind(payload.signed_pre_key)
     .bind(payload.signed_pre_key_signature)
@@ -792,6 +796,7 @@ async fn get_public_key(
             key_version,
             key_signed_at,
             key_signature,
+            registration_id,
             signed_pre_key_id,
             signed_pre_key,
             signed_pre_key_signature,
@@ -829,6 +834,7 @@ async fn get_public_key(
     let key_signed_at: Option<chrono::DateTime<chrono::Utc>> =
         row.try_get("key_signed_at").ok().flatten();
     let key_signature: Option<String> = row.try_get("key_signature").ok().flatten();
+    let registration_id: Option<i32> = row.try_get("registration_id").ok().flatten();
     let signed_pre_key_id: Option<i32> = row.try_get("signed_pre_key_id").ok().flatten();
     let signed_pre_key: Option<String> = row.try_get("signed_pre_key").ok().flatten();
     let signed_pre_key_signature: Option<String> =
@@ -901,6 +907,7 @@ async fn get_public_key(
         key_version: key_version as u32,
         signed_at,
         identity_key: identity_pubk,
+        registration_id,
         signed_pre_key_id,
         signed_pre_key,
         signed_pre_key_signature,

@@ -11,6 +11,7 @@ import 'package:ren/core/constants/api_url.dart';
 import 'package:ren/core/cache/chats_local_cache.dart';
 import 'package:ren/core/constants/keys.dart';
 import 'package:ren/core/e2ee/attachment_cipher.dart';
+import 'package:ren/core/e2ee/signal_protocol_client.dart';
 import 'package:ren/core/secure/secure_storage.dart';
 import 'package:ren/features/chats/data/chats_api.dart';
 import 'package:ren/features/chats/domain/chat_models.dart';
@@ -31,6 +32,7 @@ class OutgoingAttachment {
 
 class ChatsRepository {
   final ChatsApi api;
+  final SignalProtocolClient _signal;
   final ChatsLocalCache _localCache = ChatsLocalCache();
 
   final ValueNotifier<bool> chatsSyncing = ValueNotifier<bool>(false);
@@ -55,7 +57,8 @@ class ChatsRepository {
   static const int _uploadChunkPlainSize = 256 * 1024;
   static const String _encryptedPlaceholder = '[encrypted]';
 
-  ChatsRepository(this.api);
+  ChatsRepository(this.api, {SignalProtocolClient? signal})
+    : _signal = signal ?? SignalProtocolClient.instance;
 
   bool _isPrivateKind(String kind) => kind.trim().toLowerCase() == 'private';
   bool _isMediaMessageType(String messageType) {
@@ -109,7 +112,29 @@ class ChatsRepository {
     required String ciphertext,
     required int myUserId,
   }) async {
-    return null;
+    if (ciphertext.trim().isEmpty) return null;
+    try {
+      final plain = await _signal.decrypt(
+        peerUserId: peerUserId,
+        ciphertext: ciphertext,
+      );
+      return plain;
+    } catch (e) {
+      if (_isDuplicateSignalDecryptError(e)) return null;
+      if (_isRecoverableSignalDecryptError(e)) {
+        try {
+          await _signal.resetSession(peerUserId: peerUserId);
+          final plain = await _signal.decrypt(
+            peerUserId: peerUserId,
+            ciphertext: ciphertext,
+          );
+          return plain;
+        } catch (_) {
+          return null;
+        }
+      }
+      return null;
+    }
   }
 
   Future<T> _runInMediaPipeline<T>(Future<T> Function() task) {
@@ -427,6 +452,9 @@ class ChatsRepository {
       final peerAvatar = (m['peer_avatar'] as String?) ?? '';
       final title = ((m['title'] as String?) ?? '').trim();
       final kind = ((m['kind'] as String?) ?? 'private').trim().toLowerCase();
+      if (!_isPrivateKind(kind)) {
+        continue;
+      }
       final isFavorite =
           (m['is_favorite'] == true) || (m['isFavorite'] == true);
       final unreadCount = (m['unread_count'] is int)
@@ -1202,24 +1230,32 @@ class ChatsRepository {
       }
       return <int>{me, peer}.toList(growable: false);
     }
-
-    final members = await listMembers(chatId);
-    final ids = <int>{
-      me,
-      ...members.map((m) => m.userId).where((id) => id > 0),
-    };
-    if (ids.length > 50) {
-      throw Exception('Signal groups currently support up to 50 participants');
-    }
-    return ids.toList(growable: false);
+    throw Exception('Группы и каналы не поддерживаются');
   }
 
   Future<Map<String, String>> _encryptForRecipients({
     required int chatId,
     required String chatKind,
+    int? peerId,
     required String plaintext,
   }) async {
-    throw UnsupportedError('Message encryption is disabled');
+    final recipients = await _resolveRecipients(
+      chatId: chatId,
+      chatKind: chatKind,
+      peerId: peerId,
+    );
+    final myUserId = await _getMyUserId();
+    final out = <String, String>{};
+    for (final recipientId in recipients) {
+      final ct = await _encryptForRecipientWithRecovery(
+        recipientUserId: recipientId,
+        myUserId: myUserId,
+        plaintext: plaintext,
+      );
+      out['$recipientId'] = ct;
+    }
+    _ensureCiphertextsComplete(recipients: recipients, ciphertextByUser: out);
+    return out;
   }
 
   Future<String> _encryptForRecipientWithRecovery({
@@ -1227,14 +1263,48 @@ class ChatsRepository {
     required int myUserId,
     required String plaintext,
   }) async {
-    throw UnsupportedError('Message encryption is disabled');
+    Future<String> encryptWithBundle(Map<String, dynamic>? bundle) async {
+      return _signal.encrypt(
+        peerUserId: recipientUserId,
+        plaintext: plaintext,
+        preKeyBundle: bundle,
+      );
+    }
+
+    final hasSession = await _signal.hasSession(peerUserId: recipientUserId);
+    if (hasSession) {
+      try {
+        return await encryptWithBundle(null);
+      } catch (_) {
+        // fall through to recovery
+      }
+    }
+
+    try {
+      final bundle = await _getPeerSignalBundle(recipientUserId);
+      return await encryptWithBundle(bundle);
+    } catch (_) {
+      // recovery below
+    }
+
+    await _signal.resetSession(peerUserId: recipientUserId);
+    final bundle = await _getPeerSignalBundle(
+      recipientUserId,
+      forceRefresh: true,
+    );
+    return await encryptWithBundle(bundle);
   }
 
   void _ensureCiphertextsComplete({
     required List<int> recipients,
     required Map<String, String> ciphertextByUser,
   }) {
-    throw UnsupportedError('Message encryption is disabled');
+    for (final id in recipients) {
+      final ct = ciphertextByUser['$id'];
+      if (ct == null || ct.trim().isEmpty) {
+        throw Exception('Ciphertext missing for recipient $id');
+      }
+    }
   }
 
   Future<ChatPreview> createPrivateChat(
@@ -1344,42 +1414,14 @@ class ChatsRepository {
     required String title,
     required List<int> memberUserIds,
   }) async {
-    final myUserId = await _getMyUserId();
-    final users = <int>{
-      myUserId,
-      ...memberUserIds.where((e) => e > 0),
-    }.toList(growable: false);
-    final json = await api.createChat(
-      kind: 'group',
-      title: title,
-      userIds: users,
-    );
-    return _chatPreviewFromCreateResponse(
-      json,
-      kind: 'group',
-      fallbackName: title.trim().isEmpty ? 'Group' : title.trim(),
-    );
+    throw UnsupportedError('Группы не поддерживаются');
   }
 
   Future<ChatPreview> createChannel({
     required String title,
     required List<int> memberUserIds,
   }) async {
-    final myUserId = await _getMyUserId();
-    final users = <int>{
-      myUserId,
-      ...memberUserIds.where((e) => e > 0),
-    }.toList(growable: false);
-    final json = await api.createChat(
-      kind: 'channel',
-      title: title,
-      userIds: users,
-    );
-    return _chatPreviewFromCreateResponse(
-      json,
-      kind: 'channel',
-      fallbackName: title.trim().isEmpty ? 'Channel' : title.trim(),
-    );
+    throw UnsupportedError('Каналы не поддерживаются');
   }
 
   Future<List<ChatMember>> listMembers(int chatId) async {
@@ -1475,7 +1517,22 @@ class ChatsRepository {
     int? peerId,
     required String plaintext,
   }) async {
-    throw UnsupportedError('Message sending is disabled');
+    final ctByUser = await _encryptForRecipients(
+      chatId: chatId,
+      chatKind: chatKind,
+      peerId: peerId,
+      plaintext: plaintext,
+    );
+    final payload = jsonEncode(<String, dynamic>{
+      'ciphertext_by_user': ctByUser,
+    });
+    return <String, dynamic>{
+      'message': payload,
+      'message_type': 'text',
+      'metadata': null,
+      'envelopes': null,
+      'reply_to_message_id': null,
+    };
   }
 
   Future<Map<String, dynamic>> buildEncryptedWsImageMessage({
@@ -1509,7 +1566,97 @@ class ChatsRepository {
     required List<OutgoingAttachment> attachments,
     void Function(int attachmentIndex, double progress)? onAttachmentProgress,
   }) async {
-    throw UnsupportedError('Message sending is disabled');
+    if (attachments.isEmpty) {
+      throw Exception('No attachments provided');
+    }
+
+    final recipients = await _resolveRecipients(
+      chatId: chatId,
+      chatKind: chatKind,
+      peerId: peerId,
+    );
+    final myUserId = await _getMyUserId();
+
+    final captionCipher = await _encryptForRecipients(
+      chatId: chatId,
+      chatKind: chatKind,
+      peerId: peerId,
+      plaintext: caption,
+    );
+
+    final metadata = <Map<String, dynamic>>[];
+
+    for (var i = 0; i < attachments.length; i++) {
+      final attachment = attachments[i];
+      final cipher =
+          await _encryptAttachmentToChunkedCipherFile(attachment: attachment);
+      onAttachmentProgress?.call(i, 0.05);
+
+      final upload = await _uploadMediaWithRetry(
+        chatId: chatId,
+        ciphertextFile: cipher.file,
+        chunkSize: cipher.chunkSize,
+        filename: attachment.filename,
+        mimetype: attachment.mimetype,
+        onProgress: (p) => onAttachmentProgress?.call(i, p),
+      );
+
+      final fileId = (upload['file_id'] is int)
+          ? upload['file_id'] as int
+          : int.tryParse('${upload['file_id'] ?? ''}') ?? 0;
+      if (fileId <= 0) {
+        throw Exception('Invalid file_id after upload');
+      }
+
+      final descriptor = <String, dynamic>{
+        'signal_v2_attachment': true,
+        'v': 2,
+        'kind': 'attachment',
+        'file_id': fileId,
+        'key': AttachmentCipher.toBase64(cipher.key),
+        'nonce': AttachmentCipher.toBase64(cipher.nonce),
+        'size': cipher.plainSize,
+        'chunked': true,
+        'chunk_size': cipher.chunkSize,
+        'chunk_count': cipher.chunkCount,
+        'plaintext_sha256': cipher.plaintextSha,
+        'ciphertext_sha256': cipher.ciphertextSha,
+      };
+
+      final descriptorJson = jsonEncode(descriptor);
+      final ciphertextByUser = <String, String>{};
+      for (final recipientId in recipients) {
+        final ct = await _encryptForRecipientWithRecovery(
+          recipientUserId: recipientId,
+          myUserId: myUserId,
+          plaintext: descriptorJson,
+        );
+        ciphertextByUser['$recipientId'] = ct;
+      }
+      _ensureCiphertextsComplete(
+        recipients: recipients,
+        ciphertextByUser: ciphertextByUser,
+      );
+
+      metadata.add(<String, dynamic>{
+        'file_id': fileId,
+        'filename': attachment.filename,
+        'mimetype': attachment.mimetype,
+        'size': cipher.plainSize,
+        'ciphertext_by_user': ciphertextByUser,
+      });
+    }
+
+    final payload = jsonEncode(<String, dynamic>{
+      'ciphertext_by_user': captionCipher,
+    });
+    return <String, dynamic>{
+      'message': payload,
+      'message_type': 'media',
+      'metadata': metadata,
+      'envelopes': null,
+      'reply_to_message_id': null,
+    };
   }
 
   Future<String> decryptIncomingWsMessage({

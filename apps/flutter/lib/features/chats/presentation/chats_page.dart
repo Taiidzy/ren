@@ -13,7 +13,6 @@ import 'package:ren/features/chats/presentation/controllers/chats_realtime_coord
 import 'package:ren/features/chats/presentation/controllers/chats_top_banner_controller.dart';
 import 'package:ren/features/chats/presentation/controllers/chats_user_search_controller.dart';
 import 'package:ren/features/chats/presentation/chat_page.dart';
-import 'package:ren/features/chats/presentation/widgets/chat_group_channel_sheets.dart';
 import 'package:ren/features/profile/presentation/profile_menu_page.dart';
 
 import 'package:ren/core/constants/api_url.dart';
@@ -168,15 +167,9 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
     required String kind,
     String? title,
   }) {
-    final normalizedKind = kind.trim().toLowerCase().isEmpty
-        ? 'group'
-        : kind.trim().toLowerCase();
+    final normalizedKind = 'private';
     final rawTitle = (title ?? '').trim();
-    final name = rawTitle.isNotEmpty
-        ? rawTitle
-        : (normalizedKind == 'channel'
-              ? 'Новый канал'
-              : (normalizedKind == 'private' ? 'Новый чат' : 'Новая группа'));
+    final name = rawTitle.isNotEmpty ? rawTitle : 'Новый чат';
     return ChatPreview(
       id: chatId.toString(),
       peerId: null,
@@ -448,8 +441,7 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
   }
 
   bool _isGroupOrChannel(ChatPreview chat) {
-    final kind = chat.kind.trim().toLowerCase();
-    return kind == 'group' || kind == 'channel';
+    return false;
   }
 
   bool _isOwner(ChatPreview chat) {
@@ -467,15 +459,7 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
   }
 
   Future<void> _handleEditAction(ChatPreview chat) async {
-    final updated = await showModalBottomSheet<bool>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => EditGroupChannelSheet(chat: chat),
-    );
-    if (updated == true) {
-      await _reloadChats();
-    }
+    return;
   }
 
   Future<void> _handleDeleteAction({
@@ -511,12 +495,10 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
         return GlassConfirmDialog(
           title: isDeleteForAll
               ? 'Удалить чат для всех?'
-              : (isGroupOrChannel ? 'Выйти из чата?' : 'Удалить чат?'),
+              : 'Удалить чат?',
           text: isDeleteForAll
               ? 'Чат/канал будет удалён для всех участников. Действие необратимо.'
-              : (isGroupOrChannel
-                    ? 'Вы покинете этот чат/канал. Вернуться можно только после повторного добавления.'
-                    : 'Чат будет удалён из вашего списка.'),
+              : 'Чат будет удалён из вашего списка.',
           confirmLabel: isDeleteForAll
               ? 'Удалить для всех'
               : (isGroupOrChannel ? 'Выйти' : 'Удалить'),
@@ -630,7 +612,8 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
     final chatId = int.tryParse(
       '${evt.data['chat_id'] ?? evt.data['chatId'] ?? 0}',
     );
-    final kind = '${evt.data['kind'] ?? 'group'}';
+    final kind = '${evt.data['kind'] ?? 'private'}'.trim().toLowerCase();
+    if (kind != 'private') return;
     final title = (evt.data['title'] as String?)?.trim();
     final createdBy = int.tryParse(
       '${evt.data['created_by'] ?? evt.data['createdBy'] ?? 0}',
@@ -659,47 +642,7 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
   }
 
   Future<void> _handleMemberEvent(RealtimeEvent evt) async {
-    final chatId = int.tryParse(
-      '${evt.data['chat_id'] ?? evt.data['chatId'] ?? 0}',
-    );
-    final targetUserId = int.tryParse(
-      '${evt.data['user_id'] ?? evt.data['userId'] ?? 0}',
-    );
-    if (chatId == null ||
-        chatId <= 0 ||
-        targetUserId == null ||
-        targetUserId != _myUserId) {
-      unawaited(_syncChats());
-      return;
-    }
-
-    if (evt.type == 'member_added' && _chatIndex[chatId] == null) {
-      setState(() {
-        final preview = _placeholderChatFromRealtime(
-          chatId: chatId,
-          kind: 'group',
-          title: null,
-        );
-        _chats = [preview, ..._chats];
-        _rebuildChatIndexFromCurrentChats();
-      });
-      showGlassSnack(context, 'Вас добавили в чат', kind: GlassSnackKind.info);
-    } else if (evt.type == 'member_removed') {
-      setState(() {
-        _chats = _chats
-            .where((c) => (int.tryParse(c.id) ?? 0) != chatId)
-            .toList(growable: false);
-        _rebuildChatIndexFromCurrentChats();
-      });
-      showGlassSnack(context, 'Вас удалили из чата', kind: GlassSnackKind.info);
-    } else if (evt.type == 'member_role_changed') {
-      showGlassSnack(
-        context,
-        'Ваша роль в чате обновлена',
-        kind: GlassSnackKind.info,
-      );
-    }
-    unawaited(_syncChats());
+    return;
   }
 
   void _handleProfileUpdatedEvent(RealtimeEvent evt) {
@@ -1108,132 +1051,6 @@ class _HomePageState extends State<ChatsPage> with WidgetsBindingObserver {
                                 : ListView(
                                     padding: const EdgeInsets.only(bottom: 16),
                                     children: [
-                                      Row(
-                                        children: [
-                                          Expanded(
-                                            child: GlassSurface(
-                                              borderRadius: 12,
-                                              blurSigma: 8,
-                                              borderColor: baseInk.withOpacity(
-                                                isDark ? 0.14 : 0.08,
-                                              ),
-                                              padding:
-                                                  const EdgeInsets.symmetric(
-                                                    horizontal: 12,
-                                                    vertical: 8,
-                                                  ),
-                                              child: InkWell(
-                                                borderRadius:
-                                                    BorderRadius.circular(12),
-                                                onTap: () {
-                                                  GlassOverlays.showGlassBottomSheet(
-                                                    context,
-                                                    builder: (_) =>
-                                                        CreateGroupChannelSheet(
-                                                          kind: 'group',
-                                                          initialTitle: _query,
-                                                          onCreated:
-                                                              _handleCreatedChat,
-                                                        ),
-                                                  );
-                                                },
-                                                child: Row(
-                                                  mainAxisSize:
-                                                      MainAxisSize.min,
-                                                  children: [
-                                                    Icon(
-                                                      Icons.group_add_rounded,
-                                                      size: 18,
-                                                      color: theme
-                                                          .colorScheme
-                                                          .onSurface,
-                                                    ),
-                                                    const SizedBox(width: 6),
-                                                    Flexible(
-                                                      child: Text(
-                                                        'Создать группу',
-                                                        maxLines: 1,
-                                                        overflow: TextOverflow
-                                                            .ellipsis,
-                                                        style: theme
-                                                            .textTheme
-                                                            .bodySmall
-                                                            ?.copyWith(
-                                                              fontWeight:
-                                                                  FontWeight
-                                                                      .w600,
-                                                            ),
-                                                      ),
-                                                    ),
-                                                  ],
-                                                ),
-                                              ),
-                                            ),
-                                          ),
-                                          const SizedBox(width: 8),
-                                          Expanded(
-                                            child: GlassSurface(
-                                              borderRadius: 12,
-                                              blurSigma: 8,
-                                              borderColor: baseInk.withOpacity(
-                                                isDark ? 0.14 : 0.08,
-                                              ),
-                                              padding:
-                                                  const EdgeInsets.symmetric(
-                                                    horizontal: 12,
-                                                    vertical: 8,
-                                                  ),
-                                              child: InkWell(
-                                                borderRadius:
-                                                    BorderRadius.circular(12),
-                                                onTap: () {
-                                                  GlassOverlays.showGlassBottomSheet(
-                                                    context,
-                                                    builder: (_) =>
-                                                        CreateGroupChannelSheet(
-                                                          kind: 'channel',
-                                                          initialTitle: _query,
-                                                          onCreated:
-                                                              _handleCreatedChat,
-                                                        ),
-                                                  );
-                                                },
-                                                child: Row(
-                                                  mainAxisSize:
-                                                      MainAxisSize.min,
-                                                  children: [
-                                                    Icon(
-                                                      Icons.campaign_rounded,
-                                                      size: 18,
-                                                      color: theme
-                                                          .colorScheme
-                                                          .onSurface,
-                                                    ),
-                                                    const SizedBox(width: 6),
-                                                    Flexible(
-                                                      child: Text(
-                                                        'Создать канал',
-                                                        maxLines: 1,
-                                                        overflow: TextOverflow
-                                                            .ellipsis,
-                                                        style: theme
-                                                            .textTheme
-                                                            .bodySmall
-                                                            ?.copyWith(
-                                                              fontWeight:
-                                                                  FontWeight
-                                                                      .w600,
-                                                            ),
-                                                      ),
-                                                    ),
-                                                  ],
-                                                ),
-                                              ),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                      const SizedBox(height: 14),
                                       Text(
                                         'Чаты',
                                         style: theme.textTheme.titleSmall

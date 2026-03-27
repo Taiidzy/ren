@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import 'package:ren/features/auth/presentation/auth_page.dart';
 import 'package:ren/features/chats/presentation/chats_page.dart';
 import 'package:ren/core/realtime/realtime_client.dart';
+import 'package:ren/core/e2ee/signal_protocol_client.dart';
 
 import 'package:ren/shared/widgets/animated_gradient.dart';
 import 'package:ren/shared/widgets/ren_logo.dart';
@@ -14,6 +15,7 @@ import 'package:ren/core/secure/secure_storage.dart';
 import 'package:ren/core/constants/keys.dart';
 import 'package:ren/features/splash/data/spalsh_repository.dart';
 import 'package:ren/features/splash/data/spalsh_api.dart';
+import 'package:ren/features/auth/data/auth_api.dart' as auth_api;
 
 class SplashPage extends StatefulWidget {
   const SplashPage({super.key});
@@ -141,6 +143,12 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
       final hasUser = userJson['id'] != null;
 
       if (hasUser) {
+        final userId = (userJson['id'] is int)
+            ? userJson['id'] as int
+            : int.tryParse('${userJson['id'] ?? ''}') ?? 0;
+        if (userId > 0) {
+          unawaited(_bootstrapSignal(currentContext, userId));
+        }
         unawaited(currentContext.read<RealtimeClient>().connect());
         await goChats();
       } else {
@@ -160,6 +168,47 @@ class _SplashPageState extends State<SplashPage> with TickerProviderStateMixin {
       // Любая не-401 ошибка и наличие токена -> главный экран.
       unawaited(currentContext.read<RealtimeClient>().connect());
       await goChats();
+    }
+  }
+
+  Future<void> _bootstrapSignal(BuildContext ctx, int userId) async {
+    try {
+      final signal = SignalProtocolClient.instance;
+      await signal.initialize();
+      final bundle = await signal.initUser(userId: userId);
+      if (bundle.isNotEmpty) {
+        await ctx.read<auth_api.AuthApi>().updateSignalBundle(bundle);
+      }
+
+      final backupSecret = await SecureStorage.readKey(Keys.signalBackupSecret);
+      if (backupSecret == null || backupSecret.trim().isEmpty) {
+        return;
+      }
+
+      String? payload;
+      try {
+        payload = await ctx.read<auth_api.AuthApi>().getSignalBackup();
+      } catch (_) {
+        payload = null;
+      }
+
+      if (payload != null && payload.trim().isNotEmpty) {
+        await signal.importBackup(
+          userId: userId,
+          backupSecretBase64: backupSecret,
+          encryptedPayload: payload,
+        );
+      }
+
+      final encrypted = await signal.exportBackup(
+        userId: userId,
+        backupSecretBase64: backupSecret,
+      );
+      if (encrypted.trim().isNotEmpty) {
+        await ctx.read<auth_api.AuthApi>().updateSignalBackup(encrypted);
+      }
+    } catch (_) {
+      // ignore bootstrap errors to avoid blocking app startup
     }
   }
 
