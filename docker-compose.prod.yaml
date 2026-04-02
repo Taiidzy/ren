@@ -38,7 +38,7 @@ services:
     volumes:
       - postgres_prod_data:/var/lib/postgresql/data
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "${POSTGRES_HOST_PORT:-5433}:5432"
     restart: unless-stopped
 
 volumes:
