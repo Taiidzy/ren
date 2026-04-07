@@ -51,7 +51,7 @@ class _ChatPageState extends State<ChatPage>
     with TickerProviderStateMixin, WidgetsBindingObserver {
   static const int _maxSingleAttachmentBytes = 25 * 1024 * 1024;
   static const int _maxPendingAttachmentsBytes = 80 * 1024 * 1024;
-  static const bool _messageTransportDisabled = true;
+  static const bool _messageTransportDisabled = false;
 
   final _controller = TextEditingController();
   final _focusNode = FocusNode();
